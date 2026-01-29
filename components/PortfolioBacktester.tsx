@@ -821,13 +821,13 @@ const PortfolioBacktester = () => {
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Results</h2>
 
               {/* Portfolio Value Chart */}
-              <div className="bg-white p-4 rounded-lg shadow mb-4">
+              <div className="bg-white p-2 sm:p-4 rounded-lg shadow mb-4">
                 <h3 className="text-md font-semibold text-gray-700 mb-2 text-center">Portfolio Value</h3>
                 <ResponsiveContainer width="100%" height={300}>
-                  <LineChart>
+                  <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 9 }} />
+                    <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} />
                     <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
                     <Legend />
                     {backtestResults.map((result, idx) => (
@@ -847,13 +847,13 @@ const PortfolioBacktester = () => {
               </div>
 
               {/* Drawdown Chart */}
-              <div className="bg-white p-4 rounded-lg shadow mb-4">
+              <div className="bg-white p-2 sm:p-4 rounded-lg shadow mb-4">
                 <h3 className="text-md font-semibold text-gray-700 mb-2 text-center">Drawdown</h3>
                 <ResponsiveContainer width="100%" height={200}>
-                  <LineChart>
+                  <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} />
+                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 9 }} />
+                    <YAxis tick={{ fontSize: 9 }} width={55} />
                     <Tooltip formatter={(value: number) => `${value.toFixed(2)}%`} />
                     <Legend />
                     {backtestResults.map((result, idx) => (
