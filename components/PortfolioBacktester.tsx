@@ -822,7 +822,7 @@ const PortfolioBacktester = () => {
 
               {/* Portfolio Value Chart */}
               <div className="bg-white p-4 rounded-lg shadow mb-4">
-                <h3 className="text-md font-semibold text-gray-700 mb-2">Portfolio Value</h3>
+                <h3 className="text-md font-semibold text-gray-700 mb-2 text-center">Portfolio Value</h3>
                 <ResponsiveContainer width="100%" height={300}>
                   <LineChart>
                     <CartesianGrid strokeDasharray="3 3" />
@@ -848,7 +848,7 @@ const PortfolioBacktester = () => {
 
               {/* Drawdown Chart */}
               <div className="bg-white p-4 rounded-lg shadow mb-4">
-                <h3 className="text-md font-semibold text-gray-700 mb-2">Drawdown</h3>
+                <h3 className="text-md font-semibold text-gray-700 mb-2 text-center">Drawdown</h3>
                 <ResponsiveContainer width="100%" height={200}>
                   <LineChart>
                     <CartesianGrid strokeDasharray="3 3" />

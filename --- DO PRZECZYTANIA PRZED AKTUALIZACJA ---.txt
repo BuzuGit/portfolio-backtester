@@ -1,0 +1,11 @@
+Making Future Changes:
+
+  Whenever you want to add features or make changes:
+
+  1. Open this folder in Claude Code
+  2. Tell me what you want
+  3. I'll make the changes
+  4. Run npm run dev to test locally
+  5. When happy, I'll push to GitHub → Vercel auto-deploys
+
+  That's it! The whole update process takes just a few minutes.
