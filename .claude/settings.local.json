@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd.exe /c \"cd /d C:\\\\Users\\\\pbelz\\\\OneDrive\\\\Claude\\\\PortfolioBacktester && npm install\")",
+      "Bash(powershell.exe -Command \"cd ''C:\\\\Users\\\\pbelz\\\\OneDrive\\\\Claude\\\\PortfolioBacktester''; npm install\")"
+    ]
+  }
+}

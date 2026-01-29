@@ -1,0 +1,44 @@
+/*
+  This file imports Tailwind CSS - a utility-first CSS framework.
+  Tailwind lets you style elements using class names like "bg-blue-500" or "text-lg"
+  instead of writing custom CSS. It's like having pre-built LEGO pieces for styling!
+*/
+
+@tailwind base;       /* Resets and normalizes browser styles */
+@tailwind components; /* Reusable component classes */
+@tailwind utilities;  /* All the utility classes like bg-*, text-*, etc. */
+
+/*
+  Custom styles for the app.
+  We keep these minimal since Tailwind handles most styling.
+*/
+
+/* Make sure the app takes full viewport height on mobile */
+html, body {
+  min-height: 100vh;
+  min-height: 100dvh; /* Dynamic viewport height - accounts for mobile browser chrome */
+}
+
+/* Smooth scrolling for the whole page */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar for tables (makes them look cleaner) */
+.overflow-x-auto::-webkit-scrollbar {
+  height: 6px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 3px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
