@@ -168,7 +168,7 @@ function parseCSVLine(line: string, delimiter: string = ','): string[] {
  * @param csvText - The raw CSV file content
  * @returns Parsed data with array of rows and list of asset names
  */
-function parseSheetData(csvText: string): ParsedData {
+function parseSheetData(csvText: string): { data: AssetRow[]; assets: string[] } {
   // Split the file into lines
   const lines = csvText.trim().split('\n');
 
