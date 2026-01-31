@@ -19,7 +19,7 @@
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
-import { fetchSheetData, AssetRow } from '@/lib/fetchData';
+import { fetchSheetData, AssetRow, AssetLookup } from '@/lib/fetchData';
 
 // ============================================
 // TYPE DEFINITIONS
@@ -82,6 +82,23 @@ interface MonthlyReturns {
   };
 }
 
+// Annual return data for a single asset in a specific year
+// Used in the Assets Annual Returns table
+interface AssetYearReturn {
+  return: number;          // The annual return as a percentage
+  startDate: string;       // First trading date of the year
+  startPrice: number;      // Price on the first trading date
+  endDate: string;         // Last trading date of the year
+  endPrice: number;        // Price on the last trading date
+}
+
+// All annual returns for all assets, organized by ticker then year
+interface AssetsAnnualReturns {
+  [ticker: string]: {
+    [year: number]: AssetYearReturn;
+  };
+}
+
 // ============================================
 // MAIN COMPONENT
 // ============================================
@@ -100,6 +117,7 @@ const PortfolioBacktester = () => {
   // The actual data
   const [assetData, setAssetData] = useState<AssetRow[] | null>(null);  // Historical price data
   const [availableAssets, setAvailableAssets] = useState<string[]>([]); // List of asset names
+  const [assetLookup, setAssetLookup] = useState<AssetLookup[]>([]);    // Lookup table (ticker -> name)
 
   // Portfolio configurations - start with one empty portfolio
   const [portfolios, setPortfolios] = useState<Portfolio[]>([
@@ -115,6 +133,16 @@ const PortfolioBacktester = () => {
 
   // Results after running backtest
   const [backtestResults, setBacktestResults] = useState<BacktestResult[] | null>(null);
+
+  // Which view is currently active: the backtest tool, assets annual returns table, or best-to-worst ranking
+  // 'backtest' = show the portfolio configuration and backtest results
+  // 'annualReturns' = show a table of yearly returns for all assets in the lookup table
+  // 'bestToWorst' = show assets ranked by return for a selected year
+  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst'>('backtest');
+
+  // The year selected for the "Best To Worst" ranking view
+  // Defaults to null, and will be set to the most recent year when data loads
+  const [selectedRankingYear, setSelectedRankingYear] = useState<number | null>(null);
 
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
@@ -138,12 +166,13 @@ const PortfolioBacktester = () => {
     setLoadingMessage('Fetching data from Google Sheets...');
 
     try {
-      // Fetch and parse the CSV data
-      const { data, assets } = await fetchSheetData();
+      // Fetch and parse the CSV data from both sheets
+      const { data, assets, lookup } = await fetchSheetData();
 
       // Update all our state with the new data
       setAssetData(data);
       setAvailableAssets(assets);
+      setAssetLookup(lookup);
       setIsConnected(true);
 
       // Set the date range based on the data
@@ -175,18 +204,28 @@ const PortfolioBacktester = () => {
   };
 
   /**
-   * Filters available assets to only those with data at the selected start date.
-   * This prevents users from selecting assets that didn't exist yet.
+   * Filters available assets to only those that:
+   * 1. Are in the lookup table (user-defined list of allowed assets)
+   * 2. Have data at the selected start date
+   * This prevents users from selecting assets that aren't in the lookup or didn't exist yet.
    */
   const getAvailableAssetsForDateRange = (): string[] => {
-    if (!assetData || !selectedDateRange.start) return availableAssets;
+    // First, get the list of tickers from the lookup table
+    const lookupTickers = assetLookup.map(l => l.ticker);
+
+    // If no lookup table, fall back to all assets (backwards compatibility)
+    const baseAssets = lookupTickers.length > 0
+      ? availableAssets.filter(asset => lookupTickers.includes(asset))
+      : availableAssets;
+
+    if (!assetData || !selectedDateRange.start) return baseAssets;
 
     // Find the index of our start date in the data
     const startIndex = assetData.findIndex(row => row.date === selectedDateRange.start);
-    if (startIndex === -1) return availableAssets;
+    if (startIndex === -1) return baseAssets;
 
     // Filter to assets that have data at or near the start date
-    return availableAssets.filter(asset => {
+    return baseAssets.filter(asset => {
       const hasDataAtStart = assetData[startIndex][asset] && Number(assetData[startIndex][asset]) > 0;
       if (hasDataAtStart) return true;
 
@@ -199,6 +238,15 @@ const PortfolioBacktester = () => {
   };
 
   const availableAssetsFiltered = getAvailableAssetsForDateRange();
+
+  /**
+   * Gets the friendly display name for a ticker from the lookup table.
+   * Returns "TICKER - Asset Name" format, or just the ticker if not found.
+   */
+  const getAssetDisplayName = (ticker: string): string => {
+    const lookup = assetLookup.find(l => l.ticker === ticker);
+    return lookup ? `${ticker} - ${lookup.name}` : ticker;
+  };
 
   // ----------------------------------------
   // PORTFOLIO MANAGEMENT FUNCTIONS
@@ -592,6 +640,229 @@ const PortfolioBacktester = () => {
     return result;
   };
 
+  // ----------------------------------------
+  // ASSETS ANNUAL RETURNS FUNCTIONS
+  // ----------------------------------------
+
+  /**
+   * Calculates annual returns for ALL assets in the lookup table.
+   *
+   * For each asset and each year:
+   * - Start price = last available price from the PRIOR year (e.g., Dec 31 of previous year)
+   * - End price = last available price in THAT year (e.g., Dec 31 of current year)
+   * - Calculate: ((endPrice / startPrice) - 1) * 100 = annual return %
+   *
+   * Example: 2023 return = Dec 31 2023 price vs Dec 31 2022 price
+   * For current year (e.g., 2026): latest available price vs Dec 31 2025
+   *
+   * This measures true calendar-year performance from year-end to year-end.
+   */
+  const calculateAssetsAnnualReturns = (): AssetsAnnualReturns => {
+    const result: AssetsAnnualReturns = {};
+
+    // Only calculate for assets in the lookup table
+    if (!assetData || assetLookup.length === 0) return result;
+
+    // Get all tickers from the lookup table
+    const tickers = assetLookup.map(l => l.ticker);
+
+    // Get the range of years in the data
+    const allDates = assetData.map(row => new Date(row.date));
+    const minYear = Math.min(...allDates.map(d => d.getFullYear()));
+    const maxYear = Math.max(...allDates.map(d => d.getFullYear()));
+
+    // Helper function: get the last available price for a ticker in a given year
+    const getLastPriceInYear = (ticker: string, year: number): { date: string; price: number } | null => {
+      // Filter to data points in this year with valid prices for this ticker
+      const yearData = assetData.filter(row => {
+        const rowYear = new Date(row.date).getFullYear();
+        const price = Number(row[ticker]);
+        return rowYear === year && price && price > 0;
+      });
+
+      if (yearData.length === 0) return null;
+
+      // Get the last data point of the year
+      const lastRow = yearData[yearData.length - 1];
+      return {
+        date: lastRow.date,
+        price: Number(lastRow[ticker])
+      };
+    };
+
+    // For each ticker, calculate annual returns for each year
+    tickers.forEach(ticker => {
+      result[ticker] = {};
+
+      for (let year = minYear; year <= maxYear; year++) {
+        // Get end of current year price
+        const endYearData = getLastPriceInYear(ticker, year);
+        if (!endYearData) continue;  // No data for this year
+
+        // Get end of prior year price (this is our starting point)
+        const priorYearData = getLastPriceInYear(ticker, year - 1);
+        if (!priorYearData) continue;  // No prior year data = can't calculate return
+
+        // Calculate annual return: ((endPrice / startPrice) - 1) * 100
+        const annualReturn = ((endYearData.price / priorYearData.price) - 1) * 100;
+
+        result[ticker][year] = {
+          return: annualReturn,
+          startDate: priorYearData.date,    // Last day of prior year
+          startPrice: priorYearData.price,
+          endDate: endYearData.date,         // Last day of current year
+          endPrice: endYearData.price
+        };
+      }
+    });
+
+    return result;
+  };
+
+  /**
+   * Generates tooltip text for a specific asset/year cell.
+   * Shows the calculation details so users understand how the return was computed.
+   *
+   * Example output: "2023: $100.00 (Dec 30, 2022) → $110.00 (Dec 29, 2023) = +10.00%"
+   */
+  const getReturnTooltip = (ticker: string, year: number, annualReturns: AssetsAnnualReturns): string => {
+    const data = annualReturns[ticker]?.[year];
+    if (!data) return 'No data available';
+
+    // Format dates to show month, day, and year (e.g., "Dec 30, 2022")
+    const formatDate = (dateStr: string): string => {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+
+    // Format the return with a + or - sign
+    const returnSign = data.return >= 0 ? '+' : '';
+    const returnStr = `${returnSign}${data.return.toFixed(2)}%`;
+
+    return `${year}: $${data.startPrice.toFixed(2)} (${formatDate(data.startDate)}) → $${data.endPrice.toFixed(2)} (${formatDate(data.endDate)}) = ${returnStr}`;
+  };
+
+  /**
+   * Gets all unique years that have data for any asset in the lookup table.
+   * Returns years sorted from oldest to newest (e.g., 2016, 2017, ..., 2026)
+   */
+  const getYearsWithData = (annualReturns: AssetsAnnualReturns): number[] => {
+    const yearsSet = new Set<number>();
+    Object.values(annualReturns).forEach(assetYears => {
+      Object.keys(assetYears).forEach(year => yearsSet.add(parseInt(year)));
+    });
+    return Array.from(yearsSet).sort((a, b) => a - b);  // Oldest to newest
+  };
+
+  /**
+   * Gets assets sorted by their return for a specific year, from highest to lowest.
+   * Used for the "Best To Worst" ranking view.
+   *
+   * Returns an array of objects with ticker, name, and return for each asset
+   * that has data for the specified year.
+   */
+  const getSortedAssetsByReturn = (year: number, annualReturns: AssetsAnnualReturns): Array<{
+    ticker: string;
+    name: string;
+    return: number;
+  }> => {
+    const assetsWithReturns: Array<{ ticker: string; name: string; return: number }> = [];
+
+    // Loop through all assets in the lookup table
+    assetLookup.forEach(asset => {
+      const data = annualReturns[asset.ticker]?.[year];
+      if (data) {
+        assetsWithReturns.push({
+          ticker: asset.ticker,
+          name: asset.name,
+          return: data.return
+        });
+      }
+    });
+
+    // Sort by return, highest to lowest
+    return assetsWithReturns.sort((a, b) => b.return - a.return);
+  };
+
+  /**
+   * Gets the first and last available price data for a ticker.
+   * Used to calculate Period and CAGR.
+   */
+  const getAssetPriceRange = (ticker: string): {
+    firstDate: string;
+    firstPrice: number;
+    lastDate: string;
+    lastPrice: number;
+    months: number;
+  } | null => {
+    if (!assetData) return null;
+
+    // Find first row with valid price for this ticker
+    let firstRow = null;
+    for (const row of assetData) {
+      const price = Number(row[ticker]);
+      if (price && price > 0) {
+        firstRow = row;
+        break;
+      }
+    }
+
+    // Find last row with valid price for this ticker (search from end)
+    let lastRow = null;
+    for (let i = assetData.length - 1; i >= 0; i--) {
+      const price = Number(assetData[i][ticker]);
+      if (price && price > 0) {
+        lastRow = assetData[i];
+        break;
+      }
+    }
+
+    if (!firstRow || !lastRow) return null;
+
+    const firstDate = new Date(firstRow.date);
+    const lastDate = new Date(lastRow.date);
+
+    // Calculate months between dates
+    const months = (lastDate.getFullYear() - firstDate.getFullYear()) * 12
+                 + (lastDate.getMonth() - firstDate.getMonth());
+
+    return {
+      firstDate: firstRow.date,
+      firstPrice: Number(firstRow[ticker]),
+      lastDate: lastRow.date,
+      lastPrice: Number(lastRow[ticker]),
+      months
+    };
+  };
+
+  /**
+   * Formats a number of months as "Xy Zm" format.
+   * Examples: 15 months -> "1y 3m", 24 months -> "2y", 8 months -> "8m"
+   */
+  const formatPeriod = (months: number): string => {
+    const years = Math.floor(months / 12);
+    const remainingMonths = months % 12;
+
+    if (years === 0) {
+      return `${remainingMonths}m`;
+    } else if (remainingMonths === 0) {
+      return `${years}y`;
+    } else {
+      return `${years}y ${remainingMonths}m`;
+    }
+  };
+
+  /**
+   * Calculates CAGR (Compound Annual Growth Rate).
+   * Formula: ((EndValue / StartValue) ^ (1/years)) - 1
+   * Where years = months / 12
+   */
+  const calculateCAGR = (startPrice: number, endPrice: number, months: number): number => {
+    if (startPrice <= 0 || months <= 0) return 0;
+    const years = months / 12;
+    return (Math.pow(endPrice / startPrice, 1 / years) - 1) * 100;
+  };
+
   /**
    * Runs the backtest for all configured portfolios
    */
@@ -653,8 +924,45 @@ const PortfolioBacktester = () => {
             </div>
           </div>
 
-          {/* Show the rest of the UI only when data is loaded */}
+          {/* View Toggle Buttons - Only show when data is loaded */}
+          {/* These act like tabs: click one to switch between the three views */}
           {isConnected && assetData && (
+            <div className="mb-6 flex gap-2 flex-wrap">
+              <button
+                onClick={() => setActiveView('backtest')}
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                  activeView === 'backtest'
+                    ? 'bg-indigo-600 text-white'           // Active: highlighted
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'  // Inactive: muted
+                }`}
+              >
+                Portfolio Backtest
+              </button>
+              <button
+                onClick={() => setActiveView('annualReturns')}
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                  activeView === 'annualReturns'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                Assets Annual Returns
+              </button>
+              <button
+                onClick={() => setActiveView('bestToWorst')}
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                  activeView === 'bestToWorst'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                Best To Worst
+              </button>
+            </div>
+          )}
+
+          {/* Show the rest of the UI only when data is loaded */}
+          {isConnected && assetData && activeView === 'backtest' && (
             <>
               {/* Parameters Section */}
               <div className="mb-6 p-4 bg-gray-50 rounded-lg">
@@ -765,7 +1073,7 @@ const PortfolioBacktester = () => {
                               >
                                 <option value="">Select...</option>
                                 {availableAssetsFiltered.map(a => (
-                                  <option key={a} value={a}>{a}</option>
+                                  <option key={a} value={a}>{getAssetDisplayName(a)}</option>
                                 ))}
                               </select>
                               {/* Weight Input */}
@@ -815,8 +1123,8 @@ const PortfolioBacktester = () => {
             </>
           )}
 
-          {/* Results Section - Only shown after running backtest */}
-          {backtestResults && (
+          {/* Results Section - Only shown after running backtest AND when in backtest view */}
+          {backtestResults && activeView === 'backtest' && (
             <div className="mt-6">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Results</h2>
 
@@ -934,7 +1242,7 @@ const PortfolioBacktester = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {Object.keys(monthlyReturns).sort().map(year => (
+                        {Object.keys(monthlyReturns).sort().reverse().map(year => (
                           <tr key={year} className="border-b border-gray-100">
                             <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0">{year}</td>
                             {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(month => {
@@ -962,6 +1270,223 @@ const PortfolioBacktester = () => {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Assets Annual Returns Section - Shown when in annualReturns view */}
+          {/* This table shows yearly returns for ALL assets in the lookup table */}
+          {isConnected && assetData && activeView === 'annualReturns' && (
+            <div className="mt-2">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Assets Annual Returns</h2>
+
+              {(() => {
+                // Calculate annual returns for all assets
+                const annualReturns = calculateAssetsAnnualReturns();
+                const years = getYearsWithData(annualReturns);
+
+                // If no lookup table or no data, show a message
+                if (assetLookup.length === 0) {
+                  return (
+                    <div className="bg-yellow-50 p-4 rounded-lg text-yellow-800">
+                      No assets in lookup table. Please add assets to your lookup sheet.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="bg-white p-4 rounded-lg shadow overflow-auto max-h-[70vh]">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 z-20">
+                        <tr className="border-b-2 border-gray-200">
+                          {/* Asset Name column - sticky both top and left */}
+                          <th className="text-left py-2 px-2 bg-gray-100 sticky left-0 z-30 min-w-[150px]">
+                            Asset
+                          </th>
+                          {/* Ticker column */}
+                          <th className="text-left py-2 px-2 bg-gray-100">Ticker</th>
+                          {/* Year columns - oldest to newest */}
+                          {years.map(year => (
+                            <th key={year} className="text-right py-2 px-2 bg-gray-100 min-w-[60px]">
+                              {year}
+                            </th>
+                          ))}
+                          {/* Period column - shows data history length */}
+                          <th className="text-right py-2 px-2 bg-gray-200 min-w-[60px]">Period</th>
+                          {/* CAGR column - compound annual growth rate */}
+                          <th className="text-right py-2 px-2 bg-gray-200 min-w-[60px]">CAGR</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {/* One row per asset in the lookup table */}
+                        {assetLookup.map((asset, idx) => (
+                          <tr key={asset.ticker} className={`border-b border-gray-100 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                            {/* Asset name - sticky left column */}
+                            <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0 z-10">
+                              {asset.name}
+                            </td>
+                            {/* Ticker symbol */}
+                            <td className="py-2 px-2 text-gray-600">{asset.ticker}</td>
+                            {/* Annual return for each year */}
+                            {years.map(year => {
+                              const data = annualReturns[asset.ticker]?.[year];
+
+                              // No data for this year = empty cell
+                              if (!data) {
+                                return (
+                                  <td key={year} className="text-right py-2 px-2 text-gray-300">
+                                    -
+                                  </td>
+                                );
+                              }
+
+                              // Color based on positive/negative return
+                              const bgColor = data.return >= 0 ? 'bg-green-50' : 'bg-red-50';
+                              const textColor = data.return >= 0 ? 'text-green-700' : 'text-red-700';
+
+                              return (
+                                <td
+                                  key={year}
+                                  className={`text-right py-2 px-2 ${bgColor} ${textColor} cursor-help`}
+                                  title={getReturnTooltip(asset.ticker, year, annualReturns)}
+                                >
+                                  {data.return.toFixed(1)}%
+                                </td>
+                              );
+                            })}
+                            {/* Period and CAGR columns */}
+                            {(() => {
+                              const priceRange = getAssetPriceRange(asset.ticker);
+                              if (!priceRange) {
+                                return (
+                                  <>
+                                    <td className="text-right py-2 px-2 text-gray-300">-</td>
+                                    <td className="text-right py-2 px-2 text-gray-300">-</td>
+                                  </>
+                                );
+                              }
+
+                              const cagr = calculateCAGR(priceRange.firstPrice, priceRange.lastPrice, priceRange.months);
+                              const cagrColor = cagr >= 0 ? 'text-green-700' : 'text-red-700';
+                              const cagrBg = cagr >= 0 ? 'bg-green-100' : 'bg-red-100';
+
+                              // Tooltip for CAGR showing the calculation details
+                              const cagrTooltip = `${priceRange.firstDate} ($${priceRange.firstPrice.toFixed(2)}) → ${priceRange.lastDate} ($${priceRange.lastPrice.toFixed(2)})`;
+
+                              return (
+                                <>
+                                  <td className="text-right py-2 px-2 bg-gray-50 text-gray-600">
+                                    {formatPeriod(priceRange.months)}
+                                  </td>
+                                  <td
+                                    className={`text-right py-2 px-2 ${cagrBg} ${cagrColor} font-semibold cursor-help`}
+                                    title={cagrTooltip}
+                                  >
+                                    {cagr.toFixed(1)}%
+                                  </td>
+                                </>
+                              );
+                            })()}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    {/* Legend/explanation */}
+                    <div className="mt-4 text-xs text-gray-500">
+                      <p>Hover over any cell to see calculation details (start price, end price, dates).</p>
+                      <p className="mt-1">
+                        <span className="inline-block w-3 h-3 bg-green-50 border border-green-200 mr-1"></span>
+                        Positive return
+                        <span className="inline-block w-3 h-3 bg-red-50 border border-red-200 ml-3 mr-1"></span>
+                        Negative return
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Best To Worst Section - Shows assets ranked by return for a selected year */}
+          {isConnected && assetData && activeView === 'bestToWorst' && (
+            <div className="mt-2">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Best To Worst</h2>
+
+              {(() => {
+                // Calculate annual returns for all assets
+                const annualReturns = calculateAssetsAnnualReturns();
+                const years = getYearsWithData(annualReturns);
+
+                // If no lookup table or no data, show a message
+                if (assetLookup.length === 0 || years.length === 0) {
+                  return (
+                    <div className="bg-yellow-50 p-4 rounded-lg text-yellow-800">
+                      No assets in lookup table or no annual return data available.
+                    </div>
+                  );
+                }
+
+                // Default to most recent year if not yet set
+                const currentYear = selectedRankingYear ?? years[years.length - 1];
+                const sortedAssets = getSortedAssetsByReturn(currentYear, annualReturns);
+
+                return (
+                  <div className="bg-white p-4 rounded-lg shadow">
+                    {/* Year Dropdown */}
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Select Year</label>
+                      <select
+                        value={currentYear}
+                        onChange={(e) => setSelectedRankingYear(parseInt(e.target.value))}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      >
+                        {/* Most recent year first */}
+                        {years.slice().reverse().map(year => (
+                          <option key={year} value={year}>{year}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Ranked Table - Compact version */}
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-gray-200">
+                          <th className="text-right py-1 px-2 bg-gray-50 w-16">Return</th>
+                          <th className="text-left py-1 px-2 bg-gray-50">Asset</th>
+                          <th className="text-left py-1 px-2 bg-gray-50 w-16">Ticker</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedAssets.map((asset, idx) => {
+                          // Color based on positive/negative return
+                          const textColor = asset.return >= 0 ? 'text-green-700' : 'text-red-700';
+
+                          return (
+                            <tr key={asset.ticker} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                              <td className={`text-right py-1 px-2 font-medium ${textColor}`}>
+                                {asset.return.toFixed(1)}%
+                              </td>
+                              <td className="text-left py-1 px-2 text-gray-700">
+                                {asset.name}
+                              </td>
+                              <td className="text-left py-1 px-2 text-gray-500">
+                                {asset.ticker}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+
+                    {/* Handle case when no assets have data for this year */}
+                    {sortedAssets.length === 0 && (
+                      <div className="text-center py-4 text-gray-500">
+                        No asset data available for {currentYear}.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>

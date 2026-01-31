@@ -12,8 +12,13 @@
   but all happening automatically in the browser!
 */
 
-// The URL to your published Google Sheet (exports as CSV format)
-const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM3Qq52UZwmQyRQrG_YER6-RNnagk2GG9Os65kFPtkNTpNtZywaoMEV8w_xDDuu0eRdEoPWgn/pub?output=csv';
+// The base URL for your published Google Sheet
+const SHEET_BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM3Qq52UZwmQyRQrG_YER6-RNnagk2GG9Os65kFPtkNTpNtZywaoMEV8w_xDDuu0eRdEoPWgn/pub';
+
+// URLs for each tab (sheet) in the spreadsheet
+// gid=0 is the first tab (raw price data), gid=166035960 is the lookup table
+const DATA_SHEET_URL = `${SHEET_BASE_URL}?gid=0&output=csv`;
+const LOOKUP_SHEET_URL = `${SHEET_BASE_URL}?gid=166035960&output=csv`;
 
 // Type definitions - these describe the shape of our data
 // (TypeScript uses these to catch errors and provide autocomplete)
@@ -23,34 +28,93 @@ export interface AssetRow {
   [assetName: string]: number | string;  // e.g., { "SPY": 320.45, "BND": 85.23 }
 }
 
+// Lookup table entry - maps ticker symbol to friendly name
+export interface AssetLookup {
+  ticker: string;     // e.g., "SPY"
+  name: string;       // e.g., "S&P 500 ETF"
+}
+
 export interface ParsedData {
-  data: AssetRow[];      // Array of rows, each with date and asset prices
-  assets: string[];      // List of asset names found in the CSV
+  data: AssetRow[];           // Array of rows, each with date and asset prices
+  assets: string[];           // List of asset names found in the CSV
+  lookup: AssetLookup[];      // Lookup table with ticker-to-name mappings
 }
 
 /**
- * Fetches and parses CSV data from the Google Sheet.
+ * Fetches and parses CSV data from both Google Sheet tabs.
+ * - Tab 1: Raw price data
+ * - Tab 2: Lookup table (ticker -> asset name)
  *
- * @returns Promise containing the parsed data and list of assets
+ * @returns Promise containing the parsed data, list of assets, and lookup table
  * @throws Error if fetch fails or data is invalid
  */
 export async function fetchSheetData(): Promise<ParsedData> {
-  // Step 1: Fetch the raw CSV text from Google Sheets
-  // The 'no-cache' option ensures we always get fresh data
-  const response = await fetch(SHEET_URL, {
-    cache: 'no-cache'  // Don't use cached version - always get latest
-  });
+  // Fetch both sheets in parallel for speed
+  const [dataResponse, lookupResponse] = await Promise.all([
+    fetch(DATA_SHEET_URL, { cache: 'no-cache' }),
+    fetch(LOOKUP_SHEET_URL, { cache: 'no-cache' })
+  ]);
 
-  // Check if the fetch was successful
-  if (!response.ok) {
-    throw new Error(`Failed to fetch data: ${response.status} ${response.statusText}`);
+  // Check if both fetches were successful
+  if (!dataResponse.ok) {
+    throw new Error(`Failed to fetch price data: ${dataResponse.status} ${dataResponse.statusText}`);
+  }
+  if (!lookupResponse.ok) {
+    throw new Error(`Failed to fetch lookup table: ${lookupResponse.status} ${lookupResponse.statusText}`);
   }
 
-  // Get the CSV as plain text
-  const csvText = await response.text();
+  // Get CSV text from both responses
+  const [dataCsvText, lookupCsvText] = await Promise.all([
+    dataResponse.text(),
+    lookupResponse.text()
+  ]);
 
-  // Step 2: Parse the CSV into structured data
-  return parseSheetData(csvText);
+  // Parse both CSVs
+  const { data, assets } = parseSheetData(dataCsvText);
+  const lookup = parseLookupTable(lookupCsvText);
+
+  console.log(`Lookup table has ${lookup.length} assets: ${lookup.map(l => l.ticker).join(', ')}`);
+
+  return { data, assets, lookup };
+}
+
+/**
+ * Parses the lookup table CSV (ticker -> asset name).
+ * Expects two columns: Ticker, Asset Name
+ *
+ * @param csvText - The raw CSV file content
+ * @returns Array of ticker-to-name mappings
+ */
+function parseLookupTable(csvText: string): AssetLookup[] {
+  const lines = csvText.trim().split('\n');
+
+  if (lines.length < 2) {
+    console.warn('Lookup table is empty or has no data rows');
+    return [];
+  }
+
+  // Auto-detect delimiter
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+
+  const lookup: AssetLookup[] = [];
+
+  // Skip header row (line 0), parse data rows
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    const values = parseCSVLine(line, delimiter);
+    if (values.length < 2) continue;
+
+    const ticker = values[0].trim();
+    const name = values[1].trim();
+
+    if (ticker && name) {
+      lookup.push({ ticker, name });
+    }
+  }
+
+  return lookup;
 }
 
 /**
