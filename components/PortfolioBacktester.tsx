@@ -1995,8 +1995,8 @@ const PortfolioBacktester = () => {
                                 returnTooltip = getReturnTooltip(asset.ticker, currentYear, annualReturns);
                               } else {
                                 // Period mode - asset has startDate, endDate, startPrice, endPrice
-                                // Type assertion for period mode assets
-                                const periodAsset = asset as { startDate: string; startPrice: number; endDate: string; endPrice: number; return: number };
+                                // Type assertion through unknown for period mode assets
+                                const periodAsset = asset as unknown as { startDate: string; startPrice: number; endDate: string; endPrice: number; return: number };
                                 returnTooltip = getPeriodReturnTooltip({
                                   startDate: periodAsset.startDate,
                                   startPrice: periodAsset.startPrice,
