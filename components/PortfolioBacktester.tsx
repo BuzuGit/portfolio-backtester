@@ -1995,16 +1995,15 @@ const PortfolioBacktester = () => {
                                 returnTooltip = getReturnTooltip(asset.ticker, currentYear, annualReturns);
                               } else {
                                 // Period mode - asset has startDate, endDate, startPrice, endPrice
-                                const periodAsset = asset as typeof sortedAssets[0];
-                                if ('startDate' in periodAsset) {
-                                  returnTooltip = getPeriodReturnTooltip({
-                                    startDate: periodAsset.startDate,
-                                    startPrice: periodAsset.startPrice,
-                                    endDate: periodAsset.endDate,
-                                    endPrice: periodAsset.endPrice,
-                                    return: periodAsset.return
-                                  });
-                                }
+                                // Type assertion for period mode assets
+                                const periodAsset = asset as { startDate: string; startPrice: number; endDate: string; endPrice: number; return: number };
+                                returnTooltip = getPeriodReturnTooltip({
+                                  startDate: periodAsset.startDate,
+                                  startPrice: periodAsset.startPrice,
+                                  endDate: periodAsset.endDate,
+                                  endPrice: periodAsset.endPrice,
+                                  return: periodAsset.return
+                                });
                               }
 
                               // Build tooltip for PLN Return column
