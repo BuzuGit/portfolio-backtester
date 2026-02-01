@@ -150,6 +150,14 @@ const PortfolioBacktester = () => {
   // Defaults to null, and will be set to the most recent year when data loads
   const [selectedRankingYear, setSelectedRankingYear] = useState<number | null>(null);
 
+  // Sort column for Assets Annual Returns table
+  // Can be a year number, 'Period', 'CAGR', 'CurrDD', '1Y', '2Y', '3Y', '4Y', '5Y', or null (default order)
+  const [annualReturnsSortColumn, setAnnualReturnsSortColumn] = useState<string | number | null>(null);
+
+  // Best To Worst view mode: 'year' for annual returns, or a number (1-5) for period returns
+  // When null or 'year', the year dropdown is used. When 1-5, shows period returns.
+  const [bestToWorstMode, setBestToWorstMode] = useState<'year' | 1 | 2 | 3 | 4 | 5>('year');
+
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
   // ----------------------------------------
@@ -963,6 +971,198 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Calculates total return for a ticker over a specific number of years.
+   * Returns: current price vs price X years ago.
+   * Used for the 1Y, 2Y, 3Y, 4Y, 5Y columns in Assets Annual Returns.
+   */
+  const getPeriodReturn = (ticker: string, years: number): {
+    return: number;
+    startDate: string;
+    startPrice: number;
+    endDate: string;
+    endPrice: number;
+  } | null => {
+    if (!assetData || assetData.length === 0) return null;
+
+    // Find the latest price for this ticker
+    let endRow = null;
+    for (let i = assetData.length - 1; i >= 0; i--) {
+      const price = Number(assetData[i][ticker]);
+      if (price && price > 0) {
+        endRow = assetData[i];
+        break;
+      }
+    }
+    if (!endRow) return null;
+
+    const endDate = new Date(endRow.date);
+    const endPrice = Number(endRow[ticker]);
+
+    // Calculate target start date (X years ago)
+    const targetStartDate = new Date(endDate);
+    targetStartDate.setFullYear(endDate.getFullYear() - years);
+    const targetDateStr = targetStartDate.toISOString().split('T')[0];
+
+    // Find the closest date on or after target date with valid price
+    let startRow = null;
+    for (const row of assetData) {
+      if (row.date >= targetDateStr) {
+        const price = Number(row[ticker]);
+        if (price && price > 0) {
+          startRow = row;
+          break;
+        }
+      }
+    }
+    if (!startRow) return null;
+
+    const startPrice = Number(startRow[ticker]);
+    const totalReturn = ((endPrice / startPrice) - 1) * 100;
+
+    return {
+      return: totalReturn,
+      startDate: startRow.date,
+      startPrice,
+      endDate: endRow.date,
+      endPrice
+    };
+  };
+
+  /**
+   * Generates tooltip text for period return columns (1Y, 2Y, etc.)
+   */
+  const getPeriodReturnTooltip = (data: { startDate: string; startPrice: number; endDate: string; endPrice: number; return: number }): string => {
+    const formatDate = (dateStr: string): string => {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+    const returnSign = data.return >= 0 ? '+' : '';
+    return `${formatDate(data.startDate)} ($${data.startPrice.toFixed(2)}) → ${formatDate(data.endDate)} ($${data.endPrice.toFixed(2)}) = ${returnSign}${data.return.toFixed(2)}%`;
+  };
+
+  /**
+   * Gets assets sorted by their period return (1Y, 2Y, etc.), from highest to lowest.
+   * Used for the "Best To Worst" view when a period button is selected.
+   * Includes PLN return calculated using the same period's FX return.
+   */
+  const getSortedAssetsByPeriodReturn = (years: number): Array<{
+    ticker: string;
+    name: string;
+    return: number;
+    currency: string;
+    fxTicker: string;
+    fxReturn: number | null;
+    returnInPLN: number;
+    startDate: string;
+    endDate: string;
+    startPrice: number;
+    endPrice: number;
+  }> => {
+    const assetsWithReturns: Array<{
+      ticker: string;
+      name: string;
+      return: number;
+      currency: string;
+      fxTicker: string;
+      fxReturn: number | null;
+      returnInPLN: number;
+      startDate: string;
+      endDate: string;
+      startPrice: number;
+      endPrice: number;
+    }> = [];
+
+    // Loop through all assets in the lookup table
+    assetLookup.forEach(asset => {
+      const periodData = getPeriodReturn(asset.ticker, years);
+      if (periodData) {
+        const assetReturn = periodData.return;
+        const fxTicker = asset.fx;
+        const currency = asset.currency;
+
+        // Calculate PLN return using same period FX return
+        let returnInPLN = assetReturn;
+        let fxReturn: number | null = null;
+
+        if (fxTicker) {
+          const fxPeriodData = getPeriodReturn(fxTicker, years);
+          if (fxPeriodData) {
+            fxReturn = fxPeriodData.return;
+            // (1 + assetReturn) × (1 + fxReturn) - 1
+            returnInPLN = ((1 + assetReturn / 100) * (1 + fxReturn / 100) - 1) * 100;
+          }
+        }
+
+        assetsWithReturns.push({
+          ticker: asset.ticker,
+          name: asset.name,
+          return: assetReturn,
+          currency,
+          fxTicker,
+          fxReturn,
+          returnInPLN,
+          startDate: periodData.startDate,
+          endDate: periodData.endDate,
+          startPrice: periodData.startPrice,
+          endPrice: periodData.endPrice
+        });
+      }
+    });
+
+    // Sort by return, highest to lowest
+    return assetsWithReturns.sort((a, b) => b.return - a.return);
+  };
+
+  /**
+   * Calculates current drawdown for an asset (how far current price is from ATH).
+   * Returns drawdown percentage (negative or zero) and details for tooltip.
+   */
+  const getAssetCurrentDrawdown = (ticker: string): {
+    drawdown: number;
+    currentPrice: number;
+    currentDate: string;
+    athPrice: number;
+    athDate: string;
+    isAtATH: boolean;
+  } | null => {
+    if (!assetData || assetData.length === 0) return null;
+
+    // Find all valid prices for this ticker
+    let maxPrice = 0;
+    let maxDate = '';
+    let currentPrice = 0;
+    let currentDate = '';
+
+    for (const row of assetData) {
+      const price = Number(row[ticker]);
+      if (price && price > 0) {
+        // Track ATH
+        if (price > maxPrice) {
+          maxPrice = price;
+          maxDate = row.date;
+        }
+        // Track current (last valid price)
+        currentPrice = price;
+        currentDate = row.date;
+      }
+    }
+
+    if (maxPrice === 0 || currentPrice === 0) return null;
+
+    const drawdown = ((currentPrice - maxPrice) / maxPrice) * 100;
+    const isAtATH = Math.abs(drawdown) < 0.01;  // Consider ATH if within 0.01%
+
+    return {
+      drawdown,
+      currentPrice,
+      currentDate,
+      athPrice: maxPrice,
+      athDate: maxDate,
+      isAtATH
+    };
+  };
+
+  /**
    * Runs the backtest for all configured portfolios
    */
   const runBacktest = () => {
@@ -1421,6 +1621,60 @@ const PortfolioBacktester = () => {
                   );
                 }
 
+                // Helper to get sort value for an asset based on column
+                const getSortValue = (ticker: string, column: string | number | null): number => {
+                  if (column === null) return 0;
+
+                  // Year columns (numeric)
+                  if (typeof column === 'number') {
+                    const data = annualReturns[ticker]?.[column];
+                    return data ? data.return : -Infinity;
+                  }
+
+                  // Period column
+                  if (column === 'Period') {
+                    const priceRange = getAssetPriceRange(ticker);
+                    return priceRange ? priceRange.months : -Infinity;
+                  }
+
+                  // CAGR column
+                  if (column === 'CAGR') {
+                    const priceRange = getAssetPriceRange(ticker);
+                    if (!priceRange) return -Infinity;
+                    return calculateCAGR(priceRange.firstPrice, priceRange.lastPrice, priceRange.months);
+                  }
+
+                  // Current DD column (higher = better, so ATH = 0 is best)
+                  if (column === 'CurrDD') {
+                    const ddData = getAssetCurrentDrawdown(ticker);
+                    return ddData ? ddData.drawdown : -Infinity;
+                  }
+
+                  // Period return columns (1Y, 2Y, etc.)
+                  const periodMatch = column.toString().match(/^(\d)Y$/);
+                  if (periodMatch) {
+                    const years = parseInt(periodMatch[1]);
+                    const periodData = getPeriodReturn(ticker, years);
+                    return periodData ? periodData.return : -Infinity;
+                  }
+
+                  return 0;
+                };
+
+                // Sort assets based on selected column (highest to lowest)
+                const sortedAssetLookup = [...assetLookup].sort((a, b) => {
+                  if (annualReturnsSortColumn === null) return 0;
+                  const aVal = getSortValue(a.ticker, annualReturnsSortColumn);
+                  const bVal = getSortValue(b.ticker, annualReturnsSortColumn);
+                  return bVal - aVal;  // Descending order (best first)
+                });
+
+                // Helper for sortable header styling
+                const getSortableHeaderClass = (column: string | number, baseClass: string) => {
+                  const isSelected = annualReturnsSortColumn === column;
+                  return `${baseClass} cursor-pointer hover:bg-blue-100 select-none ${isSelected ? 'bg-blue-200 font-bold' : ''}`;
+                };
+
                 return (
                   <div className="bg-white p-4 rounded-lg shadow overflow-auto max-h-[70vh]">
                     <table className="w-full text-xs">
@@ -1432,21 +1686,54 @@ const PortfolioBacktester = () => {
                           </th>
                           {/* Ticker column */}
                           <th className="text-left py-2 px-2 bg-gray-100">Ticker</th>
-                          {/* Year columns - oldest to newest */}
+                          {/* Year columns - oldest to newest, clickable for sorting */}
                           {years.map(year => (
-                            <th key={year} className="text-right py-2 px-2 bg-gray-100 min-w-[60px]">
+                            <th
+                              key={year}
+                              className={getSortableHeaderClass(year, 'text-right py-2 px-2 bg-gray-100 min-w-[60px]')}
+                              onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === year ? null : year)}
+                            >
                               {year}
                             </th>
                           ))}
                           {/* Period column - shows data history length */}
-                          <th className="text-right py-2 px-2 bg-gray-200 min-w-[60px]">Period</th>
+                          <th
+                            className={getSortableHeaderClass('Period', 'text-right py-2 px-2 bg-gray-200 min-w-[60px]')}
+                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Period' ? null : 'Period')}
+                          >
+                            Period
+                          </th>
                           {/* CAGR column - compound annual growth rate */}
-                          <th className="text-right py-2 px-2 bg-gray-200 min-w-[60px]">CAGR</th>
+                          <th
+                            className={getSortableHeaderClass('CAGR', 'text-right py-2 px-2 bg-gray-200 min-w-[60px]')}
+                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CAGR' ? null : 'CAGR')}
+                          >
+                            CAGR
+                          </th>
+                          {/* Current Drawdown column - distance from ATH */}
+                          <th
+                            className={getSortableHeaderClass('CurrDD', 'text-right py-2 px-2 bg-gray-200 min-w-[55px]')}
+                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CurrDD' ? null : 'CurrDD')}
+                          >
+                            Curr DD
+                          </th>
+                          {/* Empty separator column */}
+                          <th className="py-2 px-1 bg-gray-100 w-2"></th>
+                          {/* Period return columns (1Y-5Y) */}
+                          {['1Y', '2Y', '3Y', '4Y', '5Y'].map(period => (
+                            <th
+                              key={period}
+                              className={getSortableHeaderClass(period, 'text-right py-2 px-2 bg-gray-100 min-w-[50px]')}
+                              onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === period ? null : period)}
+                            >
+                              {period}
+                            </th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {/* One row per asset in the lookup table */}
-                        {assetLookup.map((asset, idx) => (
+                        {/* One row per asset in the lookup table, sorted by selected column */}
+                        {sortedAssetLookup.map((asset, idx) => (
                           <tr key={asset.ticker} className={`border-b border-gray-100 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
                             {/* Asset name - sticky left column */}
                             <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0 z-10">
@@ -1514,6 +1801,69 @@ const PortfolioBacktester = () => {
                                 </>
                               );
                             })()}
+                            {/* Current Drawdown column */}
+                            {(() => {
+                              const ddData = getAssetCurrentDrawdown(asset.ticker);
+                              if (!ddData) {
+                                return <td className="text-right py-2 px-2 text-gray-300">-</td>;
+                              }
+
+                              const formatDate = (dateStr: string): string => {
+                                const date = new Date(dateStr);
+                                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                              };
+
+                              const tooltip = ddData.isAtATH
+                                ? `At All-Time High: $${ddData.currentPrice.toFixed(2)} (${formatDate(ddData.currentDate)})`
+                                : `Current: $${ddData.currentPrice.toFixed(2)} (${formatDate(ddData.currentDate)}) vs ATH: $${ddData.athPrice.toFixed(2)} (${formatDate(ddData.athDate)}) = ${ddData.drawdown.toFixed(1)}%`;
+
+                              if (ddData.isAtATH) {
+                                return (
+                                  <td
+                                    className="text-right py-2 px-2 bg-green-100 text-green-700 font-semibold cursor-help"
+                                    title={tooltip}
+                                  >
+                                    ATH
+                                  </td>
+                                );
+                              }
+
+                              return (
+                                <td
+                                  className="text-right py-2 px-2 bg-orange-50 text-orange-700 cursor-help"
+                                  title={tooltip}
+                                >
+                                  {ddData.drawdown.toFixed(1)}%
+                                </td>
+                              );
+                            })()}
+                            {/* Empty separator column */}
+                            <td className="py-2 px-1 bg-gray-50"></td>
+                            {/* Period return columns (1Y-5Y) */}
+                            {[1, 2, 3, 4, 5].map(years => {
+                              const periodData = getPeriodReturn(asset.ticker, years);
+
+                              if (!periodData) {
+                                return (
+                                  <td key={years} className="text-right py-2 px-2 text-gray-300">
+                                    -
+                                  </td>
+                                );
+                              }
+
+                              const bgColor = periodData.return >= 0 ? 'bg-green-50' : 'bg-red-50';
+                              const textColor = periodData.return >= 0 ? 'text-green-700' : 'text-red-700';
+
+                              return (
+                                <td
+                                  key={years}
+                                  className={`text-right py-2 px-2 ${bgColor} ${textColor} cursor-help`}
+                                  title={getPeriodReturnTooltip(periodData)}
+                                >
+                                  {periodData.return.toFixed(1)}%
+                                </td>
+                              );
+                            })}
                           </tr>
                         ))}
                       </tbody>
@@ -1556,23 +1906,58 @@ const PortfolioBacktester = () => {
 
                 // Default to most recent year if not yet set
                 const currentYear = selectedRankingYear ?? years[years.length - 1];
-                const sortedAssets = getSortedAssetsByReturn(currentYear, annualReturns);
+
+                // Get sorted assets based on mode (year or period)
+                const isYearMode = bestToWorstMode === 'year';
+                const sortedAssets = isYearMode
+                  ? getSortedAssetsByReturn(currentYear, annualReturns)
+                  : getSortedAssetsByPeriodReturn(bestToWorstMode as number);
+
+                // Column header text
+                const returnColumnHeader = isYearMode
+                  ? `${currentYear} Return`
+                  : `${bestToWorstMode}Y Return`;
 
                 return (
                   <div className="bg-white p-4 rounded-lg shadow">
-                    {/* Year Dropdown */}
-                    <div className="mb-4">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Select Year</label>
-                      <select
-                        value={currentYear}
-                        onChange={(e) => setSelectedRankingYear(parseInt(e.target.value))}
-                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      >
-                        {/* Most recent year first */}
-                        {years.slice().reverse().map(year => (
-                          <option key={year} value={year}>{year}</option>
-                        ))}
-                      </select>
+                    {/* Year Dropdown and Period Buttons */}
+                    <div className="mb-4 flex flex-wrap items-end gap-4">
+                      {/* Year Dropdown */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Select Year</label>
+                        <select
+                          value={currentYear}
+                          onChange={(e) => {
+                            setSelectedRankingYear(parseInt(e.target.value));
+                            setBestToWorstMode('year');  // Switch to year mode when selecting a year
+                          }}
+                          className={`px-3 py-2 border rounded-lg text-sm ${isYearMode ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}
+                        >
+                          {/* Most recent year first */}
+                          {years.slice().reverse().map(year => (
+                            <option key={year} value={year}>{year}</option>
+                          ))}
+                        </select>
+                      </div>
+                      {/* Period Buttons */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Or select period</label>
+                        <div className="flex gap-1">
+                          {([1, 2, 3, 4, 5] as const).map(period => (
+                            <button
+                              key={period}
+                              onClick={() => setBestToWorstMode(period)}
+                              className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                                bestToWorstMode === period
+                                  ? 'bg-blue-500 text-white border-blue-500'
+                                  : 'bg-white border-gray-300 hover:bg-gray-100'
+                              }`}
+                            >
+                              {period}Y
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
 
                     {/* Ranked Table - Shows Bar Chart, Return, Asset, Ticker, Currency, Return in PLN */}
@@ -1590,7 +1975,7 @@ const PortfolioBacktester = () => {
                           <thead>
                             <tr className="border-b border-gray-200">
                               <th className="py-1 px-1 bg-gray-50 w-24"></th>
-                              <th className="text-right py-1 px-2 bg-gray-50 w-16">{currentYear} Return</th>
+                              <th className="text-right py-1 px-2 bg-gray-50 w-16">{returnColumnHeader}</th>
                               <th className="text-left py-1 px-2 bg-gray-50">Asset</th>
                               <th className="text-left py-1 px-2 bg-gray-50 w-16">Ticker</th>
                               <th className="text-center py-1 px-2 bg-gray-50 w-12">Ccy</th>
@@ -1603,8 +1988,24 @@ const PortfolioBacktester = () => {
                               const textColor = asset.return >= 0 ? 'text-green-700' : 'text-red-700';
                               const plnTextColor = asset.returnInPLN >= 0 ? 'text-green-700' : 'text-red-700';
 
-                              // Build tooltip for Return column (same as Assets Annual Returns)
-                              const returnTooltip = getReturnTooltip(asset.ticker, currentYear, annualReturns);
+                              // Build tooltip for Return column
+                              // For year mode, use annual return tooltip; for period mode, use period return tooltip
+                              let returnTooltip = '';
+                              if (isYearMode) {
+                                returnTooltip = getReturnTooltip(asset.ticker, currentYear, annualReturns);
+                              } else {
+                                // Period mode - asset has startDate, endDate, startPrice, endPrice
+                                const periodAsset = asset as typeof sortedAssets[0];
+                                if ('startDate' in periodAsset) {
+                                  returnTooltip = getPeriodReturnTooltip({
+                                    startDate: periodAsset.startDate,
+                                    startPrice: periodAsset.startPrice,
+                                    endDate: periodAsset.endDate,
+                                    endPrice: periodAsset.endPrice,
+                                    return: periodAsset.return
+                                  });
+                                }
+                              }
 
                               // Build tooltip for PLN Return column
                               // Show formula: "(1 + 10.0%) × (1 + 5.2% USDPLN) - 1 = 15.7%"
