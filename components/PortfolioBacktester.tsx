@@ -351,6 +351,41 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Sets the start date based on a preset period (YTD, 1Y, 3Y, 5Y).
+   * Keeps the end date unchanged and calculates the new start date.
+   * Finds the closest available date in the data if exact date doesn't exist.
+   */
+  const setDatePreset = (preset: 'YTD' | '1Y' | '2Y' | '3Y' | '4Y' | '5Y') => {
+    if (!assetData || assetData.length === 0) return;
+
+    const endDate = new Date(selectedDateRange.end);
+    let targetStartDate: Date;
+
+    if (preset === 'YTD') {
+      // Year to date: Jan 1 of the current year based on end date
+      targetStartDate = new Date(endDate.getFullYear(), 0, 1);
+    } else {
+      // 1Y, 2Y, 3Y, 4Y, 5Y: subtract years from end date
+      const years = parseInt(preset);  // "1Y" -> 1, "2Y" -> 2, etc.
+      targetStartDate = new Date(endDate);
+      targetStartDate.setFullYear(endDate.getFullYear() - years);
+    }
+
+    // Find the closest available date in assetData (on or after target)
+    const targetDateStr = targetStartDate.toISOString().split('T')[0];
+
+    // Find first date >= target date
+    const closestDate = assetData.find(row => row.date >= targetDateStr);
+
+    if (closestDate) {
+      setSelectedStartDate(closestDate.date);
+    } else {
+      // If no date found after target, use the first available date
+      setSelectedStartDate(assetData[0].date);
+    }
+  };
+
+  /**
    * Updates a specific field of an asset in a portfolio
    */
   const updateAsset = (portfolioId: number, assetIndex: number, field: 'asset' | 'weight' | 'fx', value: string | number) => {
@@ -1030,7 +1065,21 @@ const PortfolioBacktester = () => {
             <>
               {/* Parameters Section */}
               <div className="mb-6 p-4 bg-gray-50 rounded-lg">
-                <h2 className="text-lg font-semibold text-gray-700 mb-3">Parameters</h2>
+                <div className="flex justify-between items-center mb-3">
+                  <h2 className="text-lg font-semibold text-gray-700">Parameters</h2>
+                  {/* Quick date range presets */}
+                  <div className="flex gap-1">
+                    {(['YTD', '1Y', '2Y', '3Y', '4Y', '5Y'] as const).map(preset => (
+                      <button
+                        key={preset}
+                        onClick={() => setDatePreset(preset)}
+                        className="px-2 py-1 text-xs bg-white border border-gray-300 rounded hover:bg-gray-100 font-medium"
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   {/* Start Date */}
                   <div>
@@ -1128,12 +1177,12 @@ const PortfolioBacktester = () => {
                         {/* Asset List */}
                         <div className="space-y-2 mb-2">
                           {portfolio.assets.map((asset, idx) => (
-                            <div key={idx} className="flex gap-1">
-                              {/* Asset Selector */}
+                            <div key={idx} className="flex gap-1 items-center">
+                              {/* Asset Selector - min-w-0 allows shrinking, flex-1 fills remaining space */}
                               <select
                                 value={asset.asset}
                                 onChange={(e) => updateAsset(portfolio.id, idx, 'asset', e.target.value)}
-                                className="flex-1 px-1 py-1 text-xs border border-gray-300 rounded"
+                                className="flex-1 min-w-0 px-1 py-1 text-xs border border-gray-300 rounded"
                               >
                                 <option value="">Select...</option>
                                 {availableAssetsFiltered.map(a => (
@@ -1144,10 +1193,10 @@ const PortfolioBacktester = () => {
                               <select
                                 value={asset.fx}
                                 onChange={(e) => updateAsset(portfolio.id, idx, 'fx', e.target.value)}
-                                className="w-16 px-1 py-1 text-xs border border-gray-300 rounded"
+                                className="w-14 px-1 py-1 text-xs border border-gray-300 rounded shrink-0"
                                 title="Currency conversion to PLN"
                               >
-                                <option value="">No FX</option>
+                                <option value="">-</option>
                                 <option value="USDPLN">USD</option>
                                 <option value="SGDPLN">SGD</option>
                                 <option value="CHFPLN">CHF</option>
@@ -1159,12 +1208,12 @@ const PortfolioBacktester = () => {
                                 value={asset.weight}
                                 onChange={(e) => updateAsset(portfolio.id, idx, 'weight', parseFloat(e.target.value) || 0)}
                                 placeholder="%"
-                                className="w-14 px-1 py-1 text-xs border border-gray-300 rounded"
+                                className="w-12 px-1 py-1 text-xs border border-gray-300 rounded shrink-0"
                               />
                               {/* Remove Asset */}
                               <button
                                 onClick={() => removeAsset(portfolio.id, idx)}
-                                className="text-red-500 hover:text-red-700"
+                                className="text-red-500 hover:text-red-700 shrink-0"
                               >
                                 <Trash2 className="w-3 h-3" />
                               </button>
@@ -1269,6 +1318,7 @@ const PortfolioBacktester = () => {
                       <th className="text-right py-2 px-2">Vol</th>
                       <th className="text-right py-2 px-2">Sharpe</th>
                       <th className="text-right py-2 px-2">Max DD</th>
+                      <th className="text-right py-2 px-2">Curr DD</th>
                       <th className="text-right py-2 px-2">End $</th>
                     </tr>
                   </thead>
@@ -1283,6 +1333,7 @@ const PortfolioBacktester = () => {
                         <td className="text-right py-2 px-2">{result.stats.volatility}%</td>
                         <td className="text-right py-2 px-2">{result.stats.sharpeRatio}</td>
                         <td className="text-right py-2 px-2 text-red-600">{result.stats.maxDrawdown}%</td>
+                        <td className="text-right py-2 px-2 text-orange-600">{result.stats.currentDrawdown}%</td>
                         <td className="text-right py-2 px-2 font-semibold">${result.stats.endingValue}</td>
                       </tr>
                     ))}
@@ -1524,68 +1575,103 @@ const PortfolioBacktester = () => {
                       </select>
                     </div>
 
-                    {/* Ranked Table - Shows Return, Asset, Ticker, Currency, Return in PLN */}
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b border-gray-200">
-                          <th className="text-right py-1 px-2 bg-gray-50 w-16">Return</th>
-                          <th className="text-left py-1 px-2 bg-gray-50">Asset</th>
-                          <th className="text-left py-1 px-2 bg-gray-50 w-16">Ticker</th>
-                          <th className="text-center py-1 px-2 bg-gray-50 w-12">Ccy</th>
-                          <th className="text-right py-1 px-2 bg-gray-100 w-20">PLN Return</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sortedAssets.map((asset, idx) => {
-                          // Color based on positive/negative return
-                          const textColor = asset.return >= 0 ? 'text-green-700' : 'text-red-700';
-                          const plnTextColor = asset.returnInPLN >= 0 ? 'text-green-700' : 'text-red-700';
+                    {/* Ranked Table - Shows Bar Chart, Return, Asset, Ticker, Currency, Return in PLN */}
+                    {(() => {
+                      // Calculate max positive and max negative returns separately for proper scaling
+                      // This ensures the best positive return fills the right side completely
+                      // and the worst negative return fills the left side completely
+                      const positiveReturns = sortedAssets.filter(a => a.return > 0).map(a => a.return);
+                      const negativeReturns = sortedAssets.filter(a => a.return < 0).map(a => Math.abs(a.return));
+                      const maxPositive = positiveReturns.length > 0 ? Math.max(...positiveReturns) : 1;
+                      const maxNegative = negativeReturns.length > 0 ? Math.max(...negativeReturns) : 1;
 
-                          // Build tooltip for Return column (same as Assets Annual Returns)
-                          const returnTooltip = getReturnTooltip(asset.ticker, currentYear, annualReturns);
-
-                          // Build tooltip for PLN Return column
-                          // Show formula: "(1 + 10.0%) × (1 + 5.2% USDPLN) - 1 = 15.7%"
-                          let plnReturnTooltip = '';
-                          if (asset.fxReturn !== null && asset.fxTicker) {
-                            const assetReturnSign = asset.return >= 0 ? '+' : '';
-                            const fxReturnSign = asset.fxReturn >= 0 ? '+' : '';
-                            const plnReturnSign = asset.returnInPLN >= 0 ? '+' : '';
-                            plnReturnTooltip = `(1 ${assetReturnSign} ${asset.return.toFixed(1)}%) × (1 ${fxReturnSign} ${asset.fxReturn.toFixed(1)}% ${asset.fxTicker}) - 1 = ${plnReturnSign}${asset.returnInPLN.toFixed(1)}%`;
-                          } else if (asset.currency === 'PLN') {
-                            plnReturnTooltip = 'PLN asset - no currency conversion needed';
-                          } else {
-                            plnReturnTooltip = 'No FX data available for conversion';
-                          }
-
-                          return (
-                            <tr key={asset.ticker} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
-                              <td
-                                className={`text-right py-1 px-2 font-medium ${textColor} cursor-help`}
-                                title={returnTooltip}
-                              >
-                                {asset.return.toFixed(1)}%
-                              </td>
-                              <td className="text-left py-1 px-2 text-gray-700">
-                                {asset.name}
-                              </td>
-                              <td className="text-left py-1 px-2 text-gray-500">
-                                {asset.ticker}
-                              </td>
-                              <td className="text-center py-1 px-2 text-gray-500">
-                                {asset.currency}
-                              </td>
-                              <td
-                                className={`text-right py-1 px-2 font-medium bg-gray-50 ${plnTextColor} cursor-help`}
-                                title={plnReturnTooltip}
-                              >
-                                {asset.returnInPLN.toFixed(1)}%
-                              </td>
+                      return (
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-gray-200">
+                              <th className="py-1 px-1 bg-gray-50 w-24"></th>
+                              <th className="text-right py-1 px-2 bg-gray-50 w-16">{currentYear} Return</th>
+                              <th className="text-left py-1 px-2 bg-gray-50">Asset</th>
+                              <th className="text-left py-1 px-2 bg-gray-50 w-16">Ticker</th>
+                              <th className="text-center py-1 px-2 bg-gray-50 w-12">Ccy</th>
+                              <th className="text-right py-1 px-2 bg-gray-100 w-20">PLN Return</th>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                          </thead>
+                          <tbody>
+                            {sortedAssets.map((asset, idx) => {
+                              // Color based on positive/negative return
+                              const textColor = asset.return >= 0 ? 'text-green-700' : 'text-red-700';
+                              const plnTextColor = asset.returnInPLN >= 0 ? 'text-green-700' : 'text-red-700';
+
+                              // Build tooltip for Return column (same as Assets Annual Returns)
+                              const returnTooltip = getReturnTooltip(asset.ticker, currentYear, annualReturns);
+
+                              // Build tooltip for PLN Return column
+                              // Show formula: "(1 + 10.0%) × (1 + 5.2% USDPLN) - 1 = 15.7%"
+                              let plnReturnTooltip = '';
+                              if (asset.fxReturn !== null && asset.fxTicker) {
+                                const assetReturnSign = asset.return >= 0 ? '+' : '';
+                                const fxReturnSign = asset.fxReturn >= 0 ? '+' : '';
+                                const plnReturnSign = asset.returnInPLN >= 0 ? '+' : '';
+                                plnReturnTooltip = `(1 ${assetReturnSign} ${asset.return.toFixed(1)}%) × (1 ${fxReturnSign} ${asset.fxReturn.toFixed(1)}% ${asset.fxTicker}) - 1 = ${plnReturnSign}${asset.returnInPLN.toFixed(1)}%`;
+                              } else if (asset.currency === 'PLN') {
+                                plnReturnTooltip = 'PLN asset - no currency conversion needed';
+                              } else {
+                                plnReturnTooltip = 'No FX data available for conversion';
+                              }
+
+                              // Calculate bar width as percentage (0-50% of cell, since bars go left or right from center)
+                              // Scale positive returns against max positive, negative against max negative
+                              const isPositive = asset.return >= 0;
+                              const barWidth = isPositive
+                                ? (asset.return / maxPositive) * 50
+                                : (Math.abs(asset.return) / maxNegative) * 50;
+
+                              return (
+                                <tr key={asset.ticker} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                                  {/* Bar Chart Column */}
+                                  <td className="py-1 px-1">
+                                    <div className="relative h-4 w-full bg-gray-100 rounded overflow-hidden">
+                                      {/* Center line */}
+                                      <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-300"></div>
+                                      {/* Bar - positioned from center */}
+                                      <div
+                                        className={`absolute top-0.5 bottom-0.5 ${isPositive ? 'bg-green-500' : 'bg-red-500'}`}
+                                        style={{
+                                          width: `${barWidth}%`,
+                                          left: isPositive ? '50%' : `${50 - barWidth}%`,
+                                        }}
+                                      ></div>
+                                    </div>
+                                  </td>
+                                  <td
+                                    className={`text-right py-1 px-2 font-medium ${textColor} cursor-help`}
+                                    title={returnTooltip}
+                                  >
+                                    {asset.return.toFixed(1)}%
+                                  </td>
+                                  <td className="text-left py-1 px-2 text-gray-700">
+                                    {asset.name}
+                                  </td>
+                                  <td className="text-left py-1 px-2 text-gray-500">
+                                    {asset.ticker}
+                                  </td>
+                                  <td className="text-center py-1 px-2 text-gray-500">
+                                    {asset.currency}
+                                  </td>
+                                  <td
+                                    className={`text-right py-1 px-2 font-medium bg-gray-50 ${plnTextColor} cursor-help`}
+                                    title={plnReturnTooltip}
+                                  >
+                                    {asset.returnInPLN.toFixed(1)}%
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      );
+                    })()}
 
                     {/* Handle case when no assets have data for this year */}
                     {sortedAssets.length === 0 && (
