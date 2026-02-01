@@ -31,6 +31,7 @@ import { fetchSheetData, AssetRow, AssetLookup } from '@/lib/fetchData';
 interface PortfolioAsset {
   asset: string;   // Asset name (e.g., "SPY", "BND")
   weight: number;  // Percentage weight (e.g., 60 for 60%)
+  fx: string;      // FX ticker (e.g., "USDPLN") or empty for no conversion
 }
 
 // A complete portfolio configuration
@@ -102,6 +103,11 @@ interface AssetsAnnualReturns {
 // ============================================
 // MAIN COMPONENT
 // ============================================
+
+// Available FX conversion options for foreign currency assets
+// Empty string = no conversion (prices used as-is)
+// e.g., "USDPLN" = multiply asset prices by USD/PLN exchange rate
+const FX_OPTIONS = ['', 'USDPLN', 'SGDPLN', 'CHFPLN', 'EURPLN'];
 
 const PortfolioBacktester = () => {
   // ----------------------------------------
@@ -307,7 +313,8 @@ const PortfolioBacktester = () => {
         const isFirstAsset = p.assets.length === 0;
         const newAssets = [...p.assets, {
           asset: firstAvailableAsset,
-          weight: isFirstAsset ? 100 : 0
+          weight: isFirstAsset ? 100 : 0,
+          fx: ''  // Default: no FX conversion
         }];
         const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets);
         return { ...p, assets: newAssets, name: newName };
@@ -334,9 +341,19 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Gets the FX rate for a given FX ticker at a specific data row.
+   * Returns 1 if no FX ticker is specified or if the rate is not available.
+   */
+  const getFxRate = (row: AssetRow, fxTicker: string): number => {
+    if (!fxTicker) return 1;  // No FX conversion needed
+    const rate = Number(row[fxTicker]);
+    return (rate && rate > 0) ? rate : 1;  // Default to 1 if rate not available
+  };
+
+  /**
    * Updates a specific field of an asset in a portfolio
    */
-  const updateAsset = (portfolioId: number, assetIndex: number, field: 'asset' | 'weight', value: string | number) => {
+  const updateAsset = (portfolioId: number, assetIndex: number, field: 'asset' | 'weight' | 'fx', value: string | number) => {
     setPortfolios(portfolios.map(p => {
       if (p.id === portfolioId) {
         let newAssets = [...p.assets];
@@ -416,12 +433,15 @@ const PortfolioBacktester = () => {
 
     // Calculate initial shares for each asset
     // Shares = how many units of each asset we own
+    // When FX is selected, we convert the asset price to PLN using the FX rate
     const assetShares: { [asset: string]: number } = {};
-    portfolio.assets.forEach(({ asset, weight }) => {
+    portfolio.assets.forEach(({ asset, weight, fx }) => {
       const initialPrice = Number(filteredData[0][asset]);
-      if (initialPrice && initialPrice > 0) {
+      const fxRate = getFxRate(filteredData[0], fx);  // Get FX rate (1 if no FX)
+      const adjustedPrice = initialPrice * fxRate;    // Convert to PLN
+      if (adjustedPrice && adjustedPrice > 0) {
         const initialAllocation = startingCapital * (weight / 100);
-        assetShares[asset] = initialAllocation / initialPrice;
+        assetShares[asset] = initialAllocation / adjustedPrice;
       } else {
         assetShares[asset] = 0;
       }
@@ -453,21 +473,26 @@ const PortfolioBacktester = () => {
       }
 
       // Calculate current portfolio value
+      // Each asset's value = shares × price × FX rate (if applicable)
       let portfolioValue = 0;
-      portfolio.assets.forEach(({ asset }) => {
+      portfolio.assets.forEach(({ asset, fx }) => {
         const currentPrice = Number(row[asset]);
-        if (currentPrice && currentPrice > 0 && assetShares[asset]) {
-          portfolioValue += assetShares[asset] * currentPrice;
+        const fxRate = getFxRate(row, fx);  // Get FX rate for this date
+        const adjustedPrice = currentPrice * fxRate;  // Convert to PLN
+        if (adjustedPrice && adjustedPrice > 0 && assetShares[asset]) {
+          portfolioValue += assetShares[asset] * adjustedPrice;
         }
       });
 
       // Rebalance: adjust shares to restore target weights
       if (shouldRebalance && portfolioValue > 0) {
-        portfolio.assets.forEach(({ asset, weight }) => {
+        portfolio.assets.forEach(({ asset, weight, fx }) => {
           const currentPrice = Number(row[asset]);
-          if (currentPrice && currentPrice > 0) {
+          const fxRate = getFxRate(row, fx);  // Get FX rate for rebalancing
+          const adjustedPrice = currentPrice * fxRate;  // Convert to PLN
+          if (adjustedPrice && adjustedPrice > 0) {
             const targetAllocation = portfolioValue * (weight / 100);
-            assetShares[asset] = targetAllocation / currentPrice;
+            assetShares[asset] = targetAllocation / adjustedPrice;
           }
         });
         lastRebalanceDate = currentDate;
@@ -758,24 +783,63 @@ const PortfolioBacktester = () => {
    * Gets assets sorted by their return for a specific year, from highest to lowest.
    * Used for the "Best To Worst" ranking view.
    *
-   * Returns an array of objects with ticker, name, and return for each asset
-   * that has data for the specified year.
+   * Returns an array of objects with ticker, name, return, currency, and PLN return
+   * for each asset that has data for the specified year.
+   *
+   * PLN Return Calculation:
+   * - For PLN assets (no FX conversion needed): returnInPLN = return
+   * - For foreign currency assets: (1 + assetReturn) × (1 + fxReturn) - 1
    */
   const getSortedAssetsByReturn = (year: number, annualReturns: AssetsAnnualReturns): Array<{
     ticker: string;
     name: string;
     return: number;
+    currency: string;
+    fxTicker: string;
+    fxReturn: number | null;  // null if no FX data or PLN asset
+    returnInPLN: number;
   }> => {
-    const assetsWithReturns: Array<{ ticker: string; name: string; return: number }> = [];
+    const assetsWithReturns: Array<{
+      ticker: string;
+      name: string;
+      return: number;
+      currency: string;
+      fxTicker: string;
+      fxReturn: number | null;
+      returnInPLN: number;
+    }> = [];
 
     // Loop through all assets in the lookup table
     assetLookup.forEach(asset => {
       const data = annualReturns[asset.ticker]?.[year];
       if (data) {
+        const assetReturn = data.return;  // Already in percentage (e.g., 10 for 10%)
+        const fxTicker = asset.fx;
+        const currency = asset.currency;
+
+        // Calculate PLN return
+        let returnInPLN = assetReturn;
+        let fxReturn: number | null = null;
+
+        // If there's an FX ticker, get the FX return and convert
+        if (fxTicker) {
+          const fxData = annualReturns[fxTicker]?.[year];
+          if (fxData) {
+            fxReturn = fxData.return;  // FX return in percentage
+            // Convert percentages to decimals, multiply, convert back
+            // (1 + 10%) × (1 + 5%) - 1 = (1.10 × 1.05) - 1 = 0.155 = 15.5%
+            returnInPLN = ((1 + assetReturn / 100) * (1 + fxReturn / 100) - 1) * 100;
+          }
+        }
+
         assetsWithReturns.push({
           ticker: asset.ticker,
           name: asset.name,
-          return: data.return
+          return: assetReturn,
+          currency,
+          fxTicker,
+          fxReturn,
+          returnInPLN
         });
       }
     });
@@ -1075,6 +1139,19 @@ const PortfolioBacktester = () => {
                                 {availableAssetsFiltered.map(a => (
                                   <option key={a} value={a}>{getAssetDisplayName(a)}</option>
                                 ))}
+                              </select>
+                              {/* FX Selector - converts asset prices to PLN */}
+                              <select
+                                value={asset.fx}
+                                onChange={(e) => updateAsset(portfolio.id, idx, 'fx', e.target.value)}
+                                className="w-16 px-1 py-1 text-xs border border-gray-300 rounded"
+                                title="Currency conversion to PLN"
+                              >
+                                <option value="">No FX</option>
+                                <option value="USDPLN">USD</option>
+                                <option value="SGDPLN">SGD</option>
+                                <option value="CHFPLN">CHF</option>
+                                <option value="EURPLN">EUR</option>
                               </select>
                               {/* Weight Input */}
                               <input
@@ -1447,23 +1524,46 @@ const PortfolioBacktester = () => {
                       </select>
                     </div>
 
-                    {/* Ranked Table - Compact version */}
+                    {/* Ranked Table - Shows Return, Asset, Ticker, Currency, Return in PLN */}
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="border-b border-gray-200">
                           <th className="text-right py-1 px-2 bg-gray-50 w-16">Return</th>
                           <th className="text-left py-1 px-2 bg-gray-50">Asset</th>
                           <th className="text-left py-1 px-2 bg-gray-50 w-16">Ticker</th>
+                          <th className="text-center py-1 px-2 bg-gray-50 w-12">Ccy</th>
+                          <th className="text-right py-1 px-2 bg-gray-100 w-20">PLN Return</th>
                         </tr>
                       </thead>
                       <tbody>
                         {sortedAssets.map((asset, idx) => {
                           // Color based on positive/negative return
                           const textColor = asset.return >= 0 ? 'text-green-700' : 'text-red-700';
+                          const plnTextColor = asset.returnInPLN >= 0 ? 'text-green-700' : 'text-red-700';
+
+                          // Build tooltip for Return column (same as Assets Annual Returns)
+                          const returnTooltip = getReturnTooltip(asset.ticker, currentYear, annualReturns);
+
+                          // Build tooltip for PLN Return column
+                          // Show formula: "(1 + 10.0%) × (1 + 5.2% USDPLN) - 1 = 15.7%"
+                          let plnReturnTooltip = '';
+                          if (asset.fxReturn !== null && asset.fxTicker) {
+                            const assetReturnSign = asset.return >= 0 ? '+' : '';
+                            const fxReturnSign = asset.fxReturn >= 0 ? '+' : '';
+                            const plnReturnSign = asset.returnInPLN >= 0 ? '+' : '';
+                            plnReturnTooltip = `(1 ${assetReturnSign} ${asset.return.toFixed(1)}%) × (1 ${fxReturnSign} ${asset.fxReturn.toFixed(1)}% ${asset.fxTicker}) - 1 = ${plnReturnSign}${asset.returnInPLN.toFixed(1)}%`;
+                          } else if (asset.currency === 'PLN') {
+                            plnReturnTooltip = 'PLN asset - no currency conversion needed';
+                          } else {
+                            plnReturnTooltip = 'No FX data available for conversion';
+                          }
 
                           return (
                             <tr key={asset.ticker} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
-                              <td className={`text-right py-1 px-2 font-medium ${textColor}`}>
+                              <td
+                                className={`text-right py-1 px-2 font-medium ${textColor} cursor-help`}
+                                title={returnTooltip}
+                              >
                                 {asset.return.toFixed(1)}%
                               </td>
                               <td className="text-left py-1 px-2 text-gray-700">
@@ -1471,6 +1571,15 @@ const PortfolioBacktester = () => {
                               </td>
                               <td className="text-left py-1 px-2 text-gray-500">
                                 {asset.ticker}
+                              </td>
+                              <td className="text-center py-1 px-2 text-gray-500">
+                                {asset.currency}
+                              </td>
+                              <td
+                                className={`text-right py-1 px-2 font-medium bg-gray-50 ${plnTextColor} cursor-help`}
+                                title={plnReturnTooltip}
+                              >
+                                {asset.returnInPLN.toFixed(1)}%
                               </td>
                             </tr>
                           );
