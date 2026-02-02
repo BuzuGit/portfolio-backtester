@@ -144,7 +144,7 @@ const PortfolioBacktester = () => {
   // 'backtest' = show the portfolio configuration and backtest results
   // 'annualReturns' = show a table of yearly returns for all assets in the lookup table
   // 'bestToWorst' = show assets ranked by return for a selected year
-  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst'>('backtest');
+  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices'>('backtest');
 
   // The year selected for the "Best To Worst" ranking view
   // Defaults to null, and will be set to the most recent year when data loads
@@ -1163,6 +1163,143 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Gets the last price of each month for each asset over the past 13 months.
+   * Used for the "Monthly Prices" tab.
+   *
+   * Returns:
+   * - months: Array of 13 month labels (e.g., "Jan 2025", "Feb 2025", ...)
+   * - assets: Array of asset data, each with ticker, name, and prices for each month
+   * - Also calculates 10-month SMA and BUY/SELL signal
+   */
+  const getMonthlyPricesData = (): {
+    months: string[];
+    assets: Array<{
+      ticker: string;
+      name: string;
+      prices: (number | null)[];  // 13 prices, null if no data
+      sma10: number | null;       // 10-month SMA (average of last 10 months including current)
+      signal: 'BUY' | 'SELL' | null;  // BUY if price > SMA, SELL if price < SMA
+    }>;
+  } => {
+    if (!assetData || assetData.length === 0) {
+      return { months: [], assets: [] };
+    }
+
+    // Use selectedEndDate or the last date in data as reference
+    const endDateStr = selectedEndDate || assetData[assetData.length - 1].date;
+    const endDate = new Date(endDateStr);
+
+    // Generate 13 months (current month + 12 previous), oldest first
+    const monthDates: Date[] = [];
+    for (let i = 12; i >= 0; i--) {
+      const monthDate = new Date(endDate.getFullYear(), endDate.getMonth() - i, 1);
+      monthDates.push(monthDate);
+    }
+
+    // Format month labels in MMMYY format (e.g., "Jan25")
+    const months = monthDates.map(d => {
+      const monthName = d.toLocaleDateString('en-US', { month: 'short' });
+      const yearShort = d.getFullYear().toString().slice(-2);
+      return `${monthName}${yearShort}`;
+    });
+
+    // For each month, find the last trading day's price for each asset
+    const getLastPriceOfMonth = (ticker: string, year: number, month: number): number | null => {
+      // Find all rows in this month
+      const monthRows = assetData.filter(row => {
+        const rowDate = new Date(row.date);
+        return rowDate.getFullYear() === year && rowDate.getMonth() === month;
+      });
+
+      // Get the last row with valid price
+      for (let i = monthRows.length - 1; i >= 0; i--) {
+        const price = Number(monthRows[i][ticker]);
+        if (price && price > 0) {
+          return price;
+        }
+      }
+      return null;
+    };
+
+    // Build asset data
+    const assets = assetLookup.map(asset => {
+      const prices = monthDates.map(d =>
+        getLastPriceOfMonth(asset.ticker, d.getFullYear(), d.getMonth())
+      );
+
+      // Calculate 10-month SMA (last 10 months including current)
+      // Need at least 10 valid prices
+      const last10Prices = prices.slice(-10).filter((p): p is number => p !== null);
+      const sma10 = last10Prices.length >= 10
+        ? last10Prices.reduce((sum, p) => sum + p, 0) / 10
+        : null;
+
+      // Current price is the last one
+      const currentPrice = prices[prices.length - 1];
+
+      // Signal: BUY if current > SMA, SELL if current < SMA
+      let signal: 'BUY' | 'SELL' | null = null;
+      if (currentPrice !== null && sma10 !== null) {
+        signal = currentPrice > sma10 ? 'BUY' : 'SELL';
+      }
+
+      return {
+        ticker: asset.ticker,
+        name: asset.name,
+        prices,
+        sma10,
+        signal
+      };
+    });
+
+    return { months, assets };
+  };
+
+  /**
+   * Generates a heatmap color based on value position in a min-max range.
+   * Uses HSL color space: Hue 0 (red) = lowest, 60 (yellow) = middle, 120 (green) = highest
+   *
+   * @param value - The value to color
+   * @param min - Minimum value in the range
+   * @param max - Maximum value in the range
+   * @returns HSL color string (e.g., "hsl(60, 80%, 85%)")
+   */
+  const getHeatmapColor = (value: number, min: number, max: number): string => {
+    // Handle edge case where all values are the same
+    if (min === max) {
+      return 'hsl(60, 80%, 85%)';  // Neutral yellow
+    }
+
+    // Calculate position in range (0 = min, 1 = max)
+    const position = (value - min) / (max - min);
+
+    // Map position to hue: 0 (red) -> 60 (yellow) -> 120 (green)
+    const hue = position * 120;
+
+    // Return HSL color with fixed saturation and lightness for readability
+    return `hsl(${hue}, 80%, 85%)`;
+  };
+
+  /**
+   * Formats a price based on its magnitude for compact display.
+   * - < 1: 3 decimal places (e.g., 0.123)
+   * - 1-99: 2 decimal places (e.g., 12.34)
+   * - 100-999: 1 decimal place (e.g., 123.4)
+   * - >= 1000: 0 decimal places (e.g., 1234)
+   */
+  const formatPrice = (price: number): string => {
+    if (price < 1) {
+      return price.toFixed(3);
+    } else if (price < 100) {
+      return price.toFixed(2);
+    } else if (price < 1000) {
+      return price.toFixed(1);
+    } else {
+      return price.toFixed(0);
+    }
+  };
+
+  /**
    * Runs the backtest for all configured portfolios
    */
   const runBacktest = () => {
@@ -1256,6 +1393,16 @@ const PortfolioBacktester = () => {
                 }`}
               >
                 Best To Worst
+              </button>
+              <button
+                onClick={() => setActiveView('monthlyPrices')}
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                  activeView === 'monthlyPrices'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                Monthly Prices
               </button>
             </div>
           )}
@@ -2077,6 +2224,137 @@ const PortfolioBacktester = () => {
                     {sortedAssets.length === 0 && (
                       <div className="text-center py-4 text-gray-500">
                         No asset data available for {currentYear}.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Monthly Prices Section - Shows 13 months of raw prices with heatmap and signals */}
+          {isConnected && assetData && activeView === 'monthlyPrices' && (
+            <div className="mt-2">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Monthly Prices</h2>
+
+              {(() => {
+                const { months, assets } = getMonthlyPricesData();
+
+                // If no lookup table or no data, show a message
+                if (assetLookup.length === 0 || months.length === 0) {
+                  return (
+                    <div className="bg-yellow-50 p-4 rounded-lg text-yellow-800">
+                      No assets in lookup table or no monthly price data available.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="bg-white p-4 rounded-lg shadow">
+                    {/* Legend explaining the color scale and signals */}
+                    <div className="mb-4 flex flex-wrap gap-4 text-xs text-gray-600">
+                      <div className="flex items-center gap-2">
+                        <span>Price heatmap (per row):</span>
+                        <div className="flex items-center">
+                          <div className="w-6 h-4 rounded-l" style={{ backgroundColor: 'hsl(0, 80%, 85%)' }}></div>
+                          <div className="w-6 h-4" style={{ backgroundColor: 'hsl(60, 80%, 85%)' }}></div>
+                          <div className="w-6 h-4 rounded-r" style={{ backgroundColor: 'hsl(120, 80%, 85%)' }}></div>
+                        </div>
+                        <span>Low → High</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span>Signal:</span>
+                        <span className="px-2 py-0.5 rounded bg-green-100 text-green-700 font-medium">BUY</span>
+                        <span>= Price &gt; 10m SMA</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded bg-red-100 text-red-700 font-medium">SELL</span>
+                        <span>= Price &lt; 10m SMA</span>
+                      </div>
+                    </div>
+
+                    {/* Scrollable table container */}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b border-gray-200">
+                            {/* Asset Name - sticky left column */}
+                            <th className="sticky left-0 z-10 text-left py-1 px-1 bg-gray-50 min-w-[160px] border-r border-gray-200">
+                              Asset
+                            </th>
+                            {/* Month columns - oldest to newest (left to right) */}
+                            {months.map((month, idx) => (
+                              <th key={idx} className="text-right py-1 px-1 bg-gray-50 whitespace-nowrap">
+                                {month}
+                              </th>
+                            ))}
+                            {/* 10m SMA column */}
+                            <th className="text-right py-1 px-1 bg-gray-100 whitespace-nowrap border-l border-gray-200">
+                              10mSMA
+                            </th>
+                            {/* Signal column */}
+                            <th className="text-center py-1 px-1 bg-gray-100">
+                              Signal
+                            </th>
+                            {/* Ticker column */}
+                            <th className="text-left py-1 px-1 bg-gray-100 border-l border-gray-200">
+                              Ticker
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {assets.map((asset, rowIdx) => {
+                            // Calculate min and max for this row's heatmap (only valid prices)
+                            const validPrices = asset.prices.filter((p): p is number => p !== null);
+                            const minPrice = validPrices.length > 0 ? Math.min(...validPrices) : 0;
+                            const maxPrice = validPrices.length > 0 ? Math.max(...validPrices) : 0;
+
+                            return (
+                              <tr key={asset.ticker} className={`border-b border-gray-50 ${rowIdx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                                {/* Asset Name - sticky left column */}
+                                <td className="sticky left-0 z-10 text-left py-0.5 px-1 bg-white border-r border-gray-200 font-medium text-gray-700">
+                                  {asset.name}
+                                </td>
+                                {/* Price cells with heatmap coloring */}
+                                {asset.prices.map((price, colIdx) => (
+                                  <td
+                                    key={colIdx}
+                                    className="text-right py-0.5 px-1 font-mono"
+                                    style={{
+                                      backgroundColor: price !== null ? getHeatmapColor(price, minPrice, maxPrice) : undefined,
+                                      color: price !== null ? '#374151' : '#9ca3af'
+                                    }}
+                                  >
+                                    {price !== null ? formatPrice(price) : '-'}
+                                  </td>
+                                ))}
+                                {/* 10m SMA column */}
+                                <td className="text-right py-0.5 px-1 bg-gray-50 font-mono border-l border-gray-200">
+                                  {asset.sma10 !== null ? formatPrice(asset.sma10) : '-'}
+                                </td>
+                                {/* Signal column */}
+                                <td className={`text-center py-0.5 px-1 font-medium ${
+                                  asset.signal === 'BUY' ? 'bg-green-100 text-green-700' :
+                                  asset.signal === 'SELL' ? 'bg-red-100 text-red-700' :
+                                  'text-gray-400'
+                                }`}>
+                                  {asset.signal ?? '-'}
+                                </td>
+                                {/* Ticker column */}
+                                <td className="text-left py-0.5 px-1 bg-gray-50 text-gray-500 border-l border-gray-200">
+                                  {asset.ticker}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Show message if no assets */}
+                    {assets.length === 0 && (
+                      <div className="text-center py-4 text-gray-500">
+                        No assets available.
                       </div>
                     )}
                   </div>
