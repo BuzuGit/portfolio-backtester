@@ -17,7 +17,7 @@
 */
 
 import React, { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup } from '@/lib/fetchData';
 
@@ -706,6 +706,64 @@ const PortfolioBacktester = () => {
     });
 
     return result;
+  };
+
+  /**
+   * Builds chart data for the Annual Returns bar chart.
+   *
+   * Creates an array where each element represents one year, with annual returns
+   * for each portfolio. The structure is designed for Recharts grouped bar chart:
+   *
+   * Example output:
+   * [
+   *   { year: "2022", "Portfolio 1": 10.5, "Portfolio 2": -5.2 },
+   *   { year: "2023", "Portfolio 1": 15.3, "Portfolio 2": 8.7 },
+   *   ...
+   * ]
+   *
+   * @param results - Array of backtest results containing portfolio returns
+   * @returns Array of chart data points sorted by year (oldest to newest)
+   */
+  const getAnnualReturnsChartData = (
+    results: BacktestResult[],
+    startDate: string  // Used to filter out start year when start month is December
+  ): Array<{ year: string; [portfolioName: string]: string | number }> => {
+    if (!results || results.length === 0) return [];
+
+    // Collect all years from all portfolios and their annual returns
+    const yearData: { [year: string]: { [portfolioName: string]: number } } = {};
+
+    results.forEach(result => {
+      // Calculate monthly returns to get the FY (full year) returns
+      const monthlyReturns = calculateMonthlyReturns(result.returns);
+
+      // Extract each year's full-year return
+      Object.keys(monthlyReturns).forEach(year => {
+        if (!yearData[year]) {
+          yearData[year] = {};
+        }
+        yearData[year][result.portfolio.name] = monthlyReturns[year].fy;
+      });
+    });
+
+    // Determine if we should skip the start year (when start month is December)
+    // When starting in December, that year only has one data point and shows 0% return
+    const startDateObj = new Date(startDate);
+    const startMonth = startDateObj.getMonth(); // 0-11, December = 11
+    const startYear = startDateObj.getFullYear().toString();
+    const skipStartYear = startMonth === 11; // December
+
+    // Convert to array format for Recharts, sorted by year (oldest to newest)
+    // Filter out start year if December (it would show 0% with only one data point)
+    const chartData = Object.keys(yearData)
+      .filter(year => !(skipStartYear && year === startYear))
+      .sort((a, b) => parseInt(a) - parseInt(b))
+      .map(year => ({
+        year,
+        ...yearData[year]
+      }));
+
+    return chartData;
   };
 
   // ----------------------------------------
@@ -1688,9 +1746,63 @@ const PortfolioBacktester = () => {
                 </table>
               </div>
 
+              {/* Annual Returns Bar Chart */}
+              {/* Shows grouped bars for each year, one bar per portfolio, colored to match line charts */}
+              <div className="bg-white p-4 rounded-lg shadow mt-4">
+                <h3 className="text-md font-semibold text-gray-700 mb-2">Annual Returns</h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart
+                    data={getAnnualReturnsChartData(backtestResults, selectedDateRange.start)}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="year" />
+                    <YAxis
+                      tickFormatter={(value) => `${value}%`}
+                      domain={['auto', 'auto']}
+                    />
+                    <Tooltip
+                      formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
+                      labelFormatter={(label) => `Year: ${label}`}
+                    />
+                    <Legend />
+                    {/* Create one Bar component for each portfolio */}
+                    {backtestResults.map((result) => (
+                      <Bar
+                        key={result.portfolio.id}
+                        dataKey={result.portfolio.name}
+                        fill={result.portfolio.color}
+                      >
+                        {/* Labels for positive returns - positioned above bar */}
+                        <LabelList
+                          dataKey={result.portfolio.name}
+                          position="top"
+                          formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                          style={{ fontSize: '11px', fill: '#666' }}
+                        />
+                        {/* Labels for negative returns - positioned below bar */}
+                        <LabelList
+                          dataKey={result.portfolio.name}
+                          position="bottom"
+                          formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                          style={{ fontSize: '11px', fill: '#666' }}
+                        />
+                      </Bar>
+                    ))}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
               {/* Monthly Returns Tables */}
               {backtestResults.map((result, idx) => {
                 const monthlyReturns = calculateMonthlyReturns(result.returns);
+
+                // Determine if we should skip the start year (when start month is December)
+                // Same logic as the bar chart - December start years only have one data point
+                const startDateObj = new Date(selectedDateRange.start);
+                const startMonth = startDateObj.getMonth(); // 0-11, December = 11
+                const startYear = startDateObj.getFullYear().toString();
+                const skipStartYear = startMonth === 11; // December
 
                 return (
                   <div key={idx} className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
@@ -1717,7 +1829,9 @@ const PortfolioBacktester = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {Object.keys(monthlyReturns).sort().reverse().map(year => (
+                        {Object.keys(monthlyReturns)
+                          .filter(year => !(skipStartYear && year === startYear))
+                          .sort().reverse().map(year => (
                           <tr key={year} className="border-b border-gray-100">
                             <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0">{year}</td>
                             {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(month => {
