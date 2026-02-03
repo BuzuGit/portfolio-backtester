@@ -28,10 +28,12 @@ export interface AssetRow {
   [assetName: string]: number | string;  // e.g., { "SPY": 320.45, "BND": 85.23 }
 }
 
-// Lookup table entry - maps ticker symbol to friendly name
+// Lookup table entry - maps ticker symbol to friendly name plus currency info
 export interface AssetLookup {
   ticker: string;     // e.g., "SPY"
   name: string;       // e.g., "S&P 500 ETF"
+  currency: string;   // e.g., "USD", "SGD", "PLN"
+  fx: string;         // e.g., "USDPLN", "SGDPLN", "" for PLN assets
 }
 
 export interface ParsedData {
@@ -79,11 +81,16 @@ export async function fetchSheetData(): Promise<ParsedData> {
 }
 
 /**
- * Parses the lookup table CSV (ticker -> asset name).
- * Expects two columns: Ticker, Asset Name
+ * Parses the lookup table CSV (ticker -> asset name, currency, FX ticker).
+ * Expects four columns: Ticker, Asset Name, Currency, FX
+ *
+ * Column 1: Ticker (e.g., "SPY")
+ * Column 2: Asset Name (e.g., "S&P 500 ETF")
+ * Column 3: Currency (e.g., "USD", "SGD", "PLN")
+ * Column 4: FX (e.g., "USDPLN", "SGDPLN", or empty for PLN assets)
  *
  * @param csvText - The raw CSV file content
- * @returns Array of ticker-to-name mappings
+ * @returns Array of ticker-to-name-currency-fx mappings
  */
 function parseLookupTable(csvText: string): AssetLookup[] {
   const lines = csvText.trim().split('\n');
@@ -108,9 +115,13 @@ function parseLookupTable(csvText: string): AssetLookup[] {
 
     const ticker = values[0].trim();
     const name = values[1].trim();
+    // Currency defaults to "PLN" if not specified (column 3)
+    const currency = values.length > 2 ? values[2].trim() : 'PLN';
+    // FX ticker defaults to empty string if not specified (column 4)
+    const fx = values.length > 3 ? values[3].trim() : '';
 
     if (ticker && name) {
-      lookup.push({ ticker, name });
+      lookup.push({ ticker, name, currency, fx });
     }
   }
 
