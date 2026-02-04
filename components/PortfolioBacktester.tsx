@@ -16,7 +16,7 @@
   - User interactions
 */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup } from '@/lib/fetchData';
@@ -248,6 +248,14 @@ const PortfolioBacktester = () => {
   // Commission applied on each signal change (buy or sell)
   const [trendCommission, setTrendCommission] = useState(0.002);          // 0.2% default
 
+  // Asset filtering state (shared across Annual Returns, Best To Worst, Monthly Prices tabs)
+  // These filters let users narrow down which assets are displayed in the tables
+  const [selectedAssetTickers, setSelectedAssetTickers] = useState<string[]>([]);
+  const [selectedAssetClasses, setSelectedAssetClasses] = useState<string[]>([]);
+  const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
+  // Tracks which filter dropdown is currently open (null = all closed)
+  const [openFilterDropdown, setOpenFilterDropdown] = useState<'assets' | 'assetClass' | 'currency' | null>(null);
+
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
   // ----------------------------------------
@@ -278,6 +286,12 @@ const PortfolioBacktester = () => {
       setAvailableAssets(assets);
       setAssetLookup(lookup);
       setIsConnected(true);
+
+      // Initialize filters to "all selected" when data loads
+      // This ensures all assets are visible by default
+      setSelectedAssetTickers(lookup.map(a => a.ticker));
+      setSelectedAssetClasses(Array.from(new Set(lookup.map(a => a.assetClass).filter(Boolean))));
+      setSelectedCurrencies(Array.from(new Set(lookup.map(a => a.currency).filter(Boolean))));
 
       // Set the date range based on the data
       if (data.length > 0) {
@@ -350,6 +364,62 @@ const PortfolioBacktester = () => {
   const getAssetDisplayName = (ticker: string): string => {
     const lookup = assetLookup.find(l => l.ticker === ticker);
     return lookup ? `${ticker} - ${lookup.name}` : ticker;
+  };
+
+  // ----------------------------------------
+  // ASSET FILTERING FUNCTIONS
+  // ----------------------------------------
+  // These functions support the multi-select filters in Annual Returns, Best To Worst, and Monthly Prices tabs
+
+  /**
+   * Gets unique asset classes from the lookup table (sorted alphabetically).
+   * Used to populate the Asset Class filter dropdown.
+   */
+  const getUniqueAssetClasses = (): string[] => {
+    return Array.from(new Set(assetLookup.map(a => a.assetClass).filter(Boolean))).sort();
+  };
+
+  /**
+   * Gets unique currencies from the lookup table (sorted alphabetically).
+   * Used to populate the Currency filter dropdown.
+   */
+  const getUniqueCurrencies = (): string[] => {
+    return Array.from(new Set(assetLookup.map(a => a.currency).filter(Boolean))).sort();
+  };
+
+  /**
+   * Filters assetLookup based on selected assets, asset classes, and currencies.
+   * Returns only assets that match ALL selected criteria (AND logic).
+   * Empty asset class or currency fields are treated as matching any selection.
+   */
+  const getFilteredAssetLookup = (): typeof assetLookup => {
+    return assetLookup.filter(asset =>
+      selectedAssetTickers.includes(asset.ticker) &&
+      (asset.assetClass === '' || selectedAssetClasses.includes(asset.assetClass)) &&
+      (asset.currency === '' || selectedCurrencies.includes(asset.currency))
+    );
+  };
+
+  /**
+   * Selects or deselects all assets at once.
+   * Called when user clicks "Select All" / "Deselect All" button.
+   */
+  const toggleAllAssets = (selectAll: boolean) => {
+    setSelectedAssetTickers(selectAll ? assetLookup.map(a => a.ticker) : []);
+  };
+
+  /**
+   * Selects or deselects all asset classes at once.
+   */
+  const toggleAllAssetClasses = (selectAll: boolean) => {
+    setSelectedAssetClasses(selectAll ? getUniqueAssetClasses() : []);
+  };
+
+  /**
+   * Selects or deselects all currencies at once.
+   */
+  const toggleAllCurrencies = (selectAll: boolean) => {
+    setSelectedCurrencies(selectAll ? getUniqueCurrencies() : []);
   };
 
   // ----------------------------------------
@@ -1369,8 +1439,9 @@ const PortfolioBacktester = () => {
       return null;
     };
 
-    // Build asset data
-    const assets = assetLookup.map(asset => {
+    // Build asset data using filtered assets (respects user's filter selections)
+    const filteredLookup = getFilteredAssetLookup();
+    const assets = filteredLookup.map(asset => {
       const prices = monthDates.map(d =>
         getLastPriceOfMonth(asset.ticker, d.getFullYear(), d.getMonth())
       );
@@ -1999,6 +2070,193 @@ const PortfolioBacktester = () => {
   };
 
   // ----------------------------------------
+  // ASSET FILTER CONTROLS COMPONENT
+  // ----------------------------------------
+  // This is a reusable component that renders three compact collapsible filter dropdowns
+  // (Assets, Asset Class, Currency) used in Annual Returns, Best To Worst, and Monthly Prices tabs
+
+  const AssetFilterControls = () => {
+    // Ref for click-outside detection
+    const filterRef = useRef<HTMLDivElement>(null);
+
+    // Close dropdown when clicking outside
+    useEffect(() => {
+      const handleClickOutside = (event: MouseEvent) => {
+        if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
+          setOpenFilterDropdown(null);
+        }
+      };
+
+      // Only add listener when a dropdown is open
+      if (openFilterDropdown) {
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+      }
+    }, [openFilterDropdown]);
+
+    // Get the unique values for each dropdown
+    const assetClasses = getUniqueAssetClasses();
+    const currencies = getUniqueCurrencies();
+
+    // Check if all items are selected (to show "Deselect All" vs "Select All")
+    const allAssetsSelected = selectedAssetTickers.length === assetLookup.length;
+    const allClassesSelected = selectedAssetClasses.length === assetClasses.length;
+    const allCurrenciesSelected = selectedCurrencies.length === currencies.length;
+
+    // Helper to get display text for the dropdown button
+    const getSelectionText = (selected: number, total: number, label: string) => {
+      if (selected === total) return `All ${label}`;
+      if (selected === 0) return `No ${label}`;
+      return `${selected} of ${total}`;
+    };
+
+    return (
+      <div ref={filterRef} className="flex flex-wrap gap-2 mb-4">
+        {/* Assets Dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assets' ? null : 'assets')}
+            className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+              openFilterDropdown === 'assets' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+            }`}
+          >
+            <span className="font-medium">Assets:</span>
+            <span className="text-gray-600">{getSelectionText(selectedAssetTickers.length, assetLookup.length, 'assets')}</span>
+            <svg className={`w-4 h-4 transition-transform ${openFilterDropdown === 'assets' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {openFilterDropdown === 'assets' && (
+            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[280px]">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+                <span className="text-sm font-medium text-gray-700">Select Assets</span>
+                <button
+                  onClick={() => toggleAllAssets(!allAssetsSelected)}
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  {allAssetsSelected ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+              <div className="max-h-60 overflow-y-auto p-2">
+                {assetLookup.map(asset => (
+                  <label key={asset.ticker} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
+                    <input
+                      type="checkbox"
+                      checked={selectedAssetTickers.includes(asset.ticker)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedAssetTickers([...selectedAssetTickers, asset.ticker]);
+                        } else {
+                          setSelectedAssetTickers(selectedAssetTickers.filter(t => t !== asset.ticker));
+                        }
+                      }}
+                    />
+                    <span>{asset.ticker} - {asset.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Asset Class Dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetClass' ? null : 'assetClass')}
+            className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+              openFilterDropdown === 'assetClass' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+            }`}
+          >
+            <span className="font-medium">Class:</span>
+            <span className="text-gray-600">{getSelectionText(selectedAssetClasses.length, assetClasses.length, 'classes')}</span>
+            <svg className={`w-4 h-4 transition-transform ${openFilterDropdown === 'assetClass' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {openFilterDropdown === 'assetClass' && (
+            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[200px]">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+                <span className="text-sm font-medium text-gray-700">Select Classes</span>
+                <button
+                  onClick={() => toggleAllAssetClasses(!allClassesSelected)}
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  {allClassesSelected ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+              <div className="max-h-60 overflow-y-auto p-2">
+                {assetClasses.map(assetClass => (
+                  <label key={assetClass} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
+                    <input
+                      type="checkbox"
+                      checked={selectedAssetClasses.includes(assetClass)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedAssetClasses([...selectedAssetClasses, assetClass]);
+                        } else {
+                          setSelectedAssetClasses(selectedAssetClasses.filter(c => c !== assetClass));
+                        }
+                      }}
+                    />
+                    <span>{assetClass}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Currency Dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => setOpenFilterDropdown(openFilterDropdown === 'currency' ? null : 'currency')}
+            className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+              openFilterDropdown === 'currency' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+            }`}
+          >
+            <span className="font-medium">Currency:</span>
+            <span className="text-gray-600">{getSelectionText(selectedCurrencies.length, currencies.length, 'currencies')}</span>
+            <svg className={`w-4 h-4 transition-transform ${openFilterDropdown === 'currency' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {openFilterDropdown === 'currency' && (
+            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px]">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+                <span className="text-sm font-medium text-gray-700">Select Currencies</span>
+                <button
+                  onClick={() => toggleAllCurrencies(!allCurrenciesSelected)}
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  {allCurrenciesSelected ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+              <div className="max-h-60 overflow-y-auto p-2">
+                {currencies.map(currency => (
+                  <label key={currency} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
+                    <input
+                      type="checkbox"
+                      checked={selectedCurrencies.includes(currency)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedCurrencies([...selectedCurrencies, currency]);
+                        } else {
+                          setSelectedCurrencies(selectedCurrencies.filter(c => c !== currency));
+                        }
+                      }}
+                    />
+                    <span>{currency}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ----------------------------------------
   // RENDER THE UI
   // ----------------------------------------
 
@@ -2495,6 +2753,9 @@ const PortfolioBacktester = () => {
             <div className="mt-2">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Assets Annual Returns</h2>
 
+              {/* Filter controls for Assets, Asset Class, and Currency */}
+              <AssetFilterControls />
+
               {(() => {
                 // Calculate annual returns for all assets
                 const annualReturns = calculateAssetsAnnualReturns();
@@ -2549,8 +2810,9 @@ const PortfolioBacktester = () => {
                   return 0;
                 };
 
-                // Sort assets based on selected column (highest to lowest)
-                const sortedAssetLookup = [...assetLookup].sort((a, b) => {
+                // Filter assets based on user selections, then sort by selected column
+                const filteredAssets = getFilteredAssetLookup();
+                const sortedAssetLookup = [...filteredAssets].sort((a, b) => {
                   if (annualReturnsSortColumn === null) return 0;
                   const aVal = getSortValue(a.ticker, annualReturnsSortColumn);
                   const bVal = getSortValue(b.ticker, annualReturnsSortColumn);
@@ -2757,6 +3019,13 @@ const PortfolioBacktester = () => {
                       </tbody>
                     </table>
 
+                    {/* Show message if no assets match filters */}
+                    {sortedAssetLookup.length === 0 && (
+                      <div className="text-center py-4 text-gray-500">
+                        No assets match the current filters. Try adjusting your selection.
+                      </div>
+                    )}
+
                     {/* Legend/explanation */}
                     <div className="mt-4 text-xs text-gray-500">
                       <p>Hover over any cell to see calculation details (start price, end price, dates).</p>
@@ -2778,6 +3047,9 @@ const PortfolioBacktester = () => {
             <div className="mt-2">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Best To Worst</h2>
 
+              {/* Filter controls for Assets, Asset Class, and Currency */}
+              <AssetFilterControls />
+
               {(() => {
                 // Calculate annual returns for all assets
                 const annualReturns = calculateAssetsAnnualReturns();
@@ -2795,11 +3067,13 @@ const PortfolioBacktester = () => {
                 // Default to most recent year if not yet set
                 const currentYear = selectedRankingYear ?? years[years.length - 1];
 
-                // Get sorted assets based on mode (year or period)
+                // Get sorted assets based on mode (year or period), then filter by user selections
                 const isYearMode = bestToWorstMode === 'year';
-                const sortedAssets = isYearMode
+                const filteredTickers = new Set(getFilteredAssetLookup().map(a => a.ticker));
+                const sortedAssets = (isYearMode
                   ? getSortedAssetsByReturn(currentYear, annualReturns)
-                  : getSortedAssetsByPeriodReturn(bestToWorstMode as number);
+                  : getSortedAssetsByPeriodReturn(bestToWorstMode as number)
+                ).filter(a => filteredTickers.has(a.ticker));
 
                 // Column header text
                 const returnColumnHeader = isYearMode
@@ -2961,10 +3235,10 @@ const PortfolioBacktester = () => {
                       );
                     })()}
 
-                    {/* Handle case when no assets have data for this year */}
+                    {/* Handle case when no assets have data for this year or filters exclude all */}
                     {sortedAssets.length === 0 && (
                       <div className="text-center py-4 text-gray-500">
-                        No asset data available for {currentYear}.
+                        No assets match the current filters. Try adjusting your selection.
                       </div>
                     )}
                   </div>
@@ -2977,6 +3251,9 @@ const PortfolioBacktester = () => {
           {isConnected && assetData && activeView === 'monthlyPrices' && (
             <div className="mt-2">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Monthly Prices</h2>
+
+              {/* Filter controls for Assets, Asset Class, and Currency */}
+              <AssetFilterControls />
 
               {(() => {
                 const { months, assets } = getMonthlyPricesData();
@@ -3092,10 +3369,10 @@ const PortfolioBacktester = () => {
                       </table>
                     </div>
 
-                    {/* Show message if no assets */}
+                    {/* Show message if no assets match filters */}
                     {assets.length === 0 && (
                       <div className="text-center py-4 text-gray-500">
-                        No assets available.
+                        No assets match the current filters. Try adjusting your selection.
                       </div>
                     )}
                   </div>
