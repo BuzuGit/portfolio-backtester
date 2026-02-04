@@ -17,7 +17,7 @@
 */
 
 import React, { useState, useEffect } from 'react';
-import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup } from '@/lib/fetchData';
 
@@ -100,6 +100,54 @@ interface AssetsAnnualReturns {
   };
 }
 
+// Trend Following data point for charting
+// Used to track Buy & Hold vs Trend Following performance over time
+interface TrendFollowingPoint {
+  date: string;              // Date of the data point
+  price: number;             // Raw asset price
+  buyHoldValue: number;      // Growth of $1 for Buy & Hold strategy
+  trendFollowingValue: number;  // Growth of $1 for Trend Following strategy
+  sma10: number | null;      // 10-month Simple Moving Average
+  signal: 'BUY' | 'SELL' | null;  // Current signal (BUY = invested, SELL = cash)
+}
+
+// Drawdown data for both strategies
+interface TrendDrawdownPoint {
+  date: string;
+  buyHoldDrawdown: number;        // Buy & Hold drawdown percentage
+  trendFollowingDrawdown: number; // Trend Following drawdown percentage
+}
+
+// Signal change event (when we switch from BUY to SELL or vice versa)
+interface SignalChange {
+  date: string;
+  newSignal: 'BUY' | 'SELL';
+  price: number;         // Price at signal change
+  value: number;         // Trend Following portfolio value at this point
+}
+
+// Statistics for Buy & Hold vs Trend Following comparison
+interface TrendStats {
+  finalAmount: number;       // Final value of $1 invested
+  cagr: number;              // Compound Annual Growth Rate %
+  totalReturn: number;       // Total return %
+  stdDev: number;            // Annualized standard deviation %
+  maxDrawdown: number;       // Maximum drawdown % (negative)
+  currentDrawdown: number;   // Current drawdown % (negative or zero)
+  sharpeRatio: number;       // (CAGR - risk-free rate) / StdDev
+}
+
+// Monthly returns for Trend Following analysis
+// Tracks both Buy & Hold and Trend Following monthly/yearly returns
+interface TrendMonthlyReturns {
+  [year: string]: {
+    buyHold: (number | null)[];         // 12 months of Buy & Hold returns
+    trendFollowing: (number | null)[];  // 12 months of Trend Following returns
+    buyHoldFY: number;                   // Full year Buy & Hold return
+    trendFollowingFY: number;            // Full year Trend Following return
+  };
+}
+
 // ============================================
 // MAIN COMPONENT
 // ============================================
@@ -108,6 +156,38 @@ interface AssetsAnnualReturns {
 // Empty string = no conversion (prices used as-is)
 // e.g., "USDPLN" = multiply asset prices by USD/PLN exchange rate
 const FX_OPTIONS = ['', 'USDPLN', 'SGDPLN', 'CHFPLN', 'EURPLN'];
+
+// Risk-free rate options for Trend Following calculations (0% to 5%, 0.5% increments)
+// Used to calculate Sharpe Ratio and cash returns when out of market
+const RISK_FREE_RATE_OPTIONS = [
+  { value: 0.00, label: '0.0%' },
+  { value: 0.005, label: '0.5%' },
+  { value: 0.01, label: '1.0%' },
+  { value: 0.015, label: '1.5%' },
+  { value: 0.02, label: '2.0%' },
+  { value: 0.025, label: '2.5%' },
+  { value: 0.03, label: '3.0%' },
+  { value: 0.035, label: '3.5%' },
+  { value: 0.04, label: '4.0%' },
+  { value: 0.045, label: '4.5%' },
+  { value: 0.05, label: '5.0%' },
+];
+
+// Commission options for Trend Following (0% to 0.5%, 0.05% increments)
+// Applied on each signal change (buy or sell)
+const COMMISSION_OPTIONS = [
+  { value: 0.00, label: '0.00%' },
+  { value: 0.0005, label: '0.05%' },
+  { value: 0.001, label: '0.10%' },
+  { value: 0.0015, label: '0.15%' },
+  { value: 0.002, label: '0.20%' },
+  { value: 0.0025, label: '0.25%' },
+  { value: 0.003, label: '0.30%' },
+  { value: 0.0035, label: '0.35%' },
+  { value: 0.004, label: '0.40%' },
+  { value: 0.0045, label: '0.45%' },
+  { value: 0.005, label: '0.50%' },
+];
 
 const PortfolioBacktester = () => {
   // ----------------------------------------
@@ -144,7 +224,9 @@ const PortfolioBacktester = () => {
   // 'backtest' = show the portfolio configuration and backtest results
   // 'annualReturns' = show a table of yearly returns for all assets in the lookup table
   // 'bestToWorst' = show assets ranked by return for a selected year
-  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices'>('backtest');
+  // 'monthlyPrices' = show monthly price heatmap with SMA signals
+  // 'trendFollowing' = compare Buy & Hold vs 10-month SMA trend following strategy
+  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'trendFollowing'>('backtest');
 
   // The year selected for the "Best To Worst" ranking view
   // Defaults to null, and will be set to the most recent year when data loads
@@ -157,6 +239,14 @@ const PortfolioBacktester = () => {
   // Best To Worst view mode: 'year' for annual returns, or a number (1-5) for period returns
   // When null or 'year', the year dropdown is used. When 1-5, shows period returns.
   const [bestToWorstMode, setBestToWorstMode] = useState<'year' | 1 | 2 | 3 | 4 | 5>('year');
+
+  // Trend Following tab state
+  // Selected asset ticker for trend following analysis
+  const [selectedTrendAsset, setSelectedTrendAsset] = useState<string>('');
+  // Risk-free rate used when out of market (earning cash) and for Sharpe Ratio
+  const [trendRiskFreeRate, setTrendRiskFreeRate] = useState(0.02);       // 2% default
+  // Commission applied on each signal change (buy or sell)
+  const [trendCommission, setTrendCommission] = useState(0.002);          // 0.2% default
 
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
@@ -1357,6 +1447,533 @@ const PortfolioBacktester = () => {
     }
   };
 
+  // ----------------------------------------
+  // TREND FOLLOWING CALCULATION FUNCTIONS
+  // ----------------------------------------
+
+  /**
+   * Calculates Buy & Hold vs 10-month SMA Trend Following analysis for a single asset.
+   *
+   * STRATEGY RULES:
+   * 1. Calculate 10-month Simple Moving Average at each month-end
+   * 2. If price > SMA → BUY signal (stay invested in asset)
+   * 3. If price < SMA → SELL signal (exit to cash, earn monthly risk-free rate)
+   * 4. On each signal change, apply commission: value *= (1 - commission)
+   * 5. Analysis starts at month 11 (need 10 months for first SMA)
+   *
+   * @param ticker - Asset ticker to analyze
+   * @param riskFreeRate - Annual risk-free rate (e.g., 0.02 for 2%)
+   * @param commission - Commission per trade (e.g., 0.002 for 0.2%)
+   * @returns Chart data, drawdown data, statistics, and signal changes
+   */
+  const calculateTrendFollowingAnalysis = (
+    ticker: string,
+    riskFreeRate: number,
+    commission: number
+  ): {
+    chartData: TrendFollowingPoint[];
+    drawdownData: TrendDrawdownPoint[];
+    buyHoldStats: TrendStats;
+    trendFollowingStats: TrendStats;
+    signalChanges: SignalChange[];
+    successRate: { rate: number; successful: number; total: number } | null;
+  } | null => {
+    if (!assetData || assetData.length === 0) return null;
+
+    // Get monthly prices for this ticker within selected date range
+    // Filter data to selected date range first
+    const filteredData = assetData.filter(row =>
+      row.date >= selectedDateRange.start && row.date <= selectedDateRange.end
+    );
+
+    if (filteredData.length < 12) return null;  // Need at least 12 months
+
+    // Group by month and get last price of each month
+    const monthlyPrices: { date: string; price: number }[] = [];
+    let currentMonth = -1;
+    let currentYear = -1;
+    let lastValidRow: { date: string; price: number } | null = null;
+
+    for (const row of filteredData) {
+      const price = Number(row[ticker]);
+      if (!price || price <= 0) continue;
+
+      const rowDate = new Date(row.date);
+      const rowMonth = rowDate.getMonth();
+      const rowYear = rowDate.getFullYear();
+
+      // If we moved to a new month, save the last valid row from previous month
+      if ((rowMonth !== currentMonth || rowYear !== currentYear) && lastValidRow) {
+        monthlyPrices.push(lastValidRow);
+      }
+
+      currentMonth = rowMonth;
+      currentYear = rowYear;
+      lastValidRow = { date: row.date, price };
+    }
+
+    // Don't forget the last month
+    if (lastValidRow) {
+      monthlyPrices.push(lastValidRow);
+    }
+
+    if (monthlyPrices.length < 10) return null;  // Need at least 10 months for first SMA
+
+    // Calculate 10-month SMA and build chart data
+    const chartData: TrendFollowingPoint[] = [];
+    const signalChanges: SignalChange[] = [];
+
+    // Monthly risk-free rate for cash periods
+    const monthlyRiskFreeRate = Math.pow(1 + riskFreeRate, 1 / 12) - 1;
+
+    // Start with $1 for both strategies
+    let buyHoldValue = 1;
+    let trendFollowingValue = 1;
+    let previousSignal: 'BUY' | 'SELL' | null = null;
+    let isInvested = false;  // Track if TF strategy is currently invested
+
+    // Track first price and SMA for normalization (so SMA can be shown on Growth of $1 chart)
+    let firstPrice: number | null = null;
+
+    // Process each month starting from month 10 (index 9) when we have 10 months of history
+    // Index 9 means we have months 0-9 (10 months) to calculate the first SMA
+    for (let i = 9; i < monthlyPrices.length; i++) {
+      const currentData = monthlyPrices[i];
+      const previousData = monthlyPrices[i - 1];
+
+      // Calculate 10-month SMA (average of last 10 months INCLUDING current)
+      let smaSum = 0;
+      for (let j = i - 9; j <= i; j++) {
+        smaSum += monthlyPrices[j].price;
+      }
+      const sma10 = smaSum / 10;
+
+      // Store first price for normalization
+      if (firstPrice === null) {
+        firstPrice = currentData.price;
+      }
+
+      // Determine signal based on current price vs SMA
+      const signal: 'BUY' | 'SELL' = currentData.price > sma10 ? 'BUY' : 'SELL';
+
+      // Calculate monthly return
+      const monthlyReturn = (currentData.price - previousData.price) / previousData.price;
+
+      if (i === 9) {
+        // FIRST DATA POINT: Both strategies start at exactly $1
+        // We determine initial position but don't apply any returns or commission yet
+        // Commission is only applied on subsequent signal changes (actual trades)
+
+        isInvested = signal === 'BUY';
+        previousSignal = signal;
+        signalChanges.push({
+          date: currentData.date,
+          newSignal: signal,
+          price: currentData.price,
+          value: 1  // Both start at $1
+        });
+        // Both buyHoldValue and trendFollowingValue stay at exactly $1 for first point
+      } else {
+        // SUBSEQUENT DATA POINTS: Apply returns based on position held during this month
+
+        // Buy & Hold always earns asset return
+        buyHoldValue = buyHoldValue * (1 + monthlyReturn);
+
+        // Trend Following earns based on position
+        if (isInvested) {
+          // We were invested during this month, earn asset return
+          trendFollowingValue = trendFollowingValue * (1 + monthlyReturn);
+        } else {
+          // We were in cash during this month, earn risk-free rate
+          trendFollowingValue = trendFollowingValue * (1 + monthlyRiskFreeRate);
+        }
+
+        // Check for signal change (determines position for NEXT month)
+        if (signal !== previousSignal) {
+          // Apply commission for signal change
+          trendFollowingValue = trendFollowingValue * (1 - commission);
+
+          signalChanges.push({
+            date: currentData.date,
+            newSignal: signal,
+            price: currentData.price,
+            value: buyHoldValue  // Position on Buy & Hold line
+          });
+
+          // Update position for next month
+          isInvested = signal === 'BUY';
+          previousSignal = signal;
+        }
+      }
+
+      // Calculate normalized SMA (so it can be shown on same scale as Growth of $1)
+      const normalizedSma10 = sma10 / firstPrice;
+
+      chartData.push({
+        date: currentData.date,
+        price: currentData.price,
+        buyHoldValue,
+        trendFollowingValue,
+        sma10: normalizedSma10,  // Store normalized SMA for charting
+        signal
+      });
+    }
+
+    if (chartData.length === 0) return null;
+
+    // Calculate drawdowns
+    const drawdownData = calculateTrendDrawdowns(chartData);
+
+    // Calculate statistics for both strategies
+    const buyHoldStats = calculateTrendStats(
+      chartData.map(d => d.buyHoldValue),
+      chartData.map(d => d.date),
+      riskFreeRate
+    );
+
+    const trendFollowingStats = calculateTrendStats(
+      chartData.map(d => d.trendFollowingValue),
+      chartData.map(d => d.date),
+      riskFreeRate
+    );
+
+    // Calculate success rate
+    const successRate = calculateSuccessRate(signalChanges);
+
+    return {
+      chartData,
+      drawdownData,
+      buyHoldStats,
+      trendFollowingStats,
+      signalChanges,
+      successRate
+    };
+  };
+
+  /**
+   * Calculates monthly and yearly returns for both Buy & Hold and Trend Following strategies.
+   * Uses the chartData from calculateTrendFollowingAnalysis to compute returns.
+   *
+   * @param chartData - Array of TrendFollowingPoint data with monthly values
+   * @param startDate - The start date of the analysis (to filter out December start years)
+   * @returns TrendMonthlyReturns object organized by year
+   */
+  const calculateTrendMonthlyReturns = (
+    chartData: TrendFollowingPoint[],
+    startDate: string
+  ): TrendMonthlyReturns => {
+    if (!chartData || chartData.length === 0) return {};
+
+    // Group data points by year and month, tracking end-of-month values
+    const monthlyData: {
+      [year: number]: {
+        buyHold: ({ endValue: number } | null)[];
+        trendFollowing: ({ endValue: number } | null)[];
+        buyHoldYearStart: number | null;
+        buyHoldYearEnd: number | null;
+        trendFollowingYearStart: number | null;
+        trendFollowingYearEnd: number | null;
+      };
+    } = {};
+
+    chartData.forEach(point => {
+      const date = new Date(point.date);
+      const year = date.getFullYear();
+      const month = date.getMonth();
+
+      if (!monthlyData[year]) {
+        monthlyData[year] = {
+          buyHold: Array(12).fill(null),
+          trendFollowing: Array(12).fill(null),
+          buyHoldYearStart: null,
+          buyHoldYearEnd: null,
+          trendFollowingYearStart: null,
+          trendFollowingYearEnd: null
+        };
+      }
+
+      // Track end-of-month values (last value of each month)
+      monthlyData[year].buyHold[month] = { endValue: point.buyHoldValue };
+      monthlyData[year].trendFollowing[month] = { endValue: point.trendFollowingValue };
+
+      // Track year start and end values
+      if (monthlyData[year].buyHoldYearStart === null) {
+        monthlyData[year].buyHoldYearStart = point.buyHoldValue;
+        monthlyData[year].trendFollowingYearStart = point.trendFollowingValue;
+      }
+      monthlyData[year].buyHoldYearEnd = point.buyHoldValue;
+      monthlyData[year].trendFollowingYearEnd = point.trendFollowingValue;
+    });
+
+    // Calculate monthly returns
+    const years = Object.keys(monthlyData).sort();
+    const result: TrendMonthlyReturns = {};
+
+    // Check if we should skip start year (December start)
+    const startDateObj = new Date(startDate);
+    const startMonth = startDateObj.getMonth();
+    const startYear = startDateObj.getFullYear().toString();
+    const skipStartYear = startMonth === 11; // December
+
+    years.forEach((yearStr, yearIdx) => {
+      // Skip December start year
+      if (skipStartYear && yearStr === startYear) return;
+
+      const year = parseInt(yearStr);
+      const yearData = monthlyData[year];
+      const buyHoldMonthly: (number | null)[] = Array(12).fill(null);
+      const trendFollowingMonthly: (number | null)[] = Array(12).fill(null);
+
+      // Get previous year's end values for calculating first month's return
+      let prevBuyHoldEnd = yearIdx > 0 ? monthlyData[parseInt(years[yearIdx - 1])].buyHoldYearEnd : null;
+      let prevTrendFollowingEnd = yearIdx > 0 ? monthlyData[parseInt(years[yearIdx - 1])].trendFollowingYearEnd : null;
+
+      for (let month = 0; month < 12; month++) {
+        // Buy & Hold monthly return
+        if (yearData.buyHold[month]) {
+          const endValue = yearData.buyHold[month]!.endValue;
+          let startValue = prevBuyHoldEnd;
+
+          // Look for previous month's end value within same year
+          if (month > 0) {
+            for (let m = month - 1; m >= 0; m--) {
+              if (yearData.buyHold[m]) {
+                startValue = yearData.buyHold[m]!.endValue;
+                break;
+              }
+            }
+          }
+
+          if (startValue && startValue > 0) {
+            buyHoldMonthly[month] = ((endValue - startValue) / startValue) * 100;
+          }
+          prevBuyHoldEnd = endValue;
+        }
+
+        // Trend Following monthly return
+        if (yearData.trendFollowing[month]) {
+          const endValue = yearData.trendFollowing[month]!.endValue;
+          let startValue = prevTrendFollowingEnd;
+
+          // Look for previous month's end value within same year
+          if (month > 0) {
+            for (let m = month - 1; m >= 0; m--) {
+              if (yearData.trendFollowing[m]) {
+                startValue = yearData.trendFollowing[m]!.endValue;
+                break;
+              }
+            }
+          }
+
+          if (startValue && startValue > 0) {
+            trendFollowingMonthly[month] = ((endValue - startValue) / startValue) * 100;
+          }
+          prevTrendFollowingEnd = endValue;
+        }
+      }
+
+      // Calculate full-year returns
+      const fyBuyHoldStart = yearIdx > 0
+        ? monthlyData[parseInt(years[yearIdx - 1])].buyHoldYearEnd
+        : yearData.buyHoldYearStart;
+      const fyTrendFollowingStart = yearIdx > 0
+        ? monthlyData[parseInt(years[yearIdx - 1])].trendFollowingYearEnd
+        : yearData.trendFollowingYearStart;
+
+      let buyHoldFY = 0;
+      let trendFollowingFY = 0;
+
+      if (fyBuyHoldStart && fyBuyHoldStart > 0 && yearData.buyHoldYearEnd) {
+        buyHoldFY = ((yearData.buyHoldYearEnd - fyBuyHoldStart) / fyBuyHoldStart) * 100;
+      }
+      if (fyTrendFollowingStart && fyTrendFollowingStart > 0 && yearData.trendFollowingYearEnd) {
+        trendFollowingFY = ((yearData.trendFollowingYearEnd - fyTrendFollowingStart) / fyTrendFollowingStart) * 100;
+      }
+
+      result[yearStr] = {
+        buyHold: buyHoldMonthly,
+        trendFollowing: trendFollowingMonthly,
+        buyHoldFY,
+        trendFollowingFY
+      };
+    });
+
+    return result;
+  };
+
+  /**
+   * Builds chart data for the Trend Following Annual Returns bar chart.
+   * Creates an array for Recharts grouped bar chart with Buy & Hold and Trend Following.
+   *
+   * @param monthlyReturns - TrendMonthlyReturns object with yearly FY returns
+   * @returns Array of { year, "Buy & Hold": number, "Trend Following": number }
+   */
+  const getTrendAnnualReturnsChartData = (
+    monthlyReturns: TrendMonthlyReturns
+  ): Array<{ year: string; 'Buy & Hold': number; 'Trend Following': number }> => {
+    return Object.keys(monthlyReturns)
+      .sort((a, b) => parseInt(a) - parseInt(b))
+      .map(year => ({
+        year,
+        'Buy & Hold': monthlyReturns[year].buyHoldFY,
+        'Trend Following': monthlyReturns[year].trendFollowingFY
+      }));
+  };
+
+  /**
+   * Calculates drawdowns for both Buy & Hold and Trend Following strategies.
+   * Drawdown = how far current value is below its peak (running maximum).
+   *
+   * @param chartData - Array of TrendFollowingPoint data
+   * @returns Array of drawdown percentages for both strategies
+   */
+  const calculateTrendDrawdowns = (chartData: TrendFollowingPoint[]): TrendDrawdownPoint[] => {
+    let buyHoldPeak = 0;
+    let trendFollowingPeak = 0;
+
+    return chartData.map(point => {
+      // Update peaks
+      if (point.buyHoldValue > buyHoldPeak) {
+        buyHoldPeak = point.buyHoldValue;
+      }
+      if (point.trendFollowingValue > trendFollowingPeak) {
+        trendFollowingPeak = point.trendFollowingValue;
+      }
+
+      // Calculate drawdowns as negative percentages
+      const buyHoldDrawdown = ((point.buyHoldValue - buyHoldPeak) / buyHoldPeak) * 100;
+      const trendFollowingDrawdown = ((point.trendFollowingValue - trendFollowingPeak) / trendFollowingPeak) * 100;
+
+      return {
+        date: point.date,
+        buyHoldDrawdown,
+        trendFollowingDrawdown
+      };
+    });
+  };
+
+  /**
+   * Calculates statistics for a strategy's equity curve.
+   *
+   * @param equityCurve - Array of portfolio values over time
+   * @param dates - Array of dates corresponding to equity values
+   * @param riskFreeRate - Annual risk-free rate for Sharpe Ratio
+   * @returns TrendStats object with all calculated metrics
+   */
+  const calculateTrendStats = (
+    equityCurve: number[],
+    dates: string[],
+    riskFreeRate: number
+  ): TrendStats => {
+    if (equityCurve.length < 2) {
+      return {
+        finalAmount: 1,
+        cagr: 0,
+        totalReturn: 0,
+        stdDev: 0,
+        maxDrawdown: 0,
+        currentDrawdown: 0,
+        sharpeRatio: 0
+      };
+    }
+
+    const startValue = equityCurve[0];
+    const endValue = equityCurve[equityCurve.length - 1];
+
+    // Total return
+    const totalReturn = ((endValue - startValue) / startValue) * 100;
+
+    // Calculate years
+    const startDate = new Date(dates[0]);
+    const endDate = new Date(dates[dates.length - 1]);
+    const years = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+
+    // CAGR
+    const cagr = years > 0 ? (Math.pow(endValue / startValue, 1 / years) - 1) * 100 : 0;
+
+    // Calculate monthly returns for standard deviation
+    const monthlyReturns: number[] = [];
+    for (let i = 1; i < equityCurve.length; i++) {
+      monthlyReturns.push((equityCurve[i] - equityCurve[i - 1]) / equityCurve[i - 1]);
+    }
+
+    // Standard deviation (annualized)
+    const mean = monthlyReturns.reduce((sum, r) => sum + r, 0) / monthlyReturns.length;
+    const variance = monthlyReturns.map(r => Math.pow(r - mean, 2)).reduce((sum, sq) => sum + sq, 0) / monthlyReturns.length;
+    const stdDev = Math.sqrt(variance) * Math.sqrt(12) * 100;  // Annualized
+
+    // Drawdowns
+    let peak = 0;
+    let maxDrawdown = 0;
+    for (const value of equityCurve) {
+      if (value > peak) {
+        peak = value;
+      }
+      const drawdown = ((value - peak) / peak) * 100;
+      if (drawdown < maxDrawdown) {
+        maxDrawdown = drawdown;
+      }
+    }
+
+    // Current drawdown
+    const currentDrawdown = ((endValue - peak) / peak) * 100;
+
+    // Sharpe Ratio: (CAGR - risk-free rate) / StdDev
+    const sharpeRatio = stdDev > 0 ? (cagr - riskFreeRate * 100) / stdDev : 0;
+
+    return {
+      finalAmount: endValue,
+      cagr,
+      totalReturn,
+      stdDev,
+      maxDrawdown,
+      currentDrawdown,
+      sharpeRatio
+    };
+  };
+
+  /**
+   * Calculates success rate for trend following signals.
+   * Success = when we sell and then buy back cheaper (price dropped while we were out).
+   *
+   * A round-trip consists of:
+   * - SELL signal at price X
+   * - BUY signal at price Y
+   * - Success if Y < X (we bought back cheaper than we sold)
+   *
+   * @param signalChanges - Array of signal change events
+   * @returns Success rate percentage and counts
+   */
+  const calculateSuccessRate = (signalChanges: SignalChange[]): { rate: number; successful: number; total: number } | null => {
+    if (signalChanges.length < 2) return null;
+
+    let successful = 0;
+    let total = 0;
+    let lastSellPrice: number | null = null;
+
+    for (const change of signalChanges) {
+      if (change.newSignal === 'SELL') {
+        lastSellPrice = change.price;
+      } else if (change.newSignal === 'BUY' && lastSellPrice !== null) {
+        // Completed round-trip
+        total++;
+        if (change.price < lastSellPrice) {
+          // Bought back cheaper - success!
+          successful++;
+        }
+        lastSellPrice = null;
+      }
+    }
+
+    if (total === 0) return null;
+
+    return {
+      rate: (successful / total) * 100,
+      successful,
+      total
+    };
+  };
+
   /**
    * Runs the backtest for all configured portfolios
    */
@@ -1461,6 +2078,16 @@ const PortfolioBacktester = () => {
                 }`}
               >
                 Monthly Prices
+              </button>
+              <button
+                onClick={() => setActiveView('trendFollowing')}
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                  activeView === 'trendFollowing'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                Trend Following
               </button>
             </div>
           )}
@@ -2469,6 +3096,609 @@ const PortfolioBacktester = () => {
                     {assets.length === 0 && (
                       <div className="text-center py-4 text-gray-500">
                         No assets available.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Trend Following Section - Compares Buy & Hold vs 10-month SMA strategy */}
+          {isConnected && assetData && activeView === 'trendFollowing' && (
+            <div className="mt-2">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Trend Following</h2>
+
+              {(() => {
+                // Get available assets from lookup table
+                const availableTickers = assetLookup.map(l => l.ticker);
+
+                // Auto-select first asset if none selected
+                if (!selectedTrendAsset && availableTickers.length > 0) {
+                  setSelectedTrendAsset(availableTickers[0]);
+                  return null;  // Re-render with selected asset
+                }
+
+                // Calculate trend following analysis
+                const analysis = selectedTrendAsset
+                  ? calculateTrendFollowingAnalysis(selectedTrendAsset, trendRiskFreeRate, trendCommission)
+                  : null;
+
+                // Get asset name for display
+                const assetInfo = assetLookup.find(l => l.ticker === selectedTrendAsset);
+                const assetName = assetInfo ? assetInfo.name : selectedTrendAsset;
+
+                // Get current signal (last data point)
+                const currentSignal = analysis?.chartData[analysis.chartData.length - 1]?.signal;
+
+                // Count signals
+                const buyCount = analysis?.signalChanges.filter(s => s.newSignal === 'BUY').length ?? 0;
+                const sellCount = analysis?.signalChanges.filter(s => s.newSignal === 'SELL').length ?? 0;
+
+                return (
+                  <div className="bg-white p-4 rounded-lg shadow">
+                    {/* Controls Row */}
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+                      {/* Asset Selector */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Asset</label>
+                        <select
+                          value={selectedTrendAsset}
+                          onChange={(e) => setSelectedTrendAsset(e.target.value)}
+                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                        >
+                          {assetLookup.map(asset => (
+                            <option key={asset.ticker} value={asset.ticker}>
+                              {asset.ticker} - {asset.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Start Date Selector */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                        <select
+                          value={selectedDateRange.start}
+                          onChange={(e) => setSelectedStartDate(e.target.value)}
+                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                        >
+                          {assetData.map(row => (
+                            <option key={row.date} value={row.date}>{row.date}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* End Date Selector */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+                        <select
+                          value={selectedDateRange.end}
+                          onChange={(e) => setSelectedEndDate(e.target.value)}
+                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                        >
+                          {assetData.slice().reverse().filter(row => row.date >= selectedDateRange.start).map(row => (
+                            <option key={row.date} value={row.date}>{row.date}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Risk-Free Rate Selector */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Risk-Free Rate</label>
+                        <select
+                          value={trendRiskFreeRate}
+                          onChange={(e) => setTrendRiskFreeRate(parseFloat(e.target.value))}
+                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                        >
+                          {RISK_FREE_RATE_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Commission Selector */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Commission</label>
+                        <select
+                          value={trendCommission}
+                          onChange={(e) => setTrendCommission(parseFloat(e.target.value))}
+                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                        >
+                          {COMMISSION_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {analysis ? (
+                      <>
+                        {/* Summary Card */}
+                        <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                          <div className="flex flex-wrap items-center justify-between gap-4">
+                            <div>
+                              <h3 className="text-lg font-semibold text-gray-800">{assetName}</h3>
+                              <p className="text-sm text-gray-600">
+                                Signals: {buyCount} buy, {sellCount} sell
+                                {analysis.successRate && (
+                                  <span className="ml-3">
+                                    Success rate: {analysis.successRate.rate.toFixed(0)}% ({analysis.successRate.successful} of {analysis.successRate.total})
+                                  </span>
+                                )}
+                              </p>
+                            </div>
+                            <div className={`px-4 py-2 rounded-lg font-semibold ${
+                              currentSignal === 'BUY'
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-red-100 text-red-800'
+                            }`}>
+                              {currentSignal === 'BUY' ? 'INVESTED' : 'OUT OF MARKET'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Legend */}
+                        <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-4">
+                          <div className="flex items-center gap-2">
+                            <div className="w-4 h-4 bg-blue-200 border border-blue-400 rounded"></div>
+                            <span>Buy & Hold</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-4 h-1 bg-green-600 rounded"></div>
+                            <span>Trend Following</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-4 h-0.5 bg-gray-400" style={{ borderTop: '2px dashed #9ca3af' }}></div>
+                            <span>10m SMA</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                            <span>Buy Signal</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                            <span>Sell Signal</span>
+                          </div>
+                        </div>
+
+                        {/* Growth of $1 Chart */}
+                        <div className="bg-white rounded-lg mb-4">
+                          <h4 className="text-md font-semibold text-gray-700 mb-2 text-center">Growth of $1</h4>
+                          <ResponsiveContainer width="100%" height={350}>
+                            <ComposedChart data={analysis.chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis
+                                dataKey="date"
+                                tick={{ fontSize: 10 }}
+                                tickFormatter={(date) => {
+                                  const d = new Date(date);
+                                  return `${d.toLocaleDateString('en-US', { month: 'short' })} ${d.getFullYear().toString().slice(-2)}`;
+                                }}
+                              />
+                              <YAxis
+                                tick={{ fontSize: 10 }}
+                                domain={['auto', 'auto']}
+                                tickFormatter={(value) => `$${value.toFixed(2)}`}
+                              />
+                              <Tooltip
+                                formatter={(value: number, name: string) => {
+                                  if (name === 'buyHoldValue') return [`$${value.toFixed(3)}`, 'Buy & Hold'];
+                                  if (name === 'trendFollowingValue') return [`$${value.toFixed(3)}`, 'Trend Following'];
+                                  if (name === 'sma10') return [`$${value.toFixed(2)}`, '10m SMA'];
+                                  return [value, name];
+                                }}
+                                labelFormatter={(label) => {
+                                  const d = new Date(label);
+                                  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+                                }}
+                              />
+                              {/* Buy & Hold Area */}
+                              <Area
+                                type="monotone"
+                                dataKey="buyHoldValue"
+                                fill="#93c5fd"
+                                stroke="#3b82f6"
+                                strokeWidth={1}
+                                fillOpacity={0.6}
+                                name="buyHoldValue"
+                              />
+                              {/* Trend Following Line */}
+                              <Line
+                                type="monotone"
+                                dataKey="trendFollowingValue"
+                                stroke="#16a34a"
+                                strokeWidth={2}
+                                dot={false}
+                                name="trendFollowingValue"
+                              />
+                              {/* 10-month SMA Line (normalized to Growth of $1 scale) */}
+                              <Line
+                                type="monotone"
+                                dataKey="sma10"
+                                stroke="#9ca3af"
+                                strokeWidth={1.5}
+                                strokeDasharray="5 5"
+                                dot={false}
+                                name="sma10"
+                              />
+                              {/* Signal dots on Buy & Hold line */}
+                              {analysis.signalChanges.map((signal, idx) => (
+                                <ReferenceDot
+                                  key={idx}
+                                  x={signal.date}
+                                  y={signal.value}
+                                  r={6}
+                                  fill={signal.newSignal === 'BUY' ? '#22c55e' : '#ef4444'}
+                                  stroke="white"
+                                  strokeWidth={2}
+                                />
+                              ))}
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* Drawdown Chart */}
+                        <div className="bg-white rounded-lg mb-4">
+                          <h4 className="text-md font-semibold text-gray-700 mb-2 text-center">Drawdown</h4>
+                          <ResponsiveContainer width="100%" height={200}>
+                            <ComposedChart data={analysis.drawdownData} margin={{ top: 10, right: 30, left: 20, bottom: 5 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis
+                                dataKey="date"
+                                tick={{ fontSize: 10 }}
+                                tickFormatter={(date) => {
+                                  const d = new Date(date);
+                                  return `${d.toLocaleDateString('en-US', { month: 'short' })} ${d.getFullYear().toString().slice(-2)}`;
+                                }}
+                              />
+                              <YAxis
+                                tick={{ fontSize: 10 }}
+                                tickFormatter={(value) => `${value.toFixed(0)}%`}
+                                domain={['auto', 0]}
+                              />
+                              <Tooltip
+                                formatter={(value: number, name: string) => {
+                                  if (name === 'buyHoldDrawdown') return [`${value.toFixed(2)}%`, 'Buy & Hold'];
+                                  if (name === 'trendFollowingDrawdown') return [`${value.toFixed(2)}%`, 'Trend Following'];
+                                  return [value, name];
+                                }}
+                                labelFormatter={(label) => {
+                                  const d = new Date(label);
+                                  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+                                }}
+                              />
+                              {/* Buy & Hold Drawdown */}
+                              <Area
+                                type="monotone"
+                                dataKey="buyHoldDrawdown"
+                                fill="#fecaca"
+                                stroke="#ef4444"
+                                strokeWidth={1}
+                                fillOpacity={0.4}
+                                name="buyHoldDrawdown"
+                              />
+                              {/* Trend Following Drawdown */}
+                              <Line
+                                type="monotone"
+                                dataKey="trendFollowingDrawdown"
+                                stroke="#16a34a"
+                                strokeWidth={2}
+                                dot={false}
+                                name="trendFollowingDrawdown"
+                              />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* Statistics Table */}
+                        <div className="bg-white rounded-lg mb-4 overflow-x-auto">
+                          <h4 className="text-md font-semibold text-gray-700 mb-2">Statistics</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="border-b-2 border-gray-200">
+                                <th className="text-left py-2 px-3 bg-gray-50">Metric</th>
+                                <th className="text-right py-2 px-3 bg-blue-50">Buy & Hold</th>
+                                <th className="text-right py-2 px-3 bg-green-50">Trend Following</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {/* Final Amount */}
+                              <tr className="border-b border-gray-100">
+                                <td className="py-2 px-3 font-medium text-gray-700">Final Amount</td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.buyHoldStats.finalAmount >= analysis.trendFollowingStats.finalAmount
+                                    ? 'font-semibold text-blue-700' : 'text-gray-600'
+                                }`}>
+                                  ${analysis.buyHoldStats.finalAmount.toFixed(2)}
+                                </td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.trendFollowingStats.finalAmount >= analysis.buyHoldStats.finalAmount
+                                    ? 'font-semibold text-green-700' : 'text-gray-600'
+                                }`}>
+                                  ${analysis.trendFollowingStats.finalAmount.toFixed(2)}
+                                </td>
+                              </tr>
+                              {/* CAGR */}
+                              <tr className="border-b border-gray-100">
+                                <td className="py-2 px-3 font-medium text-gray-700">CAGR</td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.buyHoldStats.cagr >= analysis.trendFollowingStats.cagr
+                                    ? 'font-semibold text-blue-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.buyHoldStats.cagr.toFixed(2)}%
+                                </td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.trendFollowingStats.cagr >= analysis.buyHoldStats.cagr
+                                    ? 'font-semibold text-green-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.trendFollowingStats.cagr.toFixed(2)}%
+                                </td>
+                              </tr>
+                              {/* Total Return */}
+                              <tr className="border-b border-gray-100">
+                                <td className="py-2 px-3 font-medium text-gray-700">Total Return</td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.buyHoldStats.totalReturn >= analysis.trendFollowingStats.totalReturn
+                                    ? 'font-semibold text-blue-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.buyHoldStats.totalReturn.toFixed(2)}%
+                                </td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.trendFollowingStats.totalReturn >= analysis.buyHoldStats.totalReturn
+                                    ? 'font-semibold text-green-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.trendFollowingStats.totalReturn.toFixed(2)}%
+                                </td>
+                              </tr>
+                              {/* Std Dev (lower is better) */}
+                              <tr className="border-b border-gray-100">
+                                <td className="py-2 px-3 font-medium text-gray-700">Std Dev (Ann.)</td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.buyHoldStats.stdDev <= analysis.trendFollowingStats.stdDev
+                                    ? 'font-semibold text-blue-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.buyHoldStats.stdDev.toFixed(2)}%
+                                </td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.trendFollowingStats.stdDev <= analysis.buyHoldStats.stdDev
+                                    ? 'font-semibold text-green-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.trendFollowingStats.stdDev.toFixed(2)}%
+                                </td>
+                              </tr>
+                              {/* Max Drawdown (higher/less negative is better) */}
+                              <tr className="border-b border-gray-100">
+                                <td className="py-2 px-3 font-medium text-gray-700">Max Drawdown</td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.buyHoldStats.maxDrawdown >= analysis.trendFollowingStats.maxDrawdown
+                                    ? 'font-semibold text-blue-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.buyHoldStats.maxDrawdown.toFixed(2)}%
+                                </td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.trendFollowingStats.maxDrawdown >= analysis.buyHoldStats.maxDrawdown
+                                    ? 'font-semibold text-green-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.trendFollowingStats.maxDrawdown.toFixed(2)}%
+                                </td>
+                              </tr>
+                              {/* Current Drawdown (higher/less negative is better) */}
+                              <tr className="border-b border-gray-100">
+                                <td className="py-2 px-3 font-medium text-gray-700">Current Drawdown</td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.buyHoldStats.currentDrawdown >= analysis.trendFollowingStats.currentDrawdown
+                                    ? 'font-semibold text-blue-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.buyHoldStats.currentDrawdown.toFixed(2)}%
+                                </td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.trendFollowingStats.currentDrawdown >= analysis.buyHoldStats.currentDrawdown
+                                    ? 'font-semibold text-green-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.trendFollowingStats.currentDrawdown.toFixed(2)}%
+                                </td>
+                              </tr>
+                              {/* Sharpe Ratio (higher is better) */}
+                              <tr className="border-b border-gray-100">
+                                <td className="py-2 px-3 font-medium text-gray-700">Sharpe Ratio</td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.buyHoldStats.sharpeRatio >= analysis.trendFollowingStats.sharpeRatio
+                                    ? 'font-semibold text-blue-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.buyHoldStats.sharpeRatio.toFixed(2)}
+                                </td>
+                                <td className={`text-right py-2 px-3 ${
+                                  analysis.trendFollowingStats.sharpeRatio >= analysis.buyHoldStats.sharpeRatio
+                                    ? 'font-semibold text-green-700' : 'text-gray-600'
+                                }`}>
+                                  {analysis.trendFollowingStats.sharpeRatio.toFixed(2)}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Annual Returns Bar Chart */}
+                        {(() => {
+                          const trendMonthlyReturns = calculateTrendMonthlyReturns(analysis.chartData, selectedDateRange.start);
+                          const chartData = getTrendAnnualReturnsChartData(trendMonthlyReturns);
+
+                          if (chartData.length === 0) return null;
+
+                          return (
+                            <>
+                              <div className="bg-white rounded-lg mb-4">
+                                <h4 className="text-md font-semibold text-gray-700 mb-2">Annual Returns</h4>
+                                <ResponsiveContainer width="100%" height={300}>
+                                  <BarChart
+                                    data={chartData}
+                                    margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                                  >
+                                    <CartesianGrid strokeDasharray="3 3" />
+                                    <XAxis dataKey="year" />
+                                    <YAxis
+                                      tickFormatter={(value) => `${value}%`}
+                                      domain={['auto', 'auto']}
+                                    />
+                                    <Tooltip
+                                      formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
+                                      labelFormatter={(label) => `Year: ${label}`}
+                                    />
+                                    <Legend />
+                                    {/* Buy & Hold bars - Blue */}
+                                    <Bar dataKey="Buy & Hold" fill="#3b82f6">
+                                      <LabelList
+                                        dataKey="Buy & Hold"
+                                        position="top"
+                                        formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                                        style={{ fontSize: '10px', fill: '#666' }}
+                                      />
+                                      <LabelList
+                                        dataKey="Buy & Hold"
+                                        position="bottom"
+                                        formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                                        style={{ fontSize: '10px', fill: '#666' }}
+                                      />
+                                    </Bar>
+                                    {/* Trend Following bars - Green */}
+                                    <Bar dataKey="Trend Following" fill="#16a34a">
+                                      <LabelList
+                                        dataKey="Trend Following"
+                                        position="top"
+                                        formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                                        style={{ fontSize: '10px', fill: '#666' }}
+                                      />
+                                      <LabelList
+                                        dataKey="Trend Following"
+                                        position="bottom"
+                                        formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                                        style={{ fontSize: '10px', fill: '#666' }}
+                                      />
+                                    </Bar>
+                                  </BarChart>
+                                </ResponsiveContainer>
+                              </div>
+
+                              {/* Monthly Returns Table - Buy & Hold */}
+                              <div className="bg-white rounded-lg mb-4 overflow-x-auto">
+                                <h4 className="text-md font-semibold text-blue-600 mb-2">Returns - Buy & Hold</h4>
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="border-b-2 border-gray-200">
+                                      <th className="text-left py-2 px-2 bg-blue-50 sticky left-0">Year</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Jan</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Feb</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Mar</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Apr</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">May</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Jun</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Jul</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Aug</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Sep</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Oct</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Nov</th>
+                                      <th className="text-right py-2 px-2 bg-blue-50">Dec</th>
+                                      <th className="text-right py-2 px-2 bg-blue-100 font-semibold">FY</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {Object.keys(trendMonthlyReturns).sort().reverse().map(year => (
+                                      <tr key={year} className="border-b border-gray-100">
+                                        <td className="py-2 px-2 font-medium bg-blue-50 sticky left-0">{year}</td>
+                                        {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(month => {
+                                          const ret = trendMonthlyReturns[year].buyHold[month];
+                                          if (ret === null) {
+                                            return <td key={month} className="text-right py-2 px-2 text-gray-300">-</td>;
+                                          }
+                                          const bgColor = ret >= 0 ? 'bg-green-50' : 'bg-red-50';
+                                          const textColor = ret >= 0 ? 'text-green-700' : 'text-red-700';
+                                          return (
+                                            <td key={month} className={`text-right py-2 px-2 ${bgColor} ${textColor}`}>
+                                              {ret.toFixed(2)}%
+                                            </td>
+                                          );
+                                        })}
+                                        <td className={`text-right py-2 px-2 font-semibold ${
+                                          trendMonthlyReturns[year].buyHoldFY >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                        }`}>
+                                          {trendMonthlyReturns[year].buyHoldFY.toFixed(2)}%
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+
+                              {/* Monthly Returns Table - Trend Following */}
+                              <div className="bg-white rounded-lg mb-4 overflow-x-auto">
+                                <h4 className="text-md font-semibold text-green-600 mb-2">Returns - Trend Following</h4>
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="border-b-2 border-gray-200">
+                                      <th className="text-left py-2 px-2 bg-green-50 sticky left-0">Year</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Jan</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Feb</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Mar</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Apr</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">May</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Jun</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Jul</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Aug</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Sep</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Oct</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Nov</th>
+                                      <th className="text-right py-2 px-2 bg-green-50">Dec</th>
+                                      <th className="text-right py-2 px-2 bg-green-100 font-semibold">FY</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {Object.keys(trendMonthlyReturns).sort().reverse().map(year => (
+                                      <tr key={year} className="border-b border-gray-100">
+                                        <td className="py-2 px-2 font-medium bg-green-50 sticky left-0">{year}</td>
+                                        {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(month => {
+                                          const ret = trendMonthlyReturns[year].trendFollowing[month];
+                                          if (ret === null) {
+                                            return <td key={month} className="text-right py-2 px-2 text-gray-300">-</td>;
+                                          }
+                                          const bgColor = ret >= 0 ? 'bg-green-50' : 'bg-red-50';
+                                          const textColor = ret >= 0 ? 'text-green-700' : 'text-red-700';
+                                          return (
+                                            <td key={month} className={`text-right py-2 px-2 ${bgColor} ${textColor}`}>
+                                              {ret.toFixed(2)}%
+                                            </td>
+                                          );
+                                        })}
+                                        <td className={`text-right py-2 px-2 font-semibold ${
+                                          trendMonthlyReturns[year].trendFollowingFY >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                        }`}>
+                                          {trendMonthlyReturns[year].trendFollowingFY.toFixed(2)}%
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </>
+                          );
+                        })()}
+
+                        {/* Strategy Explanation */}
+                        <div className="text-sm text-gray-600 bg-gray-50 p-4 rounded-lg">
+                          <p className="font-medium mb-2">Strategy Rules:</p>
+                          <ul className="list-disc list-inside space-y-1">
+                            <li>Calculate 10-month Simple Moving Average at each month-end</li>
+                            <li>When price &gt; SMA: <span className="text-green-700 font-medium">BUY</span> (stay invested in asset)</li>
+                            <li>When price &lt; SMA: <span className="text-red-700 font-medium">SELL</span> (exit to cash, earn {(trendRiskFreeRate * 100).toFixed(1)}% annual risk-free rate)</li>
+                            <li>Commission of {(trendCommission * 100).toFixed(2)}% applied on each signal change</li>
+                          </ul>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">
+                        {selectedTrendAsset
+                          ? 'Not enough data for analysis. Need at least 12 months of price data.'
+                          : 'Please select an asset to analyze.'}
                       </div>
                     )}
                   </div>
