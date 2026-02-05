@@ -2638,11 +2638,12 @@ const PortfolioBacktester = () => {
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart
                     data={getAnnualReturnsChartData(backtestResults, selectedDateRange.start)}
-                    margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                    margin={{ top: 20, right: 5, left: -15, bottom: 5 }}
                   >
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="year" />
                     <YAxis
+                      tick={{ fontSize: 10 }}
                       tickFormatter={(value) => `${value}%`}
                       domain={['auto', 'auto']}
                     />
@@ -3543,7 +3544,7 @@ const PortfolioBacktester = () => {
                         <div className="bg-white rounded-lg mb-4">
                           <h4 className="text-md font-semibold text-gray-700 mb-2 text-center">Growth of $1</h4>
                           <ResponsiveContainer width="100%" height={350}>
-                            <ComposedChart data={analysis.chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                            <ComposedChart data={analysis.chartData} margin={{ top: 20, right: 5, left: -15, bottom: 5 }}>
                               <CartesianGrid strokeDasharray="3 3" />
                               <XAxis
                                 dataKey="date"
@@ -3619,7 +3620,7 @@ const PortfolioBacktester = () => {
                         <div className="bg-white rounded-lg mb-4">
                           <h4 className="text-md font-semibold text-gray-700 mb-2 text-center">Drawdown</h4>
                           <ResponsiveContainer width="100%" height={200}>
-                            <ComposedChart data={analysis.drawdownData} margin={{ top: 10, right: 30, left: 20, bottom: 5 }}>
+                            <ComposedChart data={analysis.drawdownData} margin={{ top: 10, right: 5, left: -15, bottom: 5 }}>
                               <CartesianGrid strokeDasharray="3 3" />
                               <XAxis
                                 dataKey="date"
@@ -3810,11 +3811,12 @@ const PortfolioBacktester = () => {
                                 <ResponsiveContainer width="100%" height={300}>
                                   <BarChart
                                     data={chartData}
-                                    margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                                    margin={{ top: 20, right: 5, left: -15, bottom: 5 }}
                                   >
                                     <CartesianGrid strokeDasharray="3 3" />
                                     <XAxis dataKey="year" />
                                     <YAxis
+                                      tick={{ fontSize: 10 }}
                                       tickFormatter={(value) => `${value}%`}
                                       domain={['auto', 'auto']}
                                     />
