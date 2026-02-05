@@ -2638,15 +2638,11 @@ const PortfolioBacktester = () => {
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart
                     data={getAnnualReturnsChartData(backtestResults, selectedDateRange.start)}
-                    margin={{ top: 20, right: 5, left: -15, bottom: 5 }}
+                    margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
                   >
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="year" />
-                    <YAxis
-                      tick={{ fontSize: 10 }}
-                      tickFormatter={(value) => `${value}%`}
-                      domain={['auto', 'auto']}
-                    />
+                    <YAxis hide domain={['auto', 'auto']} />
                     <Tooltip
                       formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                       labelFormatter={(label) => `Year: ${label}`}
@@ -2666,12 +2662,12 @@ const PortfolioBacktester = () => {
                           formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
                           style={{ fontSize: '11px', fill: '#666' }}
                         />
-                        {/* Labels for negative returns - positioned below bar */}
+                        {/* Labels for negative returns - positioned below bar in red */}
                         <LabelList
                           dataKey={result.portfolio.name}
                           position="bottom"
                           formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                          style={{ fontSize: '11px', fill: '#666' }}
+                          style={{ fontSize: '11px', fill: '#ef4444' }}
                         />
                       </Bar>
                     ))}
@@ -3811,15 +3807,11 @@ const PortfolioBacktester = () => {
                                 <ResponsiveContainer width="100%" height={300}>
                                   <BarChart
                                     data={chartData}
-                                    margin={{ top: 20, right: 5, left: -15, bottom: 5 }}
+                                    margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
                                   >
                                     <CartesianGrid strokeDasharray="3 3" />
                                     <XAxis dataKey="year" />
-                                    <YAxis
-                                      tick={{ fontSize: 10 }}
-                                      tickFormatter={(value) => `${value}%`}
-                                      domain={['auto', 'auto']}
-                                    />
+                                    <YAxis hide domain={['auto', 'auto']} />
                                     <Tooltip
                                       formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                                       labelFormatter={(label) => `Year: ${label}`}
@@ -3837,7 +3829,7 @@ const PortfolioBacktester = () => {
                                         dataKey="Buy & Hold"
                                         position="bottom"
                                         formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                        style={{ fontSize: '10px', fill: '#666' }}
+                                        style={{ fontSize: '10px', fill: '#ef4444' }}
                                       />
                                     </Bar>
                                     {/* Trend Following bars - Green */}
@@ -3852,7 +3844,7 @@ const PortfolioBacktester = () => {
                                         dataKey="Trend Following"
                                         position="bottom"
                                         formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                        style={{ fontSize: '10px', fill: '#666' }}
+                                        style={{ fontSize: '10px', fill: '#ef4444' }}
                                       />
                                     </Bar>
                                   </BarChart>
