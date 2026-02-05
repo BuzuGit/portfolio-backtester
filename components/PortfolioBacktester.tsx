@@ -1397,6 +1397,7 @@ const PortfolioBacktester = () => {
       prices: (number | null)[];  // 13 prices, null if no data
       sma10: number | null;       // 10-month SMA (average of last 10 months including current)
       signal: 'BUY' | 'SELL' | null;  // BUY if price > SMA, SELL if price < SMA
+      signals: ('BUY' | 'SELL' | null)[];  // Signal at each of 13 months (for historical view)
     }>;
   } => {
     if (!assetData || assetData.length === 0) {
@@ -1407,12 +1408,16 @@ const PortfolioBacktester = () => {
     const endDateStr = selectedEndDate || assetData[assetData.length - 1].date;
     const endDate = new Date(endDateStr);
 
-    // Generate 13 months (current month + 12 previous), oldest first
-    const monthDates: Date[] = [];
-    for (let i = 12; i >= 0; i--) {
+    // Generate 22 months (9 extra for SMA lookback + 13 to display), oldest first
+    // We need 22 months so we can calculate 10-month SMA for all 13 displayed months
+    const allMonthDates: Date[] = [];
+    for (let i = 21; i >= 0; i--) {
       const monthDate = new Date(endDate.getFullYear(), endDate.getMonth() - i, 1);
-      monthDates.push(monthDate);
+      allMonthDates.push(monthDate);
     }
+
+    // Last 13 months for display (the months the user will see)
+    const monthDates = allMonthDates.slice(-13);
 
     // Format month labels in MMMYY format (e.g., "Jan25")
     const months = monthDates.map(d => {
@@ -1442,9 +1447,13 @@ const PortfolioBacktester = () => {
     // Build asset data using filtered assets (respects user's filter selections)
     const filteredLookup = getFilteredAssetLookup();
     const assets = filteredLookup.map(asset => {
-      const prices = monthDates.map(d =>
+      // Fetch prices for all 22 months (needed for SMA calculation)
+      const allPrices = allMonthDates.map(d =>
         getLastPriceOfMonth(asset.ticker, d.getFullYear(), d.getMonth())
       );
+
+      // Last 13 prices for display
+      const prices = allPrices.slice(-13);
 
       // Calculate 10-month SMA (last 10 months including current)
       // Need at least 10 valid prices
@@ -1462,12 +1471,31 @@ const PortfolioBacktester = () => {
         signal = currentPrice > sma10 ? 'BUY' : 'SELL';
       }
 
+      // Calculate signal at each of the 13 displayed months
+      // Use allPrices (22 months) so we have lookback data for SMA at every displayed month
+      const signals: ('BUY' | 'SELL' | null)[] = prices.map((price, displayIdx) => {
+        if (price === null) return null;
+
+        // Map display index (0-12) to allPrices index (9-21)
+        // displayIdx 0 corresponds to allPrices index 9 (the 10th month in full history)
+        const allPricesIdx = displayIdx + 9;
+
+        // Get 10 prices ending at this month from allPrices
+        const pricesForSMA = allPrices.slice(allPricesIdx - 9, allPricesIdx + 1)
+          .filter((p): p is number => p !== null);
+        if (pricesForSMA.length < 10) return null;
+
+        const smaAtMonth = pricesForSMA.reduce((sum, p) => sum + p, 0) / 10;
+        return price > smaAtMonth ? 'BUY' : 'SELL';
+      });
+
       return {
         ticker: asset.ticker,
         name: asset.name,
         prices,
         sma10,
-        signal
+        signal,
+        signals
       };
     });
 
@@ -3266,28 +3294,6 @@ const PortfolioBacktester = () => {
 
                 return (
                   <div className="bg-white p-4 rounded-lg shadow">
-                    {/* Legend explaining the color scale and signals */}
-                    <div className="mb-4 flex flex-wrap gap-4 text-xs text-gray-600">
-                      <div className="flex items-center gap-2">
-                        <span>Price heatmap (per row):</span>
-                        <div className="flex items-center">
-                          <div className="w-6 h-4 rounded-l" style={{ backgroundColor: 'hsl(0, 80%, 85%)' }}></div>
-                          <div className="w-6 h-4" style={{ backgroundColor: 'hsl(60, 80%, 85%)' }}></div>
-                          <div className="w-6 h-4 rounded-r" style={{ backgroundColor: 'hsl(120, 80%, 85%)' }}></div>
-                        </div>
-                        <span>Low → High</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span>Signal:</span>
-                        <span className="px-2 py-0.5 rounded bg-green-100 text-green-700 font-medium">BUY</span>
-                        <span>= Price &gt; 10m SMA</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded bg-red-100 text-red-700 font-medium">SELL</span>
-                        <span>= Price &lt; 10m SMA</span>
-                      </div>
-                    </div>
-
                     {/* Scrollable table container */}
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs border-collapse">
@@ -3334,7 +3340,9 @@ const PortfolioBacktester = () => {
                                 {asset.prices.map((price, colIdx) => (
                                   <td
                                     key={colIdx}
-                                    className="text-right py-0.5 px-1 font-mono"
+                                    className={`text-right py-0.5 px-1 font-mono ${
+                                      asset.signals[colIdx] === 'SELL' ? 'font-bold' : ''
+                                    }`}
                                     style={{
                                       backgroundColor: price !== null ? getHeatmapColor(price, minPrice, maxPrice) : undefined,
                                       color: price !== null ? '#374151' : '#9ca3af'
@@ -3364,6 +3372,32 @@ const PortfolioBacktester = () => {
                           })}
                         </tbody>
                       </table>
+                    </div>
+
+                    {/* Legend explaining the color scale and signals */}
+                    <div className="mt-4 flex flex-wrap gap-4 text-xs text-gray-600">
+                      <div className="flex items-center gap-2">
+                        <span>Price heatmap (per row):</span>
+                        <div className="flex items-center">
+                          <div className="w-6 h-4 rounded-l" style={{ backgroundColor: 'hsl(0, 80%, 85%)' }}></div>
+                          <div className="w-6 h-4" style={{ backgroundColor: 'hsl(60, 80%, 85%)' }}></div>
+                          <div className="w-6 h-4 rounded-r" style={{ backgroundColor: 'hsl(120, 80%, 85%)' }}></div>
+                        </div>
+                        <span>Low → High</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span>Signal:</span>
+                        <span className="px-2 py-0.5 rounded bg-green-100 text-green-700 font-medium">BUY</span>
+                        <span>= Price &gt; 10m SMA</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded bg-red-100 text-red-700 font-medium">SELL</span>
+                        <span>= Price &lt; 10m SMA</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold">Bold price</span>
+                        <span>= SELL signal that month</span>
+                      </div>
                     </div>
 
                     {/* Show message if no assets match filters */}
