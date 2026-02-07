@@ -3038,6 +3038,15 @@ const PortfolioBacktester = () => {
                           </tr>
                         ))}
                       </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
+                          <td className="text-right py-2 px-2" colSpan={5}>Total Withdrawn</td>
+                          <td className="text-right py-2 px-2 text-red-600">
+                            ${details.reduce((sum, row) => sum + row.withdrawalAmount, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </td>
+                          <td className="text-right py-2 px-2"></td>
+                        </tr>
+                      </tfoot>
                     </table>
                   );
                 })()}
