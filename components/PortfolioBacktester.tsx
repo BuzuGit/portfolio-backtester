@@ -211,8 +211,10 @@ const PortfolioBacktester = () => {
   ]);
 
   // Backtest parameters
-  const [startingCapital, setStartingCapital] = useState(10000);        // How much $ to start with
+  const [startingCapital, setStartingCapital] = useState(1000000);      // How much $ to start with
   const [rebalanceFreq, setRebalanceFreq] = useState('yearly');         // How often to rebalance
+  const [withdrawalRate, setWithdrawalRate] = useState('4');             // Annual withdrawal rate %
+  const [inflationRate, setInflationRate] = useState('2');               // Annual inflation rate % (compounds withdrawal upward each year)
   const [dateRange, setDateRange] = useState<DateRange>({ start: '', end: '' });  // Full data range
   const [selectedStartDate, setSelectedStartDate] = useState('');       // User-selected start
   const [selectedEndDate, setSelectedEndDate] = useState('');           // User-selected end
@@ -255,6 +257,9 @@ const PortfolioBacktester = () => {
   const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
   // Tracks which filter dropdown is currently open (null = all closed)
   const [openFilterDropdown, setOpenFilterDropdown] = useState<'assets' | 'assetClass' | 'currency' | null>(null);
+
+  // Which portfolio's withdrawal detail table to show (index into backtestResults)
+  const [selectedDetailPortfolio, setSelectedDetailPortfolio] = useState(0);
 
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
@@ -717,6 +722,127 @@ const PortfolioBacktester = () => {
     }
 
     return returns;
+  };
+
+  /**
+   * Applies annual withdrawals to already-computed portfolio returns.
+   * Simulates taking out a fixed % of the portfolio once per year.
+   *
+   * HOW IT WORKS:
+   * - Starts with the same initial portfolio value
+   * - Between withdrawals, the value grows/shrinks at the same rate as the original portfolio
+   * - Every 12 months, we subtract the withdrawal percentage (e.g., 4% of current value)
+   * - This lets you see: "Would my portfolio survive if I pulled out X% per year?"
+   */
+  const calculateWithdrawalReturns = (returns: ReturnPoint[], withdrawalPct: number, inflationPct: number = 0): { date: string; value: number }[] => {
+    if (!returns || returns.length < 2) return [];
+
+    const result: { date: string; value: number }[] = [];
+    let withdrawalValue = returns[0].value;  // Start at same value as original portfolio
+    result.push({ date: returns[0].date, value: withdrawalValue });
+
+    let lastWithdrawalDate = new Date(returns[0].date);
+    let yearNumber = 0;  // Tracks how many withdrawals have occurred (for inflation compounding)
+
+    for (let i = 1; i < returns.length; i++) {
+      // Scale the withdrawal-adjusted value by the same daily ratio as the original portfolio
+      const dailyRatio = returns[i].value / returns[i - 1].value;
+      withdrawalValue = withdrawalValue * dailyRatio;
+
+      // Check if 12 months have passed since the last withdrawal
+      const currentDate = new Date(returns[i].date);
+      const monthsSinceLast =
+        (currentDate.getFullYear() - lastWithdrawalDate.getFullYear()) * 12 +
+        (currentDate.getMonth() - lastWithdrawalDate.getMonth());
+
+      if (monthsSinceLast >= 12) {
+        // Inflation-adjusted withdrawal: each year the effective rate compounds upward
+        // e.g., 4% base with 2% inflation → year 1: 4.08%, year 2: 4.16%, etc.
+        const effectiveRate = withdrawalPct * Math.pow(1 + inflationPct / 100, yearNumber);
+        withdrawalValue = withdrawalValue * (1 - effectiveRate / 100);
+        lastWithdrawalDate = currentDate;
+        yearNumber++;
+      }
+
+      result.push({ date: returns[i].date, value: withdrawalValue });
+    }
+
+    return result;
+  };
+
+  /**
+   * Builds a year-by-year breakdown of the withdrawal simulation.
+   * This is the "show your work" version of calculateWithdrawalReturns —
+   * it captures every number so you can verify the math in a table.
+   *
+   * Each row represents one year and shows:
+   * - Starting value, growth, pre-withdrawal value, effective rate, withdrawal amount, and ending value
+   */
+  const getWithdrawalDetails = (returns: ReturnPoint[], withdrawalPct: number, inflationPct: number = 0) => {
+    if (!returns || returns.length < 2) return [];
+
+    const details: {
+      year: number;
+      startingValue: number;
+      returnPct: number;
+      preWithdrawalValue: number;
+      effectiveRate: number;
+      withdrawalAmount: number;
+      endValue: number;
+    }[] = [];
+
+    let portfolioValue = returns[0].value;  // Start at same value as original portfolio
+    let lastWithdrawalDate = new Date(returns[0].date);
+    let yearNumber = 0;
+    let yearStartValue = portfolioValue;    // Value at the start of the current year
+    let yearStartOriginal = returns[0].value;  // Original portfolio value at year start (for calculating return %)
+
+    for (let i = 1; i < returns.length; i++) {
+      // Scale by same daily ratio as original portfolio
+      const dailyRatio = returns[i].value / returns[i - 1].value;
+      portfolioValue = portfolioValue * dailyRatio;
+
+      // Check if 12 months have passed since the last withdrawal
+      const currentDate = new Date(returns[i].date);
+      const monthsSinceLast =
+        (currentDate.getFullYear() - lastWithdrawalDate.getFullYear()) * 12 +
+        (currentDate.getMonth() - lastWithdrawalDate.getMonth());
+
+      if (monthsSinceLast >= 12) {
+        // Calculate return % for this year using the original portfolio's growth
+        const originalValueNow = returns[i].value;
+        const yearReturnPct = ((originalValueNow - yearStartOriginal) / yearStartOriginal) * 100;
+
+        // Pre-withdrawal value (after growth, before taking money out)
+        const preWithdrawalValue = portfolioValue;
+
+        // Inflation-adjusted withdrawal rate (same formula as calculateWithdrawalReturns)
+        const effectiveRate = withdrawalPct * Math.pow(1 + inflationPct / 100, yearNumber);
+
+        // Dollar amount withdrawn
+        const withdrawalAmount = portfolioValue * (effectiveRate / 100);
+
+        // Apply withdrawal
+        portfolioValue = portfolioValue * (1 - effectiveRate / 100);
+
+        details.push({
+          year: yearNumber + 1,
+          startingValue: yearStartValue,
+          returnPct: yearReturnPct,
+          preWithdrawalValue,
+          effectiveRate,
+          withdrawalAmount,
+          endValue: portfolioValue,
+        });
+
+        lastWithdrawalDate = currentDate;
+        yearNumber++;
+        yearStartValue = portfolioValue;       // Next year starts where this one ended
+        yearStartOriginal = originalValueNow;  // Track original portfolio from this point
+      }
+    }
+
+    return details;
   };
 
   /**
@@ -2451,6 +2577,43 @@ const PortfolioBacktester = () => {
                       <option value="yearly">Yearly</option>
                     </select>
                   </div>
+
+                  {/* Withdrawal Rate - annual % withdrawn from portfolio (e.g., for retirement spending) */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Withdrawal Rate (%)</label>
+                    <select
+                      value={withdrawalRate}
+                      onChange={(e) => setWithdrawalRate(e.target.value)}
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                    >
+                      <option value="2">2.0%</option>
+                      <option value="2.5">2.5%</option>
+                      <option value="3">3.0%</option>
+                      <option value="3.5">3.5%</option>
+                      <option value="4">4.0%</option>
+                      <option value="4.5">4.5%</option>
+                      <option value="5">5.0%</option>
+                    </select>
+                  </div>
+
+                  {/* Inflation Rate - compounds the withdrawal upward each year to maintain purchasing power */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Inflation (%)</label>
+                    <select
+                      value={inflationRate}
+                      onChange={(e) => setInflationRate(e.target.value)}
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                    >
+                      <option value="0">0%</option>
+                      <option value="1">1%</option>
+                      <option value="2">2%</option>
+                      <option value="3">3%</option>
+                      <option value="4">4%</option>
+                      <option value="5">5%</option>
+                      <option value="6">6%</option>
+                      <option value="7">7%</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -2624,6 +2787,38 @@ const PortfolioBacktester = () => {
                 </ResponsiveContainer>
               </div>
 
+              {/* Portfolio Value after Withdrawals Chart */}
+              {/* Shows how the portfolio holds up when you withdraw a fixed % each year (e.g., in retirement) */}
+              <div className="bg-white p-2 sm:p-4 rounded-lg shadow mb-4">
+                <h3 className="text-md font-semibold text-gray-700 mb-2 text-center">
+                  Portfolio Value after {parseFloat(withdrawalRate).toFixed(1)}% Withdrawals ({inflationRate}% Inflation)
+                </h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 9 }} />
+                    <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} />
+                    <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
+                    <Legend />
+                    {backtestResults.map((result, idx) => {
+                      const withdrawalData = calculateWithdrawalReturns(result.returns, parseFloat(withdrawalRate), parseFloat(inflationRate));
+                      return (
+                        <Line
+                          key={idx}
+                          data={withdrawalData}
+                          type="monotone"
+                          dataKey="value"
+                          name={result.portfolio.name}
+                          stroke={result.portfolio.color}
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                      );
+                    })}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
               {/* Statistics Table */}
               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto">
                 <h3 className="text-md font-semibold text-gray-700 mb-2">Statistics</h3>
@@ -2638,6 +2833,7 @@ const PortfolioBacktester = () => {
                       <th className="text-right py-2 px-2">Max DD</th>
                       <th className="text-right py-2 px-2">Curr DD</th>
                       <th className="text-right py-2 px-2">End $</th>
+                      <th className="text-right py-2 px-2">End $ Post W</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2652,7 +2848,15 @@ const PortfolioBacktester = () => {
                         <td className="text-right py-2 px-2">{result.stats.sharpeRatio}</td>
                         <td className="text-right py-2 px-2 text-red-600">{result.stats.maxDrawdown}%</td>
                         <td className="text-right py-2 px-2 text-orange-600">{result.stats.currentDrawdown}%</td>
-                        <td className="text-right py-2 px-2 font-semibold">${result.stats.endingValue}</td>
+                        <td className="text-right py-2 px-2 font-semibold">${parseFloat(result.stats.endingValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                        <td className="text-right py-2 px-2 font-semibold">
+                          {(() => {
+                            // Calculate ending value after inflation-adjusted withdrawals
+                            const wData = calculateWithdrawalReturns(result.returns, parseFloat(withdrawalRate), parseFloat(inflationRate));
+                            const endVal = wData.length > 0 ? wData[wData.length - 1].value : 0;
+                            return `$${endVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+                          })()}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -2769,6 +2973,68 @@ const PortfolioBacktester = () => {
                   </div>
                 );
               })}
+
+              {/* Withdrawal Detail Table */}
+              {/* Year-by-year breakdown of the withdrawal simulation so you can verify every number */}
+              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-md font-semibold text-gray-700">Withdrawal Detail</h3>
+                  {/* Dropdown to pick which portfolio's detail to show */}
+                  <select
+                    className="border rounded px-2 py-1 text-sm"
+                    value={selectedDetailPortfolio}
+                    onChange={(e) => setSelectedDetailPortfolio(parseInt(e.target.value))}
+                  >
+                    {backtestResults.map((result, idx) => (
+                      <option key={idx} value={idx}>{result.portfolio.name}</option>
+                    ))}
+                  </select>
+                </div>
+                {(() => {
+                  // Get the selected portfolio's withdrawal detail rows
+                  const selectedResult = backtestResults[selectedDetailPortfolio] || backtestResults[0];
+                  const details = getWithdrawalDetails(
+                    selectedResult.returns,
+                    parseFloat(withdrawalRate),
+                    parseFloat(inflationRate)
+                  );
+
+                  if (details.length === 0) {
+                    return <div className="text-center py-4 text-gray-500">Not enough data for withdrawal detail.</div>;
+                  }
+
+                  return (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b-2 border-gray-200">
+                          <th className="text-right py-2 px-2">Year</th>
+                          <th className="text-right py-2 px-2">Starting Value ($)</th>
+                          <th className="text-right py-2 px-2">Return (%)</th>
+                          <th className="text-right py-2 px-2">Pre-Withdrawal ($)</th>
+                          <th className="text-right py-2 px-2">Eff. W Rate (%)</th>
+                          <th className="text-right py-2 px-2">Withdrawal ($)</th>
+                          <th className="text-right py-2 px-2">End Value ($)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {details.map((row) => (
+                          <tr key={row.year} className="border-b border-gray-100">
+                            <td className="text-right py-2 px-2">{row.year}</td>
+                            <td className="text-right py-2 px-2">${row.startingValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                            <td className={`text-right py-2 px-2 ${row.returnPct >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                              {row.returnPct.toFixed(2)}%
+                            </td>
+                            <td className="text-right py-2 px-2">${row.preWithdrawalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                            <td className="text-right py-2 px-2">{row.effectiveRate.toFixed(2)}%</td>
+                            <td className="text-right py-2 px-2 text-red-600">${row.withdrawalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                            <td className="text-right py-2 px-2 font-semibold">${row.endValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  );
+                })()}
+              </div>
             </div>
           )}
 

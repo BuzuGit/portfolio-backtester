@@ -2,7 +2,23 @@
   "permissions": {
     "allow": [
       "Bash(cmd.exe /c \"cd /d C:\\\\Users\\\\pbelz\\\\OneDrive\\\\Claude\\\\PortfolioBacktester && npm install\")",
-      "Bash(powershell.exe -Command \"cd ''C:\\\\Users\\\\pbelz\\\\OneDrive\\\\Claude\\\\PortfolioBacktester''; npm install\")"
+      "Bash(powershell.exe -Command \"cd ''C:\\\\Users\\\\pbelz\\\\OneDrive\\\\Claude\\\\PortfolioBacktester''; npm install\")",
+      "Bash(git add:*)",
+      "Bash(git push)",
+      "Bash(vercel:*)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(npx vercel:*)",
+      "Bash(npm run dev:*)",
+      "Bash(curl:*)",
+      "Bash(start http://localhost:3001)",
+      "Bash(start http://localhost:3008)",
+      "Bash(timeout:*)",
+      "Bash(start:*)",
+      "Bash(taskkill:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx next dev:*)"
     ]
   }
 }
