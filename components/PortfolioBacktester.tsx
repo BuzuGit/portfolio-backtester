@@ -726,13 +726,13 @@ const PortfolioBacktester = () => {
 
   /**
    * Applies annual withdrawals to already-computed portfolio returns.
-   * Simulates taking out a fixed % of the portfolio once per year.
+   * Uses the "4% rule" (Trinity Study) fixed-dollar withdrawal strategy:
    *
    * HOW IT WORKS:
-   * - Starts with the same initial portfolio value
-   * - Between withdrawals, the value grows/shrinks at the same rate as the original portfolio
-   * - Every 12 months, we subtract the withdrawal percentage (e.g., 4% of current value)
-   * - This lets you see: "Would my portfolio survive if I pulled out X% per year?"
+   * - Year 1: Withdraw a fixed % of the INITIAL portfolio value (e.g., 4% of $1M = $40,000)
+   * - Year 2+: Take last year's dollar withdrawal and increase it by inflation only
+   * - The withdrawal dollar amount is independent of current portfolio value
+   * - This lets you see: "Would my portfolio survive if I pulled out $X/year (adjusted for inflation)?"
    */
   const calculateWithdrawalReturns = (returns: ReturnPoint[], withdrawalPct: number, inflationPct: number = 0): { date: string; value: number }[] => {
     if (!returns || returns.length < 2) return [];
@@ -740,6 +740,9 @@ const PortfolioBacktester = () => {
     const result: { date: string; value: number }[] = [];
     let withdrawalValue = returns[0].value;  // Start at same value as original portfolio
     result.push({ date: returns[0].date, value: withdrawalValue });
+
+    // Fixed dollar amount for year 1 (e.g., 4% of $1M = $40,000)
+    const baseWithdrawal = returns[0].value * (withdrawalPct / 100);
 
     let lastWithdrawalDate = new Date(returns[0].date);
     let yearNumber = 0;  // Tracks how many withdrawals have occurred (for inflation compounding)
@@ -756,10 +759,10 @@ const PortfolioBacktester = () => {
         (currentDate.getMonth() - lastWithdrawalDate.getMonth());
 
       if (monthsSinceLast >= 12) {
-        // Inflation-adjusted withdrawal: each year the effective rate compounds upward
-        // e.g., 4% base with 2% inflation → year 1: 4.08%, year 2: 4.16%, etc.
-        const effectiveRate = withdrawalPct * Math.pow(1 + inflationPct / 100, yearNumber);
-        withdrawalValue = withdrawalValue * (1 - effectiveRate / 100);
+        // Fixed-dollar withdrawal adjusted for inflation each year
+        // e.g., $40,000 base × (1.05)^yearNumber for 5% inflation
+        const withdrawalAmount = baseWithdrawal * Math.pow(1 + inflationPct / 100, yearNumber);
+        withdrawalValue = withdrawalValue - withdrawalAmount;
         lastWithdrawalDate = currentDate;
         yearNumber++;
       }
@@ -772,11 +775,12 @@ const PortfolioBacktester = () => {
 
   /**
    * Builds a year-by-year breakdown of the withdrawal simulation.
-   * This is the "show your work" version of calculateWithdrawalReturns —
-   * it captures every number so you can verify the math in a table.
+   * Uses the "4% rule" (Trinity Study) fixed-dollar withdrawal strategy,
+   * matching the logic in calculateWithdrawalReturns exactly.
    *
    * Each row represents one year and shows:
    * - Starting value, growth, pre-withdrawal value, effective rate, withdrawal amount, and ending value
+   * - "Effective rate" is now informational: it shows what % of current value the fixed withdrawal represents
    */
   const getWithdrawalDetails = (returns: ReturnPoint[], withdrawalPct: number, inflationPct: number = 0) => {
     if (!returns || returns.length < 2) return [];
@@ -792,6 +796,9 @@ const PortfolioBacktester = () => {
     }[] = [];
 
     let portfolioValue = returns[0].value;  // Start at same value as original portfolio
+    // Fixed dollar amount for year 1 (e.g., 4% of $1M = $40,000)
+    const baseWithdrawal = returns[0].value * (withdrawalPct / 100);
+
     let lastWithdrawalDate = new Date(returns[0].date);
     let yearNumber = 0;
     let yearStartValue = portfolioValue;    // Value at the start of the current year
@@ -816,14 +823,14 @@ const PortfolioBacktester = () => {
         // Pre-withdrawal value (after growth, before taking money out)
         const preWithdrawalValue = portfolioValue;
 
-        // Inflation-adjusted withdrawal rate (same formula as calculateWithdrawalReturns)
-        const effectiveRate = withdrawalPct * Math.pow(1 + inflationPct / 100, yearNumber);
+        // Fixed-dollar withdrawal adjusted for inflation (same formula as calculateWithdrawalReturns)
+        const withdrawalAmount = baseWithdrawal * Math.pow(1 + inflationPct / 100, yearNumber);
 
-        // Dollar amount withdrawn
-        const withdrawalAmount = portfolioValue * (effectiveRate / 100);
+        // Effective rate is informational: what % of current portfolio this withdrawal represents
+        const effectiveRate = preWithdrawalValue > 0 ? (withdrawalAmount / preWithdrawalValue) * 100 : 0;
 
-        // Apply withdrawal
-        portfolioValue = portfolioValue * (1 - effectiveRate / 100);
+        // Apply withdrawal (subtract fixed dollar amount, not a percentage)
+        portfolioValue = portfolioValue - withdrawalAmount;
 
         details.push({
           year: yearNumber + 1,
