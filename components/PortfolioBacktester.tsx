@@ -3216,17 +3216,22 @@ const PortfolioBacktester = () => {
             <div className="mt-2">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Assets Annual Returns</h2>
 
-              {/* Filter controls for Assets, Asset Class, Currency, and Years */}
-              <AssetFilterControls>
-                {/* Years filter dropdown - only shown on this tab */}
-                {(() => {
-                  const allYears = getYearsWithData(calculateAssetsAnnualReturns());
-                  const allYearsSelected = selectedYears === null || selectedYears.length === allYears.length;
-                  const yearsLabel = allYearsSelected
-                    ? 'All years'
-                    : `${selectedYears!.length} of ${allYears.length}`;
+              {(() => {
+                // Calculate annual returns once — used by both the Years dropdown and the table
+                const annualReturns = calculateAssetsAnnualReturns();
+                const years = getYearsWithData(annualReturns);
 
-                  return (
+                // Years dropdown state
+                const allYearsSelected = selectedYears === null || selectedYears.length === years.length;
+                const yearsLabel = allYearsSelected
+                  ? 'All years'
+                  : `${selectedYears!.length} of ${years.length}`;
+
+                return (
+                  <>
+                  {/* Filter controls for Assets, Asset Class, Currency, and Years */}
+                  <AssetFilterControls>
+                    {/* Years filter dropdown - only shown on this tab */}
                     <div className="relative" ref={yearsDropdownRef}>
                       <button
                         onClick={() => setYearsDropdownOpen(!yearsDropdownOpen)}
@@ -3258,7 +3263,7 @@ const PortfolioBacktester = () => {
                             </button>
                           </div>
                           <div className="max-h-60 overflow-y-auto p-2">
-                            {allYears.map(year => {
+                            {years.map(year => {
                               const isChecked = selectedYears === null || selectedYears.includes(year);
                               return (
                                 <label key={year} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
@@ -3270,13 +3275,13 @@ const PortfolioBacktester = () => {
                                         // First interaction: switching from "all" to explicit list
                                         // User unchecked one year, so select all except this one
                                         if (!e.target.checked) {
-                                          setSelectedYears(allYears.filter(y => y !== year));
+                                          setSelectedYears(years.filter(y => y !== year));
                                         }
                                       } else {
                                         if (e.target.checked) {
                                           const newSelection = [...selectedYears, year];
                                           // If all years now selected, reset to null (= all)
-                                          if (newSelection.length === allYears.length) {
+                                          if (newSelection.length === years.length) {
                                             setSelectedYears(null);
                                           } else {
                                             setSelectedYears(newSelection);
@@ -3295,15 +3300,9 @@ const PortfolioBacktester = () => {
                         </div>
                       )}
                     </div>
-                  );
-                })()}
-              </AssetFilterControls>
+                  </AssetFilterControls>
 
-              {(() => {
-                // Calculate annual returns for all assets
-                const annualReturns = calculateAssetsAnnualReturns();
-                const years = getYearsWithData(annualReturns);
-
+                {(() => {
                 // Filter years based on user selection (null = show all)
                 const displayYears = selectedYears === null
                   ? years
@@ -3411,7 +3410,7 @@ const PortfolioBacktester = () => {
                 return (
                   <div className="bg-white p-4 rounded-lg shadow">
                     <div className="overflow-auto max-h-[65vh]">
-                    <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                    <table className="w-full text-xs border-collapse">
                       <thead>
                         <tr className="border-b-2 border-gray-200">
                           {/* Asset Name column - sticky both top and left (corner cell, highest z-index) */}
@@ -3627,6 +3626,9 @@ const PortfolioBacktester = () => {
                       </p>
                     </div>
                   </div>
+                );
+                })()}
+                  </>
                 );
               })()}
             </div>
