@@ -261,9 +261,28 @@ const PortfolioBacktester = () => {
   const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
   // Tracks which filter dropdown is currently open (null = all closed)
   const [openFilterDropdown, setOpenFilterDropdown] = useState<'assets' | 'assetClass' | 'currency' | null>(null);
+  // Years to display in the Annual Returns tab (null = all years shown, [] = none selected)
+  const [selectedYears, setSelectedYears] = useState<number[] | null>(null);
+  // Separate dropdown state for the Years filter (lives outside AssetFilterControls)
+  const [yearsDropdownOpen, setYearsDropdownOpen] = useState(false);
+  // Ref for click-outside detection on the Years dropdown
+  const yearsDropdownRef = useRef<HTMLDivElement>(null);
 
   // Which portfolio's withdrawal detail table to show (index into backtestResults)
   const [selectedDetailPortfolio, setSelectedDetailPortfolio] = useState(0);
+
+  // Close Years dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (yearsDropdownRef.current && !yearsDropdownRef.current.contains(event.target as Node)) {
+        setYearsDropdownOpen(false);
+      }
+    };
+    if (yearsDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [yearsDropdownOpen]);
 
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
@@ -2398,8 +2417,6 @@ const PortfolioBacktester = () => {
 
     return (
       <div ref={filterRef} className="flex flex-wrap gap-2 mb-4">
-        {/* Extra controls passed in as children (e.g., Correlation Period dropdown) */}
-        {children}
         {/* Assets Dropdown */}
         <div className="relative">
           <button
@@ -2540,6 +2557,8 @@ const PortfolioBacktester = () => {
             </div>
           )}
         </div>
+        {/* Extra controls passed in as children (e.g., Years filter) — rendered after Currency */}
+        {children}
       </div>
     );
   };
@@ -3197,13 +3216,133 @@ const PortfolioBacktester = () => {
             <div className="mt-2">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Assets Annual Returns</h2>
 
-              {/* Filter controls for Assets, Asset Class, and Currency */}
-              <AssetFilterControls />
+              {/* Filter controls for Assets, Asset Class, Currency, and Years */}
+              <AssetFilterControls>
+                {/* Years filter dropdown - only shown on this tab */}
+                {(() => {
+                  const allYears = getYearsWithData(calculateAssetsAnnualReturns());
+                  const allYearsSelected = selectedYears === null || selectedYears.length === allYears.length;
+                  const yearsLabel = allYearsSelected
+                    ? 'All years'
+                    : `${selectedYears!.length} of ${allYears.length}`;
+
+                  return (
+                    <div className="relative" ref={yearsDropdownRef}>
+                      <button
+                        onClick={() => setYearsDropdownOpen(!yearsDropdownOpen)}
+                        className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+                          yearsDropdownOpen ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+                        }`}
+                      >
+                        <span className="font-medium">Years:</span>
+                        <span className="text-gray-600">{yearsLabel}</span>
+                        <svg className={`w-4 h-4 transition-transform ${yearsDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                      {yearsDropdownOpen && (
+                        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px]">
+                          <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+                            <span className="text-sm font-medium text-gray-700">Select Years</span>
+                            <button
+                              onClick={() => {
+                                if (allYearsSelected) {
+                                  setSelectedYears([]);  // Explicit empty = none selected
+                                } else {
+                                  setSelectedYears(null);  // null = all selected (default)
+                                }
+                              }}
+                              className="text-xs text-blue-600 hover:underline"
+                            >
+                              {allYearsSelected ? 'Deselect All' : 'Select All'}
+                            </button>
+                          </div>
+                          <div className="max-h-60 overflow-y-auto p-2">
+                            {allYears.map(year => {
+                              const isChecked = selectedYears === null || selectedYears.includes(year);
+                              return (
+                                <label key={year} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={(e) => {
+                                      if (selectedYears === null) {
+                                        // First interaction: switching from "all" to explicit list
+                                        // User unchecked one year, so select all except this one
+                                        if (!e.target.checked) {
+                                          setSelectedYears(allYears.filter(y => y !== year));
+                                        }
+                                      } else {
+                                        if (e.target.checked) {
+                                          const newSelection = [...selectedYears, year];
+                                          // If all years now selected, reset to null (= all)
+                                          if (newSelection.length === allYears.length) {
+                                            setSelectedYears(null);
+                                          } else {
+                                            setSelectedYears(newSelection);
+                                          }
+                                        } else {
+                                          setSelectedYears(selectedYears.filter(y => y !== year));
+                                        }
+                                      }
+                                    }}
+                                  />
+                                  <span>{year}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </AssetFilterControls>
 
               {(() => {
                 // Calculate annual returns for all assets
                 const annualReturns = calculateAssetsAnnualReturns();
                 const years = getYearsWithData(annualReturns);
+
+                // Filter years based on user selection (null = show all)
+                const displayYears = selectedYears === null
+                  ? years
+                  : years.filter(y => selectedYears.includes(y));
+
+                // Helper to get filtered price range for Period/CAGR when years are filtered
+                const getFilteredPriceRange = (ticker: string) => {
+                  // If no filter active, use the full price range
+                  if (selectedYears === null) return getAssetPriceRange(ticker);
+
+                  const tickerYears = annualReturns[ticker];
+                  if (!tickerYears) return null;
+
+                  // Find the min and max selected years that this asset has data for
+                  const assetDisplayYears = displayYears.filter(y => tickerYears[y]);
+                  if (assetDisplayYears.length === 0) return null;
+
+                  const minYear = Math.min(...assetDisplayYears);
+                  const maxYear = Math.max(...assetDisplayYears);
+
+                  // Start price = beginning of the min selected year (stored as startPrice/startDate)
+                  const startData = tickerYears[minYear];
+                  const endData = tickerYears[maxYear];
+                  if (!startData || !endData) return null;
+
+                  // Calculate months between start and end dates
+                  const firstDate = new Date(startData.startDate);
+                  const lastDate = new Date(endData.endDate);
+                  const months = (lastDate.getFullYear() - firstDate.getFullYear()) * 12
+                               + (lastDate.getMonth() - firstDate.getMonth());
+
+                  return {
+                    firstDate: startData.startDate,
+                    firstPrice: startData.startPrice,
+                    lastDate: endData.endDate,
+                    lastPrice: endData.endPrice,
+                    months
+                  };
+                };
 
                 // If no lookup table or no data, show a message
                 if (assetLookup.length === 0) {
@@ -3224,15 +3363,15 @@ const PortfolioBacktester = () => {
                     return data ? data.return : -Infinity;
                   }
 
-                  // Period column
+                  // Period column - uses filtered price range when years filter is active
                   if (column === 'Period') {
-                    const priceRange = getAssetPriceRange(ticker);
+                    const priceRange = getFilteredPriceRange(ticker);
                     return priceRange ? priceRange.months : -Infinity;
                   }
 
-                  // CAGR column
+                  // CAGR column - uses filtered price range when years filter is active
                   if (column === 'CAGR') {
-                    const priceRange = getAssetPriceRange(ticker);
+                    const priceRange = getFilteredPriceRange(ticker);
                     if (!priceRange) return -Infinity;
                     return calculateCAGR(priceRange.firstPrice, priceRange.lastPrice, priceRange.months);
                   }
@@ -3266,25 +3405,25 @@ const PortfolioBacktester = () => {
                 // Helper for sortable header styling
                 const getSortableHeaderClass = (column: string | number, baseClass: string) => {
                   const isSelected = annualReturnsSortColumn === column;
-                  return `${baseClass} cursor-pointer hover:bg-blue-100 select-none ${isSelected ? 'bg-blue-200 font-bold' : ''}`;
+                  return `${baseClass} cursor-pointer select-none ${isSelected ? 'font-bold' : ''}`;
                 };
 
                 return (
-                  <div className="bg-white p-4 rounded-lg shadow overflow-auto max-h-[70vh]">
-                    <table className="w-full text-xs">
-                      <thead className="sticky top-0 z-20">
+                  <div className="bg-white p-4 rounded-lg shadow">
+                    <div className="overflow-auto max-h-[65vh]">
+                    <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                      <thead>
                         <tr className="border-b-2 border-gray-200">
-                          {/* Asset Name column - sticky both top and left */}
-                          <th className="text-left py-2 px-2 bg-gray-100 sticky left-0 z-30 min-w-[150px]">
+                          {/* Asset Name column - sticky both top and left (corner cell, highest z-index) */}
+                          <th className="text-left py-2 px-2 sticky top-0 left-0 z-30 min-w-[150px]" style={{ backgroundColor: '#f3f4f6' }}>
                             Asset
                           </th>
-                          {/* Ticker column */}
-                          <th className="text-left py-2 px-2 bg-gray-100">Ticker</th>
-                          {/* Year columns - oldest to newest, clickable for sorting */}
-                          {years.map(year => (
+                          {/* Year columns - oldest to newest, clickable for sorting (filtered by selected years) */}
+                          {displayYears.map(year => (
                             <th
                               key={year}
-                              className={getSortableHeaderClass(year, 'text-right py-2 px-2 bg-gray-100 min-w-[60px]')}
+                              className={getSortableHeaderClass(year, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
+                              style={{ backgroundColor: annualReturnsSortColumn === year ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === year ? null : year)}
                             >
                               {year}
@@ -3292,32 +3431,38 @@ const PortfolioBacktester = () => {
                           ))}
                           {/* Period column - shows data history length */}
                           <th
-                            className={getSortableHeaderClass('Period', 'text-right py-2 px-2 bg-gray-200 min-w-[60px]')}
+                            className={getSortableHeaderClass('Period', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'Period' ? '#bfdbfe' : '#e5e7eb' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Period' ? null : 'Period')}
                           >
                             Period
                           </th>
                           {/* CAGR column - compound annual growth rate */}
                           <th
-                            className={getSortableHeaderClass('CAGR', 'text-right py-2 px-2 bg-gray-200 min-w-[60px]')}
+                            className={getSortableHeaderClass('CAGR', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'CAGR' ? '#bfdbfe' : '#e5e7eb' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CAGR' ? null : 'CAGR')}
                           >
                             CAGR
                           </th>
                           {/* Current Drawdown column - distance from ATH */}
                           <th
-                            className={getSortableHeaderClass('CurrDD', 'text-right py-2 px-2 bg-gray-200 min-w-[55px]')}
+                            className={getSortableHeaderClass('CurrDD', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'CurrDD' ? '#bfdbfe' : '#e5e7eb' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CurrDD' ? null : 'CurrDD')}
                           >
                             Curr DD
                           </th>
+                          {/* Ticker column - placed after Curr DD */}
+                          <th className="text-left py-2 px-2 sticky top-0 z-20" style={{ backgroundColor: '#e5e7eb' }}>Ticker</th>
                           {/* Empty separator column */}
-                          <th className="py-2 px-1 bg-gray-100 w-2"></th>
+                          <th className="py-2 px-1 w-2 sticky top-0 z-20" style={{ backgroundColor: '#f3f4f6' }}></th>
                           {/* Period return columns (1Y-5Y) */}
                           {['1Y', '2Y', '3Y', '4Y', '5Y'].map(period => (
                             <th
                               key={period}
-                              className={getSortableHeaderClass(period, 'text-right py-2 px-2 bg-gray-100 min-w-[50px]')}
+                              className={getSortableHeaderClass(period, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[50px]')}
+                              style={{ backgroundColor: annualReturnsSortColumn === period ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === period ? null : period)}
                             >
                               {period}
@@ -3329,14 +3474,12 @@ const PortfolioBacktester = () => {
                         {/* One row per asset in the lookup table, sorted by selected column */}
                         {sortedAssetLookup.map((asset, idx) => (
                           <tr key={asset.ticker} className={`border-b border-gray-100 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
-                            {/* Asset name - sticky left column */}
-                            <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0 z-10">
+                            {/* Asset name - sticky left column with solid background so data doesn't bleed through */}
+                            <td className="py-2 px-2 font-medium sticky left-0 z-10" style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f9fafb' }}>
                               {asset.name}
                             </td>
-                            {/* Ticker symbol */}
-                            <td className="py-2 px-2 text-gray-600">{asset.ticker}</td>
-                            {/* Annual return for each year */}
-                            {years.map(year => {
+                            {/* Annual return for each year (filtered by selected years) */}
+                            {displayYears.map(year => {
                               const data = annualReturns[asset.ticker]?.[year];
 
                               // No data for this year = empty cell
@@ -3362,9 +3505,9 @@ const PortfolioBacktester = () => {
                                 </td>
                               );
                             })}
-                            {/* Period and CAGR columns */}
+                            {/* Period and CAGR columns - uses filtered price range when years filter is active */}
                             {(() => {
-                              const priceRange = getAssetPriceRange(asset.ticker);
+                              const priceRange = getFilteredPriceRange(asset.ticker);
                               if (!priceRange) {
                                 return (
                                   <>
@@ -3431,6 +3574,8 @@ const PortfolioBacktester = () => {
                                 </td>
                               );
                             })()}
+                            {/* Ticker symbol - placed after Curr DD */}
+                            <td className="py-2 px-2 text-gray-600">{asset.ticker}</td>
                             {/* Empty separator column */}
                             <td className="py-2 px-1 bg-gray-50"></td>
                             {/* Period return columns (1Y-5Y) */}
@@ -3462,6 +3607,7 @@ const PortfolioBacktester = () => {
                         ))}
                       </tbody>
                     </table>
+                    </div>
 
                     {/* Show message if no assets match filters */}
                     {sortedAssetLookup.length === 0 && (
@@ -4474,17 +4620,18 @@ const PortfolioBacktester = () => {
                 }
 
                 return (
-                  <div className="bg-white p-4 rounded-lg shadow overflow-auto max-h-[80vh]">
+                  <div className="bg-white p-4 rounded-lg shadow">
+                    <div className="overflow-auto max-h-[75vh]">
                     <table className="text-xs border-collapse">
-                      <thead className="sticky top-0 z-20">
+                      <thead>
                         <tr>
-                          {/* Empty top-left corner cell */}
-                          <th className="py-1 px-2 bg-gray-100 sticky left-0 z-30 border border-gray-200 min-w-[60px]"></th>
-                          {/* Column headers — one per ticker */}
+                          {/* Empty top-left corner cell - sticky both top and left (highest z-index) */}
+                          <th className="py-1 px-2 sticky top-0 left-0 z-30 border border-gray-200 min-w-[60px]" style={{ backgroundColor: '#f3f4f6' }}></th>
+                          {/* Column headers — one per ticker, each sticky top */}
                           {tickers.map(ticker => (
                             <th
                               key={ticker}
-                              className="py-1 px-2 bg-gray-100 border border-gray-200 text-center font-semibold min-w-[55px]"
+                              className="py-1 px-2 sticky top-0 z-20 border border-gray-200 text-center font-semibold min-w-[55px]" style={{ backgroundColor: '#f3f4f6' }}
                               title={assetLookup.find(a => a.ticker === ticker)?.name || ticker}
                             >
                               {ticker}
@@ -4495,9 +4642,9 @@ const PortfolioBacktester = () => {
                       <tbody>
                         {tickers.map((rowTicker, i) => (
                           <tr key={rowTicker}>
-                            {/* Row header — sticky on the left */}
+                            {/* Row header — sticky on the left with solid background */}
                             <td
-                              className="py-1 px-2 bg-gray-100 sticky left-0 z-10 border border-gray-200 font-semibold"
+                              className="py-1 px-2 sticky left-0 z-10 border border-gray-200 font-semibold" style={{ backgroundColor: '#f3f4f6' }}
                               title={assetLookup.find(a => a.ticker === rowTicker)?.name || rowTicker}
                             >
                               {rowTicker}
@@ -4525,6 +4672,7 @@ const PortfolioBacktester = () => {
                         ))}
                       </tbody>
                     </table>
+                    </div>
 
                     {/* Color legend */}
                     <div className="mt-4 flex items-center gap-2 text-xs text-gray-600">
