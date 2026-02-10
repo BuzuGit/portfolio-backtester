@@ -228,7 +228,7 @@ const PortfolioBacktester = () => {
   // 'bestToWorst' = show assets ranked by return for a selected year
   // 'monthlyPrices' = show monthly price heatmap with SMA signals
   // 'trendFollowing' = compare Buy & Hold vs 10-month SMA trend following strategy
-  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'trendFollowing'>('backtest');
+  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'trendFollowing' | 'correlationMatrix'>('backtest');
 
   // The year selected for the "Best To Worst" ranking view
   // Defaults to null, and will be set to the most recent year when data loads
@@ -249,6 +249,10 @@ const PortfolioBacktester = () => {
   const [trendRiskFreeRate, setTrendRiskFreeRate] = useState(0.02);       // 2% default
   // Commission applied on each signal change (buy or sell)
   const [trendCommission, setTrendCommission] = useState(0.002);          // 0.2% default
+
+  // Correlation Matrix tab state
+  // How many years of data to use when calculating correlations (default 3 years)
+  const [correlationPeriod, setCorrelationPeriod] = useState(3);
 
   // Asset filtering state (shared across Annual Returns, Best To Worst, Monthly Prices tabs)
   // These filters let users narrow down which assets are displayed in the tables
@@ -1661,6 +1665,127 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Maps a correlation value (-1 to +1) to a color:
+   * +1 (perfect positive correlation) → Red (assets move together, less diversification)
+   *  0 (no correlation) → Yellow (assets are independent)
+   * -1 (perfect negative correlation) → Green (assets move opposite, great diversification)
+   *
+   * Uses the same HSL approach as getHeatmapColor but with a fixed range of -1 to +1.
+   */
+  const getCorrelationColor = (value: number): string => {
+    // Formula: hue = (1 - value) * 60
+    // When value = +1: hue = 0 (red)
+    // When value =  0: hue = 60 (yellow)
+    // When value = -1: hue = 120 (green)
+    const hue = (1 - value) * 60;
+    return `hsl(${hue}, 80%, 85%)`;
+  };
+
+  /**
+   * Calculates the NxN correlation matrix for all filtered assets using monthly returns.
+   *
+   * HOW IT WORKS:
+   * 1. Gets the list of filtered assets (respecting the asset/class/currency filters)
+   * 2. Slices the price data to the last N years (based on correlationPeriod)
+   * 3. For each asset, calculates monthly returns: (price this month / price last month) - 1
+   * 4. For each pair of assets, computes the Pearson correlation coefficient:
+   *    r = Σ((x - x̄)(y - ȳ)) / √(Σ(x - x̄)² × Σ(y - ȳ)²)
+   *    This tells us how closely two assets move together (-1 to +1)
+   *
+   * @param periodYears - Number of years of data to use (e.g., 3 = last 3 years)
+   * @returns Object with tickers array and NxN matrix of correlation values
+   */
+  const calculateCorrelationMatrix = (periodYears: number): { tickers: string[], matrix: number[][] } => {
+    if (!assetData || assetData.length < 2) return { tickers: [], matrix: [] };
+
+    // Get the filtered list of assets based on user's filter selections
+    const filteredAssets = getFilteredAssetLookup();
+    const tickers = filteredAssets.map(a => a.ticker);
+
+    if (tickers.length === 0) return { tickers: [], matrix: [] };
+
+    // Slice data to the last N years (each year = 12 monthly data points)
+    const monthsNeeded = periodYears * 12;
+    const dataSlice = assetData.slice(-monthsNeeded - 1); // Need one extra row to calculate first return
+
+    // Calculate monthly returns for each asset
+    // Monthly return = (price this month / price last month) - 1
+    const returns: { [ticker: string]: number[] } = {};
+
+    for (const ticker of tickers) {
+      const monthlyReturns: number[] = [];
+      for (let i = 1; i < dataSlice.length; i++) {
+        const currentPrice = Number(dataSlice[i][ticker]);
+        const previousPrice = Number(dataSlice[i - 1][ticker]);
+        // Only include if both prices are valid (non-zero, non-NaN)
+        if (currentPrice > 0 && previousPrice > 0) {
+          monthlyReturns.push((currentPrice / previousPrice) - 1);
+        } else {
+          // Use NaN as a placeholder for missing data
+          monthlyReturns.push(NaN);
+        }
+      }
+      returns[ticker] = monthlyReturns;
+    }
+
+    // Build the NxN correlation matrix
+    const matrix: number[][] = [];
+
+    for (let i = 0; i < tickers.length; i++) {
+      const row: number[] = [];
+      for (let j = 0; j < tickers.length; j++) {
+        if (i === j) {
+          // An asset is always perfectly correlated with itself
+          row.push(1.0);
+        } else {
+          // Calculate Pearson correlation between assets i and j
+          const xReturns = returns[tickers[i]];
+          const yReturns = returns[tickers[j]];
+
+          // Only use months where BOTH assets have valid data
+          const pairs: { x: number; y: number }[] = [];
+          for (let k = 0; k < Math.min(xReturns.length, yReturns.length); k++) {
+            if (!isNaN(xReturns[k]) && !isNaN(yReturns[k])) {
+              pairs.push({ x: xReturns[k], y: yReturns[k] });
+            }
+          }
+
+          // Need at least 3 data points for a meaningful correlation
+          if (pairs.length < 3) {
+            row.push(NaN);
+            continue;
+          }
+
+          // Calculate means
+          const xMean = pairs.reduce((sum, p) => sum + p.x, 0) / pairs.length;
+          const yMean = pairs.reduce((sum, p) => sum + p.y, 0) / pairs.length;
+
+          // Calculate Pearson correlation: r = Σ((x-x̄)(y-ȳ)) / √(Σ(x-x̄)² × Σ(y-ȳ)²)
+          let numerator = 0;   // Σ((x - x̄)(y - ȳ))
+          let denomX = 0;      // Σ(x - x̄)²
+          let denomY = 0;      // Σ(y - ȳ)²
+
+          for (const pair of pairs) {
+            const dx = pair.x - xMean;
+            const dy = pair.y - yMean;
+            numerator += dx * dy;
+            denomX += dx * dx;
+            denomY += dy * dy;
+          }
+
+          const denominator = Math.sqrt(denomX * denomY);
+          // Avoid division by zero (happens if one asset has zero variance)
+          const correlation = denominator === 0 ? 0 : numerator / denominator;
+          row.push(correlation);
+        }
+      }
+      matrix.push(row);
+    }
+
+    return { tickers, matrix };
+  };
+
+  /**
    * Formats a price based on its magnitude for compact display.
    * - < 1: 3 decimal places (e.g., 0.123)
    * - 1-99: 2 decimal places (e.g., 12.34)
@@ -2236,7 +2361,7 @@ const PortfolioBacktester = () => {
   // This is a reusable component that renders three compact collapsible filter dropdowns
   // (Assets, Asset Class, Currency) used in Annual Returns, Best To Worst, and Monthly Prices tabs
 
-  const AssetFilterControls = () => {
+  const AssetFilterControls = ({ children }: { children?: React.ReactNode }) => {
     // Ref for click-outside detection
     const filterRef = useRef<HTMLDivElement>(null);
 
@@ -2273,6 +2398,8 @@ const PortfolioBacktester = () => {
 
     return (
       <div ref={filterRef} className="flex flex-wrap gap-2 mb-4">
+        {/* Extra controls passed in as children (e.g., Correlation Period dropdown) */}
+        {children}
         {/* Assets Dropdown */}
         <div className="relative">
           <button
@@ -2507,6 +2634,16 @@ const PortfolioBacktester = () => {
                 }`}
               >
                 Trend Following
+              </button>
+              <button
+                onClick={() => setActiveView('correlationMatrix')}
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                  activeView === 'correlationMatrix'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                Correlation Matrix
               </button>
             </div>
           )}
@@ -4288,6 +4425,123 @@ const PortfolioBacktester = () => {
                           : 'Please select an asset to analyze.'}
                       </div>
                     )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ============================================ */}
+          {/* CORRELATION MATRIX TAB */}
+          {/* ============================================ */}
+          {/* Shows how different assets move together (or apart). */}
+          {/* A correlation of +1 means they move in lockstep (bad for diversification). */}
+          {/* A correlation of -1 means they move in opposite directions (great for diversification). */}
+          {/* 0 means no relationship at all. */}
+          {isConnected && assetData && activeView === 'correlationMatrix' && (
+            <div className="mt-2">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Correlation Matrix</h2>
+
+              {/* Reuse the same asset/class/currency filter controls as other tabs, with Correlation Period added inline */}
+              <AssetFilterControls>
+                {/* Correlation Period dropdown — styled to match the other filter buttons */}
+                <div className="relative">
+                  <div className="px-3 py-1.5 text-sm border border-gray-300 bg-white rounded-lg flex items-center gap-2">
+                    <span className="font-medium">Period:</span>
+                    <select
+                      value={correlationPeriod}
+                      onChange={(e) => setCorrelationPeriod(Number(e.target.value))}
+                      className="bg-transparent text-gray-600 outline-none cursor-pointer"
+                    >
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(y => (
+                        <option key={y} value={y}>{y}Y</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </AssetFilterControls>
+
+              {/* Render the correlation matrix table */}
+              {(() => {
+                const { tickers, matrix } = calculateCorrelationMatrix(correlationPeriod);
+
+                if (tickers.length === 0) {
+                  return (
+                    <div className="bg-yellow-50 p-4 rounded-lg text-yellow-800">
+                      No assets to display. Please adjust your filters or load data.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="bg-white p-4 rounded-lg shadow overflow-auto max-h-[80vh]">
+                    <table className="text-xs border-collapse">
+                      <thead className="sticky top-0 z-20">
+                        <tr>
+                          {/* Empty top-left corner cell */}
+                          <th className="py-1 px-2 bg-gray-100 sticky left-0 z-30 border border-gray-200 min-w-[60px]"></th>
+                          {/* Column headers — one per ticker */}
+                          {tickers.map(ticker => (
+                            <th
+                              key={ticker}
+                              className="py-1 px-2 bg-gray-100 border border-gray-200 text-center font-semibold min-w-[55px]"
+                              title={assetLookup.find(a => a.ticker === ticker)?.name || ticker}
+                            >
+                              {ticker}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tickers.map((rowTicker, i) => (
+                          <tr key={rowTicker}>
+                            {/* Row header — sticky on the left */}
+                            <td
+                              className="py-1 px-2 bg-gray-100 sticky left-0 z-10 border border-gray-200 font-semibold"
+                              title={assetLookup.find(a => a.ticker === rowTicker)?.name || rowTicker}
+                            >
+                              {rowTicker}
+                            </td>
+                            {/* Correlation values for this row */}
+                            {tickers.map((colTicker, j) => {
+                              const value = matrix[i][j];
+                              const isValid = !isNaN(value);
+                              return (
+                                <td
+                                  key={colTicker}
+                                  className="py-1 px-2 text-center border border-gray-200 font-mono"
+                                  style={{
+                                    backgroundColor: isValid ? getCorrelationColor(value) : '#f3f4f6',
+                                    // Make text darker for better readability on colored backgrounds
+                                    color: isValid ? '#1f2937' : '#9ca3af',
+                                  }}
+                                  title={isValid ? `${rowTicker} vs ${colTicker}: ${value.toFixed(4)}` : `${rowTicker} vs ${colTicker}: insufficient data`}
+                                >
+                                  {isValid ? value.toFixed(2) : '—'}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    {/* Color legend */}
+                    <div className="mt-4 flex items-center gap-2 text-xs text-gray-600">
+                      <span className="font-medium">Legend:</span>
+                      <div className="flex items-center gap-1">
+                        <div className="w-4 h-4 rounded" style={{ backgroundColor: getCorrelationColor(-1) }}></div>
+                        <span>-1 (opposite)</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="w-4 h-4 rounded" style={{ backgroundColor: getCorrelationColor(0) }}></div>
+                        <span>0 (no relation)</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="w-4 h-4 rounded" style={{ backgroundColor: getCorrelationColor(1) }}></div>
+                        <span>+1 (move together)</span>
+                      </div>
+                    </div>
                   </div>
                 );
               })()}
