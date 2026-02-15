@@ -83,6 +83,19 @@ interface MonthlyReturns {
   };
 }
 
+// A single row in the Rebalancing Table — captures the month-by-month
+// portfolio state including per-asset prices, drifted weights, and whether
+// rebalancing occurred that month.
+interface RebalancingRow {
+  date: string;
+  assetPrices: { [asset: string]: number };    // FX-adjusted price per asset
+  assetShares: { [asset: string]: number };    // Number of shares held per asset
+  assetWeights: { [asset: string]: number };   // Actual weight % per asset (0-100)
+  portfolioValue: number;
+  momPct: number | null;                       // Month-over-month return %; null for first row
+  isRebalanced: boolean;                       // True if rebalancing happened this month
+}
+
 // Annual return data for a single asset in a specific year
 // Used in the Assets Annual Returns table
 interface AssetYearReturn {
@@ -270,6 +283,8 @@ const PortfolioBacktester = () => {
 
   // Which portfolio's withdrawal detail table to show (index into backtestResults)
   const [selectedDetailPortfolio, setSelectedDetailPortfolio] = useState(0);
+  // Which portfolio's rebalancing table to show (index into backtestResults)
+  const [selectedRebalancingPortfolio, setSelectedRebalancingPortfolio] = useState(0);
 
   // Close Years dropdown when clicking outside
   useEffect(() => {
@@ -873,6 +888,115 @@ const PortfolioBacktester = () => {
     }
 
     return details;
+  };
+
+  /**
+   * Builds the month-by-month rebalancing detail for a portfolio.
+   * Mirrors calculatePortfolioReturns() but also captures per-asset
+   * FX-adjusted prices and drifted weights so we can display them in a table.
+   */
+  const getRebalancingDetails = (result: BacktestResult): RebalancingRow[] => {
+    if (!assetData || assetData.length === 0) return [];
+    const portfolio = result.portfolio;
+    if (!portfolio.assets.length) return [];
+
+    // Filter data to the selected date range (same as calculatePortfolioReturns)
+    const filteredData = assetData.filter(row =>
+      row.date >= selectedDateRange.start && row.date <= selectedDateRange.end
+    );
+    if (filteredData.length < 2) return [];
+
+    // Initial share allocation — identical logic to calculatePortfolioReturns
+    const assetShares: { [asset: string]: number } = {};
+    portfolio.assets.forEach(({ asset, weight, fx }) => {
+      const initialPrice = Number(filteredData[0][asset]);
+      const fxRate = getFxRate(filteredData[0], fx);
+      const adjustedPrice = initialPrice * fxRate;
+      if (adjustedPrice && adjustedPrice > 0) {
+        assetShares[asset] = (startingCapital * (weight / 100)) / adjustedPrice;
+      } else {
+        assetShares[asset] = 0;
+      }
+    });
+
+    const rows: RebalancingRow[] = [];
+    let lastRebalanceDate = new Date(filteredData[0].date);
+    let prevValue: number | null = null;
+
+    for (let i = 0; i < filteredData.length; i++) {
+      const row = filteredData[i];
+      const currentDate = new Date(row.date);
+
+      // Determine whether to rebalance (same month-counting logic)
+      let shouldRebalance = false;
+      if (i > 0) {
+        const monthsSince =
+          (currentDate.getFullYear() - lastRebalanceDate.getFullYear()) * 12 +
+          (currentDate.getMonth() - lastRebalanceDate.getMonth());
+        if (rebalanceFreq === 'monthly' && monthsSince >= 1) shouldRebalance = true;
+        else if (rebalanceFreq === 'quarterly' && monthsSince >= 3) shouldRebalance = true;
+        else if (rebalanceFreq === 'yearly' && monthsSince >= 12) shouldRebalance = true;
+      }
+
+      // Compute FX-adjusted prices and total portfolio value
+      const assetPrices: { [asset: string]: number } = {};
+      let portfolioValue = 0;
+      portfolio.assets.forEach(({ asset, fx }) => {
+        const price = Number(row[asset]);
+        const fxRate = getFxRate(row, fx);
+        const adjustedPrice = price * fxRate;
+        assetPrices[asset] = adjustedPrice;
+        if (adjustedPrice > 0 && assetShares[asset]) {
+          portfolioValue += assetShares[asset] * adjustedPrice;
+        }
+      });
+
+      // Compute actual (drifted) weights
+      const assetWeights: { [asset: string]: number } = {};
+      portfolio.assets.forEach(({ asset }) => {
+        if (portfolioValue > 0 && assetShares[asset] && assetPrices[asset] > 0) {
+          assetWeights[asset] = (assetShares[asset] * assetPrices[asset] / portfolioValue) * 100;
+        } else {
+          assetWeights[asset] = 0;
+        }
+      });
+
+      // MoM return %
+      const momPct = prevValue !== null && prevValue > 0
+        ? ((portfolioValue - prevValue) / prevValue) * 100
+        : null;
+
+      // Snapshot current shares (copy values so rebalancing below doesn't mutate them)
+      const sharesSnapshot: { [asset: string]: number } = {};
+      portfolio.assets.forEach(({ asset }) => {
+        sharesSnapshot[asset] = assetShares[asset] || 0;
+      });
+
+      rows.push({
+        date: row.date,
+        assetPrices,
+        assetShares: sharesSnapshot,
+        assetWeights,
+        portfolioValue,
+        momPct,
+        isRebalanced: shouldRebalance,
+      });
+
+      // Rebalance shares AFTER recording the row (so weights show pre-rebalance drift)
+      if (shouldRebalance && portfolioValue > 0) {
+        portfolio.assets.forEach(({ asset, weight }) => {
+          const adjustedPrice = assetPrices[asset];
+          if (adjustedPrice && adjustedPrice > 0) {
+            assetShares[asset] = (portfolioValue * (weight / 100)) / adjustedPrice;
+          }
+        });
+        lastRebalanceDate = currentDate;
+      }
+
+      prevValue = portfolioValue;
+    }
+
+    return rows;
   };
 
   /**
@@ -3204,6 +3328,91 @@ const PortfolioBacktester = () => {
                         </tr>
                       </tfoot>
                     </table>
+                  );
+                })()}
+              </div>
+
+              {/* Rebalancing Table */}
+              {/* Month-by-month breakdown showing asset prices, drifted weights, portfolio value, and rebalance events */}
+              <div className="bg-white p-4 rounded-lg shadow mt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-md font-semibold text-gray-700">Rebalancing Detail</h3>
+                  {/* Dropdown to pick which portfolio's rebalancing detail to show */}
+                  <select
+                    className="border rounded px-2 py-1 text-sm"
+                    value={selectedRebalancingPortfolio}
+                    onChange={(e) => setSelectedRebalancingPortfolio(parseInt(e.target.value))}
+                  >
+                    {backtestResults.map((result, idx) => (
+                      <option key={idx} value={idx}>{result.portfolio.name}</option>
+                    ))}
+                  </select>
+                </div>
+                {(() => {
+                  // Get the selected portfolio's rebalancing rows
+                  const selectedResult = backtestResults[selectedRebalancingPortfolio] || backtestResults[0];
+                  const rebalancingRows = getRebalancingDetails(selectedResult);
+                  const assets = selectedResult.portfolio.assets;
+
+                  if (rebalancingRows.length === 0) {
+                    return <div className="text-center py-4 text-gray-500">Not enough data for rebalancing detail.</div>;
+                  }
+
+                  return (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b-2 border-gray-200">
+                            {/* Sticky Date column */}
+                            <th className="text-left py-2 px-2 sticky left-0 bg-white z-10">Date</th>
+                            {/* Three columns per asset: Price, Position (shares), and Weight */}
+                            {assets.map(({ asset }) => (
+                              <React.Fragment key={asset}>
+                                <th className="text-right py-2 px-2">{asset} Price</th>
+                                <th className="text-right py-2 px-2">{asset} Pos</th>
+                                <th className="text-right py-2 px-2">{asset} Wt%</th>
+                              </React.Fragment>
+                            ))}
+                            <th className="text-right py-2 px-2">Portfolio Value</th>
+                            <th className="text-right py-2 px-2">MoM %</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rebalancingRows.map((row) => (
+                            <tr
+                              key={row.date}
+                              className={`border-b border-gray-100 ${row.isRebalanced ? 'bg-blue-50' : ''}`}
+                              style={row.isRebalanced ? { fontWeight: 700 } : undefined}
+                            >
+                              {/* Sticky Date column */}
+                              <td className="text-left py-1 px-2 sticky left-0 bg-inherit z-10 whitespace-nowrap">
+                                {row.date}
+                              </td>
+                              {/* Per-asset Price and Weight columns */}
+                              {assets.map(({ asset }) => (
+                                <React.Fragment key={asset}>
+                                  <td className="text-right py-1 px-2">
+                                    {row.assetPrices[asset] != null ? row.assetPrices[asset].toFixed(2) : '—'}
+                                  </td>
+                                  <td className="text-right py-1 px-2">
+                                    {row.assetShares[asset] != null ? row.assetShares[asset].toFixed(2) : '—'}
+                                  </td>
+                                  <td className="text-right py-1 px-2">
+                                    {row.assetWeights[asset] != null ? row.assetWeights[asset].toFixed(1) + '%' : '—'}
+                                  </td>
+                                </React.Fragment>
+                              ))}
+                              <td className="text-right py-1 px-2 font-semibold">
+                                ${row.portfolioValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                              </td>
+                              <td className={`text-right py-1 px-2 ${row.momPct === null ? '' : row.momPct >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                                {row.momPct !== null ? row.momPct.toFixed(2) + '%' : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   );
                 })()}
               </div>
