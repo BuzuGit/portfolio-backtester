@@ -64,6 +64,7 @@ interface PortfolioStats {
   volatility: string;
   sharpeRatio: string;
   maxDrawdown: string;
+  longestDrawdown: string;
   currentDrawdown: string;
   endingValue: string;
 }
@@ -220,7 +221,7 @@ const PortfolioBacktester = () => {
 
   // Portfolio configurations - start with one empty portfolio
   const [portfolios, setPortfolios] = useState<Portfolio[]>([
-    { id: 1, name: 'Portfolio 1', assets: [], color: '#3b82f6', nameManuallyEdited: false }
+    { id: 1, name: 'Portfolio 1', assets: [], color: '#000000', nameManuallyEdited: false }
   ]);
 
   // Backtest parameters
@@ -493,7 +494,7 @@ const PortfolioBacktester = () => {
    */
   const addPortfolio = () => {
     // Cycle through these colors for different portfolios
-    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+    const colors = ['#000000', '#F5A623', '#ef4444', '#3b82f6', '#8b5cf6', '#ec4899'];
     const newId = Math.max(...portfolios.map(p => p.id), 0) + 1;
 
     setPortfolios([...portfolios, {
@@ -1041,6 +1042,26 @@ const PortfolioBacktester = () => {
     // Maximum drawdown: worst peak-to-trough decline
     const maxDrawdown = Math.min(...returns.map(r => r.drawdown));
 
+    // Longest drawdown duration: how many months the portfolio stayed underwater (below its all-time high)
+    let longestDDMonths = 0;
+    let currentDDMonths = 0;
+    for (let i = 0; i < returns.length; i++) {
+      if (returns[i].drawdown < 0) {
+        // Portfolio is underwater — count this month
+        currentDDMonths++;
+      } else {
+        // Portfolio recovered to a new high — check if this streak was the longest
+        if (currentDDMonths > longestDDMonths) {
+          longestDDMonths = currentDDMonths;
+        }
+        currentDDMonths = 0;
+      }
+    }
+    // Check if we ended while still underwater (the final streak might be the longest)
+    if (currentDDMonths > longestDDMonths) {
+      longestDDMonths = currentDDMonths;
+    }
+
     // Current drawdown
     const currentDrawdown = returns[returns.length - 1].drawdown;
 
@@ -1054,6 +1075,7 @@ const PortfolioBacktester = () => {
       volatility: volatility.toFixed(2),
       sharpeRatio: sharpeRatio.toFixed(2),
       maxDrawdown: maxDrawdown.toFixed(2),
+      longestDrawdown: formatPeriod(longestDDMonths),
       currentDrawdown: currentDrawdown.toFixed(2),
       endingValue: endValue.toFixed(2)
     };
@@ -3118,6 +3140,7 @@ const PortfolioBacktester = () => {
                       <th className="text-right py-2 px-2">Vol</th>
                       <th className="text-right py-2 px-2">Sharpe</th>
                       <th className="text-right py-2 px-2">Max DD</th>
+                      <th className="text-right py-2 px-2">Longest DD</th>
                       <th className="text-right py-2 px-2">Curr DD</th>
                       <th className="text-right py-2 px-2">End $</th>
                       <th className="text-right py-2 px-2">End $ Post W</th>
@@ -3134,6 +3157,7 @@ const PortfolioBacktester = () => {
                         <td className="text-right py-2 px-2">{result.stats.volatility}%</td>
                         <td className="text-right py-2 px-2">{result.stats.sharpeRatio}</td>
                         <td className="text-right py-2 px-2 text-red-600">{result.stats.maxDrawdown}%</td>
+                        <td className="text-right py-2 px-2 text-purple-700">{result.stats.longestDrawdown}</td>
                         <td className="text-right py-2 px-2 text-orange-600">{result.stats.currentDrawdown}%</td>
                         <td className="text-right py-2 px-2 font-semibold">${parseFloat(result.stats.endingValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                         <td className="text-right py-2 px-2 font-semibold">
