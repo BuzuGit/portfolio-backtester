@@ -19,7 +19,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
-import { fetchSheetData, AssetRow, AssetLookup } from '@/lib/fetchData';
+import { fetchSheetData, AssetRow, AssetLookup, YearsRow } from '@/lib/fetchData';
 
 // ============================================
 // TYPE DEFINITIONS
@@ -242,7 +242,7 @@ const PortfolioBacktester = () => {
   // 'bestToWorst' = show assets ranked by return for a selected year
   // 'monthlyPrices' = show monthly price heatmap with SMA signals
   // 'trendFollowing' = compare Buy & Hold vs 10-month SMA trend following strategy
-  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'trendFollowing' | 'correlationMatrix'>('backtest');
+  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'trendFollowing' | 'correlationMatrix' | 'portfolio'>('backtest');
 
   // The year selected for the "Best To Worst" ranking view
   // Defaults to null, and will be set to the most recent year when data loads
@@ -267,6 +267,12 @@ const PortfolioBacktester = () => {
   // Correlation Matrix tab state
   // How many years of data to use when calculating correlations (default 3 years)
   const [correlationPeriod, setCorrelationPeriod] = useState(3);
+
+  // Portfolio tab state
+  // Annual portfolio summary data from the "Years" sheet in Google Sheets
+  const [yearsData, setYearsData] = useState<YearsRow[]>([]);
+  // Which currency to display monetary values in (Charts 1 & 2)
+  const [portfolioCurrency, setPortfolioCurrency] = useState<'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD'>('PLN');
 
   // Asset filtering state (shared across Annual Returns, Best To Worst, Monthly Prices tabs)
   // These filters let users narrow down which assets are displayed in the tables
@@ -322,13 +328,14 @@ const PortfolioBacktester = () => {
     setLoadingMessage('Fetching data from Google Sheets...');
 
     try {
-      // Fetch and parse the CSV data from both sheets
-      const { data, assets, lookup } = await fetchSheetData();
+      // Fetch and parse the CSV data from all sheets
+      const { data, assets, lookup, yearsData: fetchedYearsData } = await fetchSheetData();
 
       // Update all our state with the new data
       setAssetData(data);
       setAvailableAssets(assets);
       setAssetLookup(lookup);
+      setYearsData(fetchedYearsData);
       setIsConnected(true);
 
       // Initialize filters to "all selected" when data loads
@@ -1950,6 +1957,167 @@ const PortfolioBacktester = () => {
     return { tickers, matrix };
   };
 
+  // ============================================
+  // PORTFOLIO TAB HELPER FUNCTIONS
+  // ============================================
+
+  // Currency symbols for display (e.g., "3.96M zl" or "$1.2M")
+  const CURRENCY_SYMBOLS: { [key: string]: string } = {
+    PLN: 'zl', USD: '$', EUR: '€', CHF: 'CHF', SGD: 'S$'
+  };
+
+  /**
+   * Converts a YearsRow's monetary values from PLN to the selected currency.
+   *
+   * PLN is the base currency — values are stored as-is.
+   * For other currencies, we divide:
+   *   - Flow amounts (contributions, profit) by the average FX rate for that year
+   *   - Cumulative/snapshot amounts (contr cumulative, profit cumulative, growth) by the end-of-period rate
+   *
+   * Returns null if the required FX rate is 0 or missing (row will be skipped).
+   */
+  const convertYearsRow = (row: YearsRow, currency: string): {
+    contributions: number; profit: number;
+    contrCumulative: number; profitCumulative: number; endAmount: number;
+  } | null => {
+    // PLN = base currency, no conversion needed
+    if (currency === 'PLN') {
+      return {
+        contributions: row.contributions,
+        profit: row.profit,
+        contrCumulative: row.contrCumulative,
+        profitCumulative: row.profitCumulative,
+        endAmount: row.endAmount,
+      };
+    }
+
+    // Look up the right FX rates for this currency
+    const rateMap: { [key: string]: { avg: number; end: number } } = {
+      USD: { avg: row.avgUsdPln, end: row.endUsdPln },
+      EUR: { avg: row.avgEurPln, end: row.endEurPln },
+      CHF: { avg: row.avgChfPln, end: row.endChfPln },
+      SGD: { avg: row.avgSgdPln, end: row.endSgdPln },
+    };
+
+    const rates = rateMap[currency];
+    if (!rates || !rates.avg || !rates.end) return null; // Skip row if FX rate is missing/zero
+
+    return {
+      contributions: row.contributions / rates.avg,
+      profit: row.profit / rates.avg,
+      contrCumulative: row.contrCumulative / rates.end,
+      profitCumulative: row.profitCumulative / rates.end,
+      endAmount: row.endAmount / rates.end,
+    };
+  };
+
+  /**
+   * Chart 1 data: Portfolio Value by Year (stacked bar)
+   * Bottom segment = Contributions Cumulative, Top segment = Profit Cumulative
+   * Values are shown in millions for readability
+   */
+  const getPortfolioValueChartData = () => {
+    return yearsData
+      .map(row => {
+        const converted = convertYearsRow(row, portfolioCurrency);
+        if (!converted) return null;
+        // Extract just the year (e.g., "2016-12-31" → "2016")
+        const year = row.date.includes('-') ? row.date.split('-')[0] : row.date;
+        return {
+          year,
+          contrCumulative: converted.contrCumulative / 1_000_000,
+          profitCumulative: converted.profitCumulative / 1_000_000,
+          total: converted.endAmount / 1_000_000,
+        };
+      })
+      .filter((d): d is NonNullable<typeof d> => d !== null);
+  };
+
+  /**
+   * Chart 2 data: Contributions and Profit by Year (stacked bar + growth label)
+   * Bottom segment = Contributions, Top segment = Profit
+   * Growth = Contributions + Profit (total for that year), shown as a label above the bar
+   */
+  const getContributionsProfitChartData = () => {
+    return yearsData
+      .map(row => {
+        const converted = convertYearsRow(row, portfolioCurrency);
+        if (!converted) return null;
+        const year = row.date.includes('-') ? row.date.split('-')[0] : row.date;
+        // Split profit into positive (stacked above contributions) and negative (below zero)
+        // so negative years like 2022 show the loss bar dropping below the x-axis
+        return {
+          year,
+          contributions: converted.contributions,
+          profitPositive: converted.profit >= 0 ? converted.profit : 0,
+          profitNegative: converted.profit < 0 ? converted.profit : 0,
+          profit: converted.profit, // keep raw value for labels
+          growthTotal: converted.contributions + converted.profit,
+        };
+      })
+      .filter((d): d is NonNullable<typeof d> => d !== null);
+  };
+
+  /**
+   * Chart 3 data: Returns by Year (grouped bars)
+   * Shows Return PLN, Return USD, and Return SGD side by side
+   * Not affected by currency dropdown — these are pre-calculated in the spreadsheet
+   */
+  const getReturnsChartData = () => {
+    return yearsData.map(row => ({
+      year: row.date.includes('-') ? row.date.split('-')[0] : row.date,
+      'Return PLN': row.returnPln,
+      'Return USD': row.returnUsd,
+      'Return SGD': row.returnSgd,
+    }));
+  };
+
+  /**
+   * Chart 4 data: Growth by Year (grouped bars)
+   * Calculates year-over-year % change in portfolio value for PLN, USD, and SGD.
+   * Unlike "Returns by Year" (which uses pre-calculated return %), this computes
+   * growth from the actual endAmount values, converting to each currency via FX rates.
+   * The first year is skipped because there's no prior year to compare against.
+   * NOT affected by the currency dropdown — always shows all 3 currencies.
+   */
+  const getGrowthByYearChartData = () => {
+    const result: { year: string; 'Growth PLN': number; 'Growth USD': number; 'Growth SGD': number }[] = [];
+
+    for (let i = 1; i < yearsData.length; i++) {
+      const prev = yearsData[i - 1];
+      const curr = yearsData[i];
+
+      // Skip if prior year's endAmount is 0 (can't compute % change from zero)
+      if (!prev.endAmount) continue;
+
+      // PLN growth: simple YoY % change in PLN portfolio value
+      const growthPln = ((curr.endAmount - prev.endAmount) / prev.endAmount) * 100;
+
+      // USD growth: convert both years' endAmount to USD, then compute % change
+      // Skip if either year's FX rate is missing/zero
+      if (!prev.endUsdPln || !curr.endUsdPln) continue;
+      const prevUsd = prev.endAmount / prev.endUsdPln;
+      const currUsd = curr.endAmount / curr.endUsdPln;
+      const growthUsd = ((currUsd - prevUsd) / prevUsd) * 100;
+
+      // SGD growth: convert both years' endAmount to SGD, then compute % change
+      if (!prev.endSgdPln || !curr.endSgdPln) continue;
+      const prevSgd = prev.endAmount / prev.endSgdPln;
+      const currSgd = curr.endAmount / curr.endSgdPln;
+      const growthSgd = ((currSgd - prevSgd) / prevSgd) * 100;
+
+      const year = curr.date.includes('-') ? curr.date.split('-')[0] : curr.date;
+      result.push({
+        year,
+        'Growth PLN': parseFloat(growthPln.toFixed(1)),
+        'Growth USD': parseFloat(growthUsd.toFixed(1)),
+        'Growth SGD': parseFloat(growthSgd.toFixed(1)),
+      });
+    }
+
+    return result;
+  };
+
   /**
    * Formats a price based on its magnitude for compact display.
    * - < 1: 3 decimal places (e.g., 0.123)
@@ -2809,6 +2977,16 @@ const PortfolioBacktester = () => {
                 }`}
               >
                 Correlation Matrix
+              </button>
+              <button
+                onClick={() => setActiveView('portfolio')}
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                  activeView === 'portfolio'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                Portfolio
               </button>
             </div>
           )}
@@ -4928,6 +5106,360 @@ const PortfolioBacktester = () => {
                   </div>
                 );
               })()}
+            </div>
+          )}
+
+          {/* ============================================ */}
+          {/* PORTFOLIO TAB                                */}
+          {/* Shows annual portfolio data from the Years sheet: */}
+          {/* Chart 1: Portfolio Value (stacked bar)        */}
+          {/* Chart 2: Contributions & Profit (stacked + growth label) */}
+          {/* Chart 3: Returns by Year (grouped bars)       */}
+          {/* ============================================ */}
+          {isConnected && activeView === 'portfolio' && (
+            <div className="mt-2">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Portfolio</h2>
+
+              {yearsData.length === 0 ? (
+                <div className="bg-yellow-50 p-4 rounded-lg text-yellow-800">
+                  No data available. Make sure the &quot;Years&quot; sheet is published in your Google Spreadsheet.
+                </div>
+              ) : (
+                <>
+                  {/* Currency dropdown — affects Charts 1 & 2 only */}
+                  <div className="mb-4 flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-700">Currency:</span>
+                    <select
+                      value={portfolioCurrency}
+                      onChange={(e) => setPortfolioCurrency(e.target.value as typeof portfolioCurrency)}
+                      className="px-3 py-1.5 text-sm border border-gray-300 bg-white rounded-lg outline-none cursor-pointer"
+                    >
+                      {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Chart 1: Portfolio Value by Year — stacked bar chart */}
+                  {/* Bottom segment (black) = cumulative contributions */}
+                  {/* Top segment (yellow) = cumulative profit */}
+                  {(() => {
+                    // Pre-compute chart data so the custom label renderer can access it by index
+                    const valueChartData = getPortfolioValueChartData();
+                    return (
+                      <div className="bg-white p-4 rounded-lg shadow mb-4">
+                        <h3 className="text-md font-semibold text-gray-700 mb-2">Portfolio Value by Year ({CURRENCY_SYMBOLS[portfolioCurrency]})</h3>
+                        <ResponsiveContainer width="100%" height={350}>
+                          <BarChart
+                            data={valueChartData}
+                            margin={{ top: 30, right: 5, left: -15, bottom: 5 }}
+                          >
+                            <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v.toFixed(1)}M`} domain={[0, 'dataMax + 0.3']} />
+                            <Tooltip
+                              formatter={(value: number, name: string) => {
+                                const label = name === 'contrCumulative' ? 'Contributions' : 'Profit';
+                                return [`${value.toFixed(2)}M ${CURRENCY_SYMBOLS[portfolioCurrency]}`, label];
+                              }}
+                              labelFormatter={(label) => `Year: ${label}`}
+                            />
+                            {/* Bottom bar: Cumulative Contributions (black) with white label */}
+                            <Bar dataKey="contrCumulative" stackId="value" fill="#000000" name="contrCumulative">
+                              <LabelList
+                                dataKey="contrCumulative"
+                                position="center"
+                                formatter={(value: number) => value > 0 ? `${value.toFixed(2)}M` : ''}
+                                style={{ fontSize: '13px', fill: '#fff', fontWeight: 600 }}
+                              />
+                            </Bar>
+                            {/* Top bar: Cumulative Profit (yellow) with profit label + total above */}
+                            <Bar dataKey="profitCumulative" stackId="value" fill="#F5A623" name="profitCumulative">
+                              {/* Profit value on the yellow segment */}
+                              <LabelList
+                                dataKey="profitCumulative"
+                                position="center"
+                                formatter={(value: number) => value !== 0 ? `${value.toFixed(2)}M` : ''}
+                                style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
+                              />
+                              {/* Total (contributions + profit) above the bar — uses custom renderer */}
+                              {/* to read the full data entry and compute the sum */}
+                              <LabelList
+                                dataKey="profitCumulative"
+                                position="top"
+                                content={(props: any) => {
+                                  const { x, y, width, index } = props as { x: number; y: number; width: number; index: number };
+                                  const entry = valueChartData[index];
+                                  if (!entry) return null;
+                                  const total = entry.contrCumulative + entry.profitCumulative;
+                                  return (
+                                    <text
+                                      x={x + width / 2}
+                                      y={y - 18}
+                                      textAnchor="middle"
+                                      style={{ fontSize: '13px', fill: '#991b1b', fontWeight: 700 }}
+                                    >
+                                      {total.toFixed(2)}M
+                                    </text>
+                                  );
+                                }}
+                              />
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Chart 2: Contributions and Profit by Year — stacked bars + growth label */}
+                  {/* Bottom segment (black) = contributions for the year */}
+                  {/* Top segment (yellow) = profit for the year */}
+                  {/* Growth label above bar = contributions + profit for that year */}
+                  {(() => {
+                    const cpChartData = getContributionsProfitChartData();
+                    return (
+                  <div className="bg-white p-4 rounded-lg shadow mb-4">
+                    <h3 className="text-md font-semibold text-gray-700 mb-2">Contributions and Profit by Year ({CURRENCY_SYMBOLS[portfolioCurrency]})</h3>
+                    <ResponsiveContainer width="100%" height={350}>
+                      <ComposedChart
+                        data={cpChartData}
+                        margin={{ top: 30, right: 5, left: -15, bottom: 5 }}
+                      >
+                        <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => {
+                          if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(0)}k`;
+                          return v.toFixed(0);
+                        }} />
+                        <Tooltip
+                          content={({ active, payload, label }) => {
+                            if (!active || !payload || !payload.length) return null;
+                            const entry = payload[0]?.payload;
+                            if (!entry) return null;
+                            const sym = CURRENCY_SYMBOLS[portfolioCurrency];
+                            return (
+                              <div className="bg-white border border-gray-200 rounded shadow px-3 py-2 text-sm">
+                                <div className="font-semibold mb-1">Year: {label}</div>
+                                <div>Contributions: {Math.round(entry.contributions).toLocaleString()} {sym}</div>
+                                <div style={{ color: entry.profit < 0 ? '#ef4444' : undefined }}>
+                                  Profit: {Math.round(entry.profit).toLocaleString()} {sym}
+                                </div>
+                                <div className="font-semibold mt-1">Total: {Math.round(entry.growthTotal).toLocaleString()} {sym}</div>
+                              </div>
+                            );
+                          }}
+                        />
+                        {/* Negative profit (yellow) — renders below zero when loss occurs */}
+                        {/* Must be FIRST in the stack so it extends downward from 0 */}
+                        <Bar dataKey="profitNegative" stackId="cp" fill="#F5A623" name="profitNegative">
+                          {/* Custom label: placed at a fixed 20px below the bar baseline */}
+                          <LabelList
+                            dataKey="profitNegative"
+                            content={(props: any) => {
+                              const { x, y, width, height, index } = props as { x: number; y: number; width: number; height: number; index: number };
+                              const entry = cpChartData[index];
+                              if (!entry || entry.profit >= 0) return null;
+                              const formatted = Math.abs(entry.profit) >= 1000
+                                ? `${(Math.abs(entry.profit) / 1000).toFixed(0)}k`
+                                : Math.abs(Math.round(entry.profit)).toLocaleString();
+                              return (
+                                <text
+                                  x={x + width / 2}
+                                  y={y + Math.abs(height) + 18}
+                                  textAnchor="middle"
+                                  style={{ fontSize: '15px', fill: '#ef4444', fontWeight: 700 }}
+                                >
+                                  ({formatted})
+                                </text>
+                              );
+                            }}
+                          />
+                        </Bar>
+                        {/* Middle bar: Contributions (black) */}
+                        <Bar dataKey="contributions" stackId="cp" fill="#000000" name="contributions">
+                          <LabelList
+                            dataKey="contributions"
+                            position="center"
+                            formatter={(value: number) => {
+                              if (value === 0) return '';
+                              if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(0)}k`;
+                              return Math.round(value).toLocaleString();
+                            }}
+                            style={{ fontSize: '13px', fill: '#fff', fontWeight: 600 }}
+                          />
+                        </Bar>
+                        {/* Top bar: Positive profit (yellow) — stacked above contributions */}
+                        <Bar dataKey="profitPositive" stackId="cp" fill="#F5A623" name="profitPositive">
+                          <LabelList
+                            dataKey="profitPositive"
+                            position="center"
+                            formatter={(value: number) => {
+                              if (value === 0) return '';
+                              if (value >= 1000) return `${(value / 1000).toFixed(0)}k`;
+                              return Math.round(value).toLocaleString();
+                            }}
+                            style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
+                          />
+                        </Bar>
+                        {/* Invisible line used only to place the growth total label above each bar */}
+                        <Line
+                          dataKey="growthTotal"
+                          stroke="transparent"
+                          dot={false}
+                          activeDot={false}
+                          legendType="none"
+                          name="growthTotal"
+                        >
+                          <LabelList
+                            dataKey="growthTotal"
+                            position="top"
+                            formatter={(value: number) => {
+                              const sym = CURRENCY_SYMBOLS[portfolioCurrency];
+                              if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(0)}k ${sym}`;
+                              return `${Math.round(value).toLocaleString()} ${sym}`;
+                            }}
+                            style={{ fontSize: '13px', fill: '#991b1b', fontWeight: 700 }}
+                            offset={18}
+                          />
+                        </Line>
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                    );
+                  })()}
+
+                  {/* Chart 3: Returns by Year — grouped bar chart */}
+                  {/* Three bars per year: Return PLN (black), Return USD (red), Return SGD (yellow) */}
+                  {/* NOT affected by the currency dropdown — these are pre-calculated in the sheet */}
+                  <div className="bg-white p-4 rounded-lg shadow mb-4">
+                    <h3 className="text-md font-semibold text-gray-700 mb-2">Returns by Year (%)</h3>
+                    <ResponsiveContainer width="100%" height={350}>
+                      <BarChart
+                        data={getReturnsChartData()}
+                        margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
+                      >
+                        <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                        <YAxis hide domain={['auto', 'auto']} />
+                        <Tooltip
+                          formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
+                          labelFormatter={(label) => `Year: ${label}`}
+                        />
+                        <Legend />
+                        {/* Return PLN bar (black) */}
+                        <Bar dataKey="Return PLN" fill="#000000">
+                          <LabelList
+                            dataKey="Return PLN"
+                            position="top"
+                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#666' }}
+                          />
+                          <LabelList
+                            dataKey="Return PLN"
+                            position="bottom"
+                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#ef4444' }}
+                          />
+                        </Bar>
+                        {/* Return USD bar (red) */}
+                        <Bar dataKey="Return USD" fill="#ef4444">
+                          <LabelList
+                            dataKey="Return USD"
+                            position="top"
+                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#666' }}
+                          />
+                          <LabelList
+                            dataKey="Return USD"
+                            position="bottom"
+                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#ef4444' }}
+                          />
+                        </Bar>
+                        {/* Return SGD bar (yellow) */}
+                        <Bar dataKey="Return SGD" fill="#F5A623">
+                          <LabelList
+                            dataKey="Return SGD"
+                            position="top"
+                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#666' }}
+                          />
+                          <LabelList
+                            dataKey="Return SGD"
+                            position="bottom"
+                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#ef4444' }}
+                          />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Chart 4: Growth by Year — grouped bar chart */}
+                  {/* Shows YoY % change in portfolio value, computed from endAmount + FX rates */}
+                  {/* Three bars per year: Growth PLN (black), Growth USD (red), Growth SGD (yellow) */}
+                  {/* NOT affected by the currency dropdown — always shows all 3 currencies */}
+                  <div className="bg-white p-4 rounded-lg shadow mb-4">
+                    <h3 className="text-md font-semibold text-gray-700 mb-2">Growth by Year (%)</h3>
+                    <ResponsiveContainer width="100%" height={350}>
+                      <BarChart
+                        data={getGrowthByYearChartData()}
+                        margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
+                      >
+                        <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                        <YAxis hide domain={['auto', 'auto']} />
+                        <Tooltip
+                          formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
+                          labelFormatter={(label) => `Year: ${label}`}
+                        />
+                        <Legend />
+                        {/* Growth PLN bar (black) */}
+                        <Bar dataKey="Growth PLN" fill="#000000">
+                          <LabelList
+                            dataKey="Growth PLN"
+                            position="top"
+                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#666' }}
+                          />
+                          <LabelList
+                            dataKey="Growth PLN"
+                            position="bottom"
+                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#ef4444' }}
+                          />
+                        </Bar>
+                        {/* Growth USD bar (red) */}
+                        <Bar dataKey="Growth USD" fill="#ef4444">
+                          <LabelList
+                            dataKey="Growth USD"
+                            position="top"
+                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#666' }}
+                          />
+                          <LabelList
+                            dataKey="Growth USD"
+                            position="bottom"
+                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#ef4444' }}
+                          />
+                        </Bar>
+                        {/* Growth SGD bar (yellow) */}
+                        <Bar dataKey="Growth SGD" fill="#F5A623">
+                          <LabelList
+                            dataKey="Growth SGD"
+                            position="top"
+                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#666' }}
+                          />
+                          <LabelList
+                            dataKey="Growth SGD"
+                            position="bottom"
+                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                            style={{ fontSize: '11px', fill: '#ef4444' }}
+                          />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>

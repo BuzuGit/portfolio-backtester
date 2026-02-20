@@ -17,8 +17,10 @@ const SHEET_BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM
 
 // URLs for each tab (sheet) in the spreadsheet
 // gid=0 is the first tab (raw price data), gid=166035960 is the lookup table
+// gid=2044431115 is the Years tab (annual portfolio summary data)
 const DATA_SHEET_URL = `${SHEET_BASE_URL}?gid=0&output=csv`;
 const LOOKUP_SHEET_URL = `${SHEET_BASE_URL}?gid=166035960&output=csv`;
+const YEARS_SHEET_URL = `${SHEET_BASE_URL}?gid=2044431115&output=csv`;
 
 // Type definitions - these describe the shape of our data
 // (TypeScript uses these to catch errors and provide autocomplete)
@@ -37,10 +39,39 @@ export interface AssetLookup {
   assetClass: string; // e.g., "Equities", "Fixed Income", "Alternatives"
 }
 
+// Annual portfolio summary data from the "Years" sheet
+// Contains contributions, profits, cumulative values, FX rates, and returns per year
+// Column names from the actual spreadsheet:
+//   Date, Month, Year, Start Amount, Contributions, Profit, End Amount,
+//   Contr Cumulative, Profit Cumulative,
+//   USD End Period, USD AVG, SGD End Period, SGD AVG,
+//   CHF End Period, CHF AVG, EUR End Period, EUR AVG,
+//   Return PLN, Return USD, Return SGD
+export interface YearsRow {
+  date: string;              // Year label (e.g., "2019")
+  contributions: number;     // Amount contributed that year (PLN)
+  profit: number;            // Profit/loss that year (PLN) — can be negative
+  contrCumulative: number;   // Total contributions to date (PLN)
+  profitCumulative: number;  // Total profit to date (PLN) — can be negative
+  endAmount: number;         // End-of-year portfolio value (PLN)
+  avgUsdPln: number;         // Average USD/PLN exchange rate for the year
+  endUsdPln: number;         // End-of-period USD/PLN rate
+  avgEurPln: number;         // Average EUR/PLN exchange rate
+  endEurPln: number;         // End-of-period EUR/PLN rate
+  avgChfPln: number;         // Average CHF/PLN exchange rate
+  endChfPln: number;         // End-of-period CHF/PLN rate
+  avgSgdPln: number;         // Average SGD/PLN exchange rate
+  endSgdPln: number;         // End-of-period SGD/PLN rate
+  returnPln: number;         // Annual return in PLN (%) — can be negative
+  returnUsd: number;         // Annual return in USD (%) — can be negative
+  returnSgd: number;         // Annual return in SGD (%) — can be negative
+}
+
 export interface ParsedData {
   data: AssetRow[];           // Array of rows, each with date and asset prices
   assets: string[];           // List of asset names found in the CSV
   lookup: AssetLookup[];      // Lookup table with ticker-to-name mappings
+  yearsData: YearsRow[];      // Annual portfolio summary (from Years sheet)
 }
 
 /**
@@ -52,13 +83,14 @@ export interface ParsedData {
  * @throws Error if fetch fails or data is invalid
  */
 export async function fetchSheetData(): Promise<ParsedData> {
-  // Fetch both sheets in parallel for speed
-  const [dataResponse, lookupResponse] = await Promise.all([
+  // Fetch all three sheets in parallel for speed
+  const [dataResponse, lookupResponse, yearsResponse] = await Promise.all([
     fetch(DATA_SHEET_URL, { cache: 'no-cache' }),
-    fetch(LOOKUP_SHEET_URL, { cache: 'no-cache' })
+    fetch(LOOKUP_SHEET_URL, { cache: 'no-cache' }),
+    fetch(YEARS_SHEET_URL, { cache: 'no-cache' }).catch(() => null) // Years sheet is optional — don't break the app if it fails
   ]);
 
-  // Check if both fetches were successful
+  // Check if core fetches were successful
   if (!dataResponse.ok) {
     throw new Error(`Failed to fetch price data: ${dataResponse.status} ${dataResponse.statusText}`);
   }
@@ -66,19 +98,31 @@ export async function fetchSheetData(): Promise<ParsedData> {
     throw new Error(`Failed to fetch lookup table: ${lookupResponse.status} ${lookupResponse.statusText}`);
   }
 
-  // Get CSV text from both responses
+  // Get CSV text from responses
   const [dataCsvText, lookupCsvText] = await Promise.all([
     dataResponse.text(),
     lookupResponse.text()
   ]);
 
-  // Parse both CSVs
+  // Parse core CSVs
   const { data, assets } = parseSheetData(dataCsvText);
   const lookup = parseLookupTable(lookupCsvText);
 
+  // Parse Years sheet if it loaded successfully (wrapped in try/catch so it can't break the app)
+  let yearsData: YearsRow[] = [];
+  try {
+    if (yearsResponse && yearsResponse.ok) {
+      const yearsCsvText = await yearsResponse.text();
+      yearsData = parseYearsData(yearsCsvText);
+      console.log(`Years sheet: parsed ${yearsData.length} rows`);
+    }
+  } catch (err) {
+    console.warn('Failed to parse Years sheet (non-fatal):', err);
+  }
+
   console.log(`Lookup table has ${lookup.length} assets: ${lookup.map(l => l.ticker).join(', ')}`);
 
-  return { data, assets, lookup };
+  return { data, assets, lookup, yearsData };
 }
 
 /**
@@ -175,6 +219,83 @@ function parseCSVLine(line: string, delimiter: string = ','): string[] {
   result.push(current);
 
   return result;
+}
+
+/**
+ * Parses the "Years" sheet CSV into YearsRow objects.
+ *
+ * This parser is different from parseSheetData because:
+ * - It maps columns by header name (not position), so column order doesn't matter
+ * - It allows NEGATIVE numbers (needed for Profit and Return columns)
+ * - It handles percentage signs (e.g., "12.5%" → 12.5)
+ *
+ * @param csvText - The raw CSV content from the Years sheet
+ * @returns Array of YearsRow objects, one per year
+ */
+function parseYearsData(csvText: string): YearsRow[] {
+  const lines = csvText.trim().split('\n');
+
+  if (lines.length < 2) {
+    console.warn('Years sheet is empty or has no data rows');
+    return [];
+  }
+
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+  const headers = parseCSVLine(lines[0], delimiter).map(h => h.trim());
+
+  // Build a map from column header name → column index
+  // This way we're not dependent on column order in the spreadsheet
+  const colIndex: { [key: string]: number } = {};
+  headers.forEach((h, i) => { colIndex[h] = i; });
+
+  // Helper: reads a numeric value from a row by column name
+  // Handles commas, percentage signs, and negative numbers
+  const readNum = (values: string[], colName: string): number => {
+    const idx = colIndex[colName];
+    if (idx === undefined || idx >= values.length) return 0;
+    const raw = values[idx].trim();
+    if (!raw) return 0;
+    // Remove commas and percentage signs, keep minus sign
+    const clean = raw.replace(/,/g, '').replace(/%/g, '');
+    const num = parseFloat(clean);
+    return isNaN(num) ? 0 : num;
+  };
+
+  const rows: YearsRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    const values = parseCSVLine(line, delimiter);
+
+    // First column is the date/year
+    const dateIdx = colIndex['Date'] ?? 0;
+    const date = values[dateIdx]?.trim() || '';
+    if (!date) continue;
+
+    rows.push({
+      date,
+      contributions:    readNum(values, 'Contributions'),
+      profit:           readNum(values, 'Profit'),
+      contrCumulative:  readNum(values, 'Contr Cumulative'),
+      profitCumulative: readNum(values, 'Profit Cumulative'),
+      endAmount:        readNum(values, 'End Amount'),
+      avgUsdPln:        readNum(values, 'USD AVG'),
+      endUsdPln:        readNum(values, 'USD End Period'),
+      avgEurPln:        readNum(values, 'EUR AVG'),
+      endEurPln:        readNum(values, 'EUR End Period'),
+      avgChfPln:        readNum(values, 'CHF AVG'),
+      endChfPln:        readNum(values, 'CHF End Period'),
+      avgSgdPln:        readNum(values, 'SGD AVG'),
+      endSgdPln:        readNum(values, 'SGD End Period'),
+      returnPln:        readNum(values, 'Return PLN'),
+      returnUsd:        readNum(values, 'Return USD'),
+      returnSgd:        readNum(values, 'Return SGD'),
+    });
+  }
+
+  return rows;
 }
 
 /**
