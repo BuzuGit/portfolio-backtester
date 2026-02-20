@@ -44,8 +44,9 @@ export interface AssetLookup {
 // Column names from the actual spreadsheet:
 //   Date, Month, Year, Start Amount, Contributions, Profit, End Amount,
 //   Contr Cumulative, Profit Cumulative,
-//   USD End Period, USD AVG, SGD End Period, SGD AVG,
-//   CHF End Period, CHF AVG, EUR End Period, EUR AVG,
+//   USD End Period, USD AVG, USD Start Period,
+//   SGD End Period, SGD AVG, SGD Start Period,
+//   CHF End Period, CHF AVG, EUR End Period, EUR AVG, EUR Start Period,
 //   Return PLN, Return USD, Return SGD
 export interface YearsRow {
   date: string;              // Year label (e.g., "2019")
@@ -54,6 +55,10 @@ export interface YearsRow {
   contrCumulative: number;   // Total contributions to date (PLN)
   profitCumulative: number;  // Total profit to date (PLN) — can be negative
   endAmount: number;         // End-of-year portfolio value (PLN)
+  startAmount: number;       // Start-of-year portfolio value (PLN)
+  startUsdPln: number;       // Start-of-period USD/PLN rate
+  startSgdPln: number;       // Start-of-period SGD/PLN rate
+  startEurPln: number;       // Start-of-period EUR/PLN rate
   avgUsdPln: number;         // Average USD/PLN exchange rate for the year
   endUsdPln: number;         // End-of-period USD/PLN rate
   avgEurPln: number;         // Average EUR/PLN exchange rate
@@ -281,6 +286,10 @@ function parseYearsData(csvText: string): YearsRow[] {
       contrCumulative:  readNum(values, 'Contr Cumulative'),
       profitCumulative: readNum(values, 'Profit Cumulative'),
       endAmount:        readNum(values, 'End Amount'),
+      startAmount:      readNum(values, 'Start Amount'),
+      startUsdPln:      readNum(values, 'USD Start Period'),
+      startSgdPln:      readNum(values, 'SGD Start Period'),
+      startEurPln:      readNum(values, 'EUR Start Period'),
       avgUsdPln:        readNum(values, 'USD AVG'),
       endUsdPln:        readNum(values, 'USD End Period'),
       avgEurPln:        readNum(values, 'EUR AVG'),

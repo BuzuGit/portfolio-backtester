@@ -273,6 +273,11 @@ const PortfolioBacktester = () => {
   const [yearsData, setYearsData] = useState<YearsRow[]>([]);
   // Which currency to display monetary values in (Charts 1 & 2)
   const [portfolioCurrency, setPortfolioCurrency] = useState<'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD'>('PLN');
+  // Which currencies are shown in Charts 3 & 4 (Returns/Growth by Year)
+  // All three selected by default; user can toggle individual currencies on/off
+  const [selectedReturnCurrencies, setSelectedReturnCurrencies] = useState<string[]>(['PLN', 'USD', 'SGD']);
+  // Whether the currency filter dropdown for Charts 3 & 4 is open
+  const [returnCurrencyDropdownOpen, setReturnCurrencyDropdownOpen] = useState(false);
 
   // Asset filtering state (shared across Annual Returns, Best To Worst, Monthly Prices tabs)
   // These filters let users narrow down which assets are displayed in the tables
@@ -2075,38 +2080,33 @@ const PortfolioBacktester = () => {
   /**
    * Chart 4 data: Growth by Year (grouped bars)
    * Calculates year-over-year % change in portfolio value for PLN, USD, and SGD.
-   * Unlike "Returns by Year" (which uses pre-calculated return %), this computes
-   * growth from the actual endAmount values, converting to each currency via FX rates.
-   * The first year is skipped because there's no prior year to compare against.
+   * Each row is self-contained: uses its own startAmount and start-of-period FX rates
+   * so no previous-row lookup is needed. This includes the first year (2016).
    * NOT affected by the currency dropdown — always shows all 3 currencies.
    */
   const getGrowthByYearChartData = () => {
     const result: { year: string; 'Growth PLN': number; 'Growth USD': number; 'Growth SGD': number }[] = [];
 
-    for (let i = 1; i < yearsData.length; i++) {
-      const prev = yearsData[i - 1];
-      const curr = yearsData[i];
+    for (const row of yearsData) {
+      // Skip if startAmount is 0 (can't compute % change from zero)
+      if (!row.startAmount) continue;
 
-      // Skip if prior year's endAmount is 0 (can't compute % change from zero)
-      if (!prev.endAmount) continue;
+      // PLN growth: % change from start to end of year
+      const growthPln = ((row.endAmount - row.startAmount) / row.startAmount) * 100;
 
-      // PLN growth: simple YoY % change in PLN portfolio value
-      const growthPln = ((curr.endAmount - prev.endAmount) / prev.endAmount) * 100;
+      // USD growth: convert start and end amounts to USD, then compute % change
+      if (!row.startUsdPln || !row.endUsdPln) continue;
+      const startUsd = row.startAmount / row.startUsdPln;
+      const endUsd = row.endAmount / row.endUsdPln;
+      const growthUsd = ((endUsd - startUsd) / startUsd) * 100;
 
-      // USD growth: convert both years' endAmount to USD, then compute % change
-      // Skip if either year's FX rate is missing/zero
-      if (!prev.endUsdPln || !curr.endUsdPln) continue;
-      const prevUsd = prev.endAmount / prev.endUsdPln;
-      const currUsd = curr.endAmount / curr.endUsdPln;
-      const growthUsd = ((currUsd - prevUsd) / prevUsd) * 100;
+      // SGD growth: convert start and end amounts to SGD, then compute % change
+      if (!row.startSgdPln || !row.endSgdPln) continue;
+      const startSgd = row.startAmount / row.startSgdPln;
+      const endSgd = row.endAmount / row.endSgdPln;
+      const growthSgd = ((endSgd - startSgd) / startSgd) * 100;
 
-      // SGD growth: convert both years' endAmount to SGD, then compute % change
-      if (!prev.endSgdPln || !curr.endSgdPln) continue;
-      const prevSgd = prev.endAmount / prev.endSgdPln;
-      const currSgd = curr.endAmount / curr.endSgdPln;
-      const growthSgd = ((currSgd - prevSgd) / prevSgd) * 100;
-
-      const year = curr.date.includes('-') ? curr.date.split('-')[0] : curr.date;
+      const year = row.date.includes('-') ? row.date.split('-')[0] : row.date;
       result.push({
         year,
         'Growth PLN': parseFloat(growthPln.toFixed(1)),
@@ -5326,9 +5326,57 @@ const PortfolioBacktester = () => {
                     );
                   })()}
 
+                  {/* Currency filter dropdown — controls which bars appear in Charts 3 & 4 */}
+                  <div className="mb-4 relative inline-block">
+                    <button
+                      onClick={() => setReturnCurrencyDropdownOpen(!returnCurrencyDropdownOpen)}
+                      className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+                        returnCurrencyDropdownOpen ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="font-medium">Currencies:</span>
+                      <span className="text-gray-600">
+                        {selectedReturnCurrencies.length === 3 ? 'All' : selectedReturnCurrencies.length === 0 ? 'None' : selectedReturnCurrencies.join(', ')}
+                      </span>
+                      <svg className={`w-4 h-4 transition-transform ${returnCurrencyDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    {returnCurrencyDropdownOpen && (
+                      <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px]">
+                        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+                          <span className="text-sm font-medium text-gray-700">Show Currencies</span>
+                          <button
+                            onClick={() => setSelectedReturnCurrencies(selectedReturnCurrencies.length === 3 ? [] : ['PLN', 'USD', 'SGD'])}
+                            className="text-xs text-blue-600 hover:underline"
+                          >
+                            {selectedReturnCurrencies.length === 3 ? 'Deselect All' : 'Select All'}
+                          </button>
+                        </div>
+                        <div className="p-2">
+                          {(['PLN', 'USD', 'SGD'] as const).map(c => (
+                            <label key={c} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
+                              <input
+                                type="checkbox"
+                                checked={selectedReturnCurrencies.includes(c)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedReturnCurrencies([...selectedReturnCurrencies, c]);
+                                  } else {
+                                    setSelectedReturnCurrencies(selectedReturnCurrencies.filter(x => x !== c));
+                                  }
+                                }}
+                              />
+                              <span>{c}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Chart 3: Returns by Year — grouped bar chart */}
-                  {/* Three bars per year: Return PLN (black), Return USD (red), Return SGD (yellow) */}
-                  {/* NOT affected by the currency dropdown — these are pre-calculated in the sheet */}
+                  {/* Bars shown/hidden based on selectedReturnCurrencies */}
                   <div className="bg-white p-4 rounded-lg shadow mb-4">
                     <h3 className="text-md font-semibold text-gray-700 mb-2">Returns by Year (%)</h3>
                     <ResponsiveContainer width="100%" height={350}>
@@ -5343,59 +5391,60 @@ const PortfolioBacktester = () => {
                           labelFormatter={(label) => `Year: ${label}`}
                         />
                         <Legend />
-                        {/* Return PLN bar (black) */}
-                        <Bar dataKey="Return PLN" fill="#000000">
-                          <LabelList
-                            dataKey="Return PLN"
-                            position="top"
-                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#666' }}
-                          />
-                          <LabelList
-                            dataKey="Return PLN"
-                            position="bottom"
-                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#ef4444' }}
-                          />
-                        </Bar>
-                        {/* Return USD bar (red) */}
-                        <Bar dataKey="Return USD" fill="#ef4444">
-                          <LabelList
-                            dataKey="Return USD"
-                            position="top"
-                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#666' }}
-                          />
-                          <LabelList
-                            dataKey="Return USD"
-                            position="bottom"
-                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#ef4444' }}
-                          />
-                        </Bar>
-                        {/* Return SGD bar (yellow) */}
-                        <Bar dataKey="Return SGD" fill="#F5A623">
-                          <LabelList
-                            dataKey="Return SGD"
-                            position="top"
-                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#666' }}
-                          />
-                          <LabelList
-                            dataKey="Return SGD"
-                            position="bottom"
-                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#ef4444' }}
-                          />
-                        </Bar>
+                        {selectedReturnCurrencies.includes('PLN') && (
+                          <Bar dataKey="Return PLN" fill="#000000">
+                            <LabelList
+                              dataKey="Return PLN"
+                              position="top"
+                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#666' }}
+                            />
+                            <LabelList
+                              dataKey="Return PLN"
+                              position="bottom"
+                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                            />
+                          </Bar>
+                        )}
+                        {selectedReturnCurrencies.includes('USD') && (
+                          <Bar dataKey="Return USD" fill="#ef4444">
+                            <LabelList
+                              dataKey="Return USD"
+                              position="top"
+                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#666' }}
+                            />
+                            <LabelList
+                              dataKey="Return USD"
+                              position="bottom"
+                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                            />
+                          </Bar>
+                        )}
+                        {selectedReturnCurrencies.includes('SGD') && (
+                          <Bar dataKey="Return SGD" fill="#F5A623">
+                            <LabelList
+                              dataKey="Return SGD"
+                              position="top"
+                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#666' }}
+                            />
+                            <LabelList
+                              dataKey="Return SGD"
+                              position="bottom"
+                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                            />
+                          </Bar>
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
 
                   {/* Chart 4: Growth by Year — grouped bar chart */}
-                  {/* Shows YoY % change in portfolio value, computed from endAmount + FX rates */}
-                  {/* Three bars per year: Growth PLN (black), Growth USD (red), Growth SGD (yellow) */}
-                  {/* NOT affected by the currency dropdown — always shows all 3 currencies */}
+                  {/* Bars shown/hidden based on selectedReturnCurrencies */}
                   <div className="bg-white p-4 rounded-lg shadow mb-4">
                     <h3 className="text-md font-semibold text-gray-700 mb-2">Growth by Year (%)</h3>
                     <ResponsiveContainer width="100%" height={350}>
@@ -5410,51 +5459,54 @@ const PortfolioBacktester = () => {
                           labelFormatter={(label) => `Year: ${label}`}
                         />
                         <Legend />
-                        {/* Growth PLN bar (black) */}
-                        <Bar dataKey="Growth PLN" fill="#000000">
-                          <LabelList
-                            dataKey="Growth PLN"
-                            position="top"
-                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#666' }}
-                          />
-                          <LabelList
-                            dataKey="Growth PLN"
-                            position="bottom"
-                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#ef4444' }}
-                          />
-                        </Bar>
-                        {/* Growth USD bar (red) */}
-                        <Bar dataKey="Growth USD" fill="#ef4444">
-                          <LabelList
-                            dataKey="Growth USD"
-                            position="top"
-                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#666' }}
-                          />
-                          <LabelList
-                            dataKey="Growth USD"
-                            position="bottom"
-                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#ef4444' }}
-                          />
-                        </Bar>
-                        {/* Growth SGD bar (yellow) */}
-                        <Bar dataKey="Growth SGD" fill="#F5A623">
-                          <LabelList
-                            dataKey="Growth SGD"
-                            position="top"
-                            formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#666' }}
-                          />
-                          <LabelList
-                            dataKey="Growth SGD"
-                            position="bottom"
-                            formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                            style={{ fontSize: '11px', fill: '#ef4444' }}
-                          />
-                        </Bar>
+                        {selectedReturnCurrencies.includes('PLN') && (
+                          <Bar dataKey="Growth PLN" fill="#000000">
+                            <LabelList
+                              dataKey="Growth PLN"
+                              position="top"
+                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#666' }}
+                            />
+                            <LabelList
+                              dataKey="Growth PLN"
+                              position="bottom"
+                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                            />
+                          </Bar>
+                        )}
+                        {selectedReturnCurrencies.includes('USD') && (
+                          <Bar dataKey="Growth USD" fill="#ef4444">
+                            <LabelList
+                              dataKey="Growth USD"
+                              position="top"
+                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#666' }}
+                            />
+                            <LabelList
+                              dataKey="Growth USD"
+                              position="bottom"
+                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                            />
+                          </Bar>
+                        )}
+                        {selectedReturnCurrencies.includes('SGD') && (
+                          <Bar dataKey="Growth SGD" fill="#F5A623">
+                            <LabelList
+                              dataKey="Growth SGD"
+                              position="top"
+                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#666' }}
+                            />
+                            <LabelList
+                              dataKey="Growth SGD"
+                              position="bottom"
+                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                            />
+                          </Bar>
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
