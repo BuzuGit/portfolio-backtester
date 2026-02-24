@@ -6126,7 +6126,7 @@ const PortfolioBacktester = () => {
                   : [];
 
                 // Merge chart data with comparison data for the LineChart
-                const mergedChartData = chartData.map(d => {
+                const mergedChartData: { date: string; price: number; avgBuyPrice?: number; compPrice?: number }[] = chartData.map(d => {
                   const comp = comparisonData.find(c => c.date === d.date);
                   return { ...d, compPrice: comp ? comp.normalizedPrice : undefined };
                 });
@@ -6134,7 +6134,7 @@ const PortfolioBacktester = () => {
                 const baseDates = new Set(chartData.map(d => d.date));
                 comparisonData.forEach(c => {
                   if (!baseDates.has(c.date)) {
-                    mergedChartData.push({ date: c.date, price: undefined as unknown as number, compPrice: c.normalizedPrice, avgBuyPrice: undefined });
+                    mergedChartData.push({ date: c.date, price: undefined as unknown as number, compPrice: c.normalizedPrice });
                   }
                 });
                 mergedChartData.sort((a, b) => a.date.localeCompare(b.date));
