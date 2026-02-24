@@ -21,6 +21,8 @@ const SHEET_BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM
 const DATA_SHEET_URL = `${SHEET_BASE_URL}?gid=0&output=csv`;
 const LOOKUP_SHEET_URL = `${SHEET_BASE_URL}?gid=166035960&output=csv`;
 const YEARS_SHEET_URL = `${SHEET_BASE_URL}?gid=2044431115&output=csv`;
+// gid=2134130819 is the Closed tab (buy/sell transactions for closed positions)
+const CLOSED_SHEET_URL = `${SHEET_BASE_URL}?gid=2134130819&output=csv`;
 
 // Type definitions - these describe the shape of our data
 // (TypeScript uses these to catch errors and provide autocomplete)
@@ -72,11 +74,46 @@ export interface YearsRow {
   returnSgd: number;         // Annual return in SGD (%) — can be negative
 }
 
+// Closed position (buy/sell transaction) from the "Closed" sheet
+// Each row represents one buy-sell cycle for a particular asset
+// The same ticker can appear multiple times (multiple buy/sell transactions)
+// Column names from the actual spreadsheet:
+//   Inv Date, Div date, Holding Period (D), Holding Period (Y), Ticker, Asset,
+//   Total #shares bought, Total #shares sold, # Shares Sold, Buy Price, Buy Comm.,
+//   Initial Cost, Sell price, Sell Comm., Value after fee, Cum. Dividend, Total tax,
+//   Proceeds from Sale, Final Net Value incl Div
+export interface ClosedPositionRow {
+  invDate: string;              // Investment (buy) date
+  divDate: string;              // Divestment (sale) date
+  holdingPeriodDays: number;    // How many days the position was held
+  holdingPeriodYears: number;   // How many years the position was held (decimal)
+  ticker: string;               // Ticker symbol (e.g., "GLD")
+  asset: string;                // Asset name (e.g., "Gold ETF")
+  totalSharesBought: number;    // Total shares bought across all transactions for this asset
+  totalSharesSold: number;      // Total shares sold across all transactions for this asset
+  sharesSold: number;           // Shares sold in THIS specific transaction
+  buyPrice: number;             // Price per share at purchase
+  buyCommission: number;        // Commission paid on the buy
+  initialCost: number;          // Total cost of the purchase (price × shares + commission)
+  sellPrice: number;            // Price per share at sale
+  sellCommission: number;       // Commission paid on the sell
+  valueAfterFee: number;        // Sale proceeds minus sell commission
+  cumDividend: number;          // Cumulative dividends received during holding
+  totalTax: number;             // Total tax paid on the transaction
+  proceedsFromSale: number;     // Net proceeds from sale after tax
+  finalNetValue: number;        // Final net value including dividends
+  // Computed fields (calculated during parsing):
+  totalReturn: number;          // finalNetValue - initialCost (profit/loss in currency)
+  totalReturnPct: number;       // (totalReturn / initialCost) × 100
+  cagr: number;                 // Compound annual growth rate (%)
+}
+
 export interface ParsedData {
   data: AssetRow[];           // Array of rows, each with date and asset prices
   assets: string[];           // List of asset names found in the CSV
   lookup: AssetLookup[];      // Lookup table with ticker-to-name mappings
   yearsData: YearsRow[];      // Annual portfolio summary (from Years sheet)
+  closedData: ClosedPositionRow[];  // Closed position transactions (from Closed sheet)
 }
 
 /**
@@ -88,11 +125,12 @@ export interface ParsedData {
  * @throws Error if fetch fails or data is invalid
  */
 export async function fetchSheetData(): Promise<ParsedData> {
-  // Fetch all three sheets in parallel for speed
-  const [dataResponse, lookupResponse, yearsResponse] = await Promise.all([
+  // Fetch all four sheets in parallel for speed
+  const [dataResponse, lookupResponse, yearsResponse, closedResponse] = await Promise.all([
     fetch(DATA_SHEET_URL, { cache: 'no-cache' }),
     fetch(LOOKUP_SHEET_URL, { cache: 'no-cache' }),
-    fetch(YEARS_SHEET_URL, { cache: 'no-cache' }).catch(() => null) // Years sheet is optional — don't break the app if it fails
+    fetch(YEARS_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Years sheet is optional — don't break the app if it fails
+    fetch(CLOSED_SHEET_URL, { cache: 'no-cache' }).catch(() => null) // Closed sheet is optional too
   ]);
 
   // Check if core fetches were successful
@@ -125,9 +163,21 @@ export async function fetchSheetData(): Promise<ParsedData> {
     console.warn('Failed to parse Years sheet (non-fatal):', err);
   }
 
+  // Parse Closed sheet if it loaded successfully (same non-fatal pattern as Years)
+  let closedData: ClosedPositionRow[] = [];
+  try {
+    if (closedResponse && closedResponse.ok) {
+      const closedCsvText = await closedResponse.text();
+      closedData = parseClosedData(closedCsvText);
+      console.log(`Closed sheet: parsed ${closedData.length} rows`);
+    }
+  } catch (err) {
+    console.warn('Failed to parse Closed sheet (non-fatal):', err);
+  }
+
   console.log(`Lookup table has ${lookup.length} assets: ${lookup.map(l => l.ticker).join(', ')}`);
 
-  return { data, assets, lookup, yearsData };
+  return { data, assets, lookup, yearsData, closedData };
 }
 
 /**
@@ -301,6 +351,184 @@ function parseYearsData(csvText: string): YearsRow[] {
       returnPln:        readNum(values, 'Return PLN'),
       returnUsd:        readNum(values, 'Return USD'),
       returnSgd:        readNum(values, 'Return SGD'),
+    });
+  }
+
+  return rows;
+}
+
+/**
+ * Normalizes various date formats (e.g., "1/15/2020", "2020-01-15", "01/15/2020")
+ * into a consistent YYYY-MM-DD format that matches our price data.
+ *
+ * @param dateStr - A date string in any common format
+ * @returns Normalized date string in YYYY-MM-DD format, or original if parsing fails
+ */
+function normalizeDate(dateStr: string): string {
+  if (!dateStr) return '';
+  const trimmed = dateStr.trim();
+
+  // Already in YYYY-MM-DD format
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+
+  // Try parsing with Date constructor (handles most formats)
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  return trimmed; // Return as-is if we can't parse it
+}
+
+/**
+ * Splits CSV text into logical rows, correctly handling quoted fields that
+ * contain newlines. Standard split('\n') breaks when column headers or values
+ * have line breaks inside quotes (e.g., "Inv\nDate").
+ *
+ * @param csvText - The entire CSV file as a string
+ * @returns Array of logical row strings (each representing one CSV record)
+ */
+function splitCSVRows(csvText: string): string[] {
+  const rows: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i++) {
+    const char = csvText[i];
+
+    if (char === '"') {
+      // Handle escaped quotes (two double-quotes in a row)
+      if (inQuotes && csvText[i + 1] === '"') {
+        current += '""';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+        current += char;
+      }
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      // End of a logical row (only when not inside quotes)
+      if (char === '\r' && csvText[i + 1] === '\n') i++; // skip \r\n as one newline
+      if (current.trim()) rows.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  // Don't forget the last row
+  if (current.trim()) rows.push(current);
+
+  return rows;
+}
+
+/**
+ * Parses the "Closed" sheet CSV into ClosedPositionRow objects.
+ *
+ * This sheet contains buy/sell transaction data for closed positions.
+ * Same ticker can appear multiple times (each row = one buy-sell cycle).
+ *
+ * IMPORTANT: The Closed sheet has column headers with embedded newlines
+ * (e.g., "Inv\nDate"), so we use splitCSVRows() instead of split('\n').
+ * Also, headers are normalized by collapsing whitespace (newlines → spaces)
+ * so that "Inv\nDate" matches as "Inv Date".
+ *
+ * Also computes three derived fields per row:
+ *   - totalReturn: profit/loss in currency
+ *   - totalReturnPct: profit/loss as percentage
+ *   - cagr: compound annual growth rate
+ *
+ * @param csvText - The raw CSV content from the Closed sheet
+ * @returns Array of ClosedPositionRow objects
+ */
+function parseClosedData(csvText: string): ClosedPositionRow[] {
+  // Use quote-aware row splitter (handles newlines inside quoted headers)
+  const lines = splitCSVRows(csvText.trim());
+
+  if (lines.length < 2) {
+    console.warn('Closed sheet is empty or has no data rows');
+    return [];
+  }
+
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+  // Parse header and normalize: collapse any whitespace (newlines, multiple spaces) into single space
+  const headers = parseCSVLine(lines[0], delimiter).map(h => h.replace(/\s+/g, ' ').trim());
+
+  console.log('Closed sheet headers:', headers.join(' | '));
+
+  // Build column name → index map (order-independent)
+  const colIndex: { [key: string]: number } = {};
+  headers.forEach((h, i) => { colIndex[h] = i; });
+
+  // Helper: read a numeric value by column name (handles commas, %, negatives)
+  const readNum = (values: string[], colName: string): number => {
+    const idx = colIndex[colName];
+    if (idx === undefined || idx >= values.length) return 0;
+    const raw = values[idx].trim();
+    if (!raw) return 0;
+    const clean = raw.replace(/,/g, '').replace(/%/g, '');
+    const num = parseFloat(clean);
+    return isNaN(num) ? 0 : num;
+  };
+
+  // Helper: read a string value by column name
+  const readStr = (values: string[], colName: string): string => {
+    const idx = colIndex[colName];
+    if (idx === undefined || idx >= values.length) return '';
+    return values[idx].trim();
+  };
+
+  const rows: ClosedPositionRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    const values = parseCSVLine(line, delimiter);
+
+    // Read all raw fields
+    // Note: The spreadsheet has "Tciker" (typo) but we also check "Ticker" for safety
+    const invDate = normalizeDate(readStr(values, 'Inv Date'));
+    const divDate = normalizeDate(readStr(values, 'Div date'));
+    const ticker = readStr(values, 'Tciker') || readStr(values, 'Ticker');
+
+    // Skip rows without essential data (no dates — ticker can be empty for some legacy rows)
+    if (!invDate || !divDate) continue;
+
+    const holdingPeriodDays = readNum(values, 'Holding Period (D)');
+    const holdingPeriodYears = readNum(values, 'Holding Period (Y)');
+    const asset = readStr(values, 'Asset');
+    const totalSharesBought = readNum(values, 'Total #shares bought');
+    const totalSharesSold = readNum(values, 'Total #shares sold');
+    const sharesSold = readNum(values, '# Shares Sold');
+    const buyPrice = readNum(values, 'Buy Price');
+    const buyCommission = readNum(values, 'Buy Comm.');
+    const initialCost = readNum(values, 'Initial Cost');
+    const sellPrice = readNum(values, 'Sell price');
+    const sellCommission = readNum(values, 'Sell Comm.');
+    const valueAfterFee = readNum(values, 'Value after fee');
+    const cumDividend = readNum(values, 'Cum. Dividend');
+    const totalTax = readNum(values, 'Total tax');
+    const proceedsFromSale = readNum(values, 'Proceeds from Sale');
+    const finalNetValue = readNum(values, 'Final Net Value incl Div');
+
+    // Compute derived fields
+    const totalReturn = finalNetValue - initialCost;
+    const totalReturnPct = initialCost > 0 ? (totalReturn / initialCost) * 100 : 0;
+    // CAGR = ((end / start) ^ (1 / years) - 1) × 100
+    const cagr = (holdingPeriodYears > 0 && initialCost > 0 && finalNetValue > 0)
+      ? (Math.pow(finalNetValue / initialCost, 1 / holdingPeriodYears) - 1) * 100
+      : 0;
+
+    rows.push({
+      invDate, divDate, holdingPeriodDays, holdingPeriodYears,
+      ticker, asset, totalSharesBought, totalSharesSold, sharesSold,
+      buyPrice, buyCommission, initialCost,
+      sellPrice, sellCommission, valueAfterFee,
+      cumDividend, totalTax, proceedsFromSale, finalNetValue,
+      totalReturn, totalReturnPct, cagr,
     });
   }
 

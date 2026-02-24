@@ -19,7 +19,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
-import { fetchSheetData, AssetRow, AssetLookup, YearsRow } from '@/lib/fetchData';
+import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow } from '@/lib/fetchData';
 
 // ============================================
 // TYPE DEFINITIONS
@@ -242,7 +242,7 @@ const PortfolioBacktester = () => {
   // 'bestToWorst' = show assets ranked by return for a selected year
   // 'monthlyPrices' = show monthly price heatmap with SMA signals
   // 'trendFollowing' = compare Buy & Hold vs 10-month SMA trend following strategy
-  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'trendFollowing' | 'correlationMatrix' | 'portfolio'>('backtest');
+  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'closed'>('backtest');
 
   // The year selected for the "Best To Worst" ranking view
   // Defaults to null, and will be set to the most recent year when data loads
@@ -298,6 +298,25 @@ const PortfolioBacktester = () => {
   // Which portfolio's rebalancing table to show (index into backtestResults)
   const [selectedRebalancingPortfolio, setSelectedRebalancingPortfolio] = useState(0);
 
+  // ---- Closed Positions tab state ----
+  // Raw transaction data from the "Closed" sheet in Google Sheets
+  const [closedData, setClosedData] = useState<ClosedPositionRow[]>([]);
+  // Filter state for the Closed tab (all assets selected by default after data loads)
+  const [closedSelectedTickers, setClosedSelectedTickers] = useState<string[]>([]);
+  const [closedOpenFilterDropdown, setClosedOpenFilterDropdown] = useState<'assets' | null>(null);
+  // Which asset the user drilled into (empty string = showing summary list)
+  const [closedSelectedTicker, setClosedSelectedTicker] = useState<string>('');
+  // "Invested Into" comparison: which other asset to compare against
+  const [closedInvestedInto, setClosedInvestedInto] = useState<string>('');
+  // "Invested From": which sale date to use as the normalization starting point
+  const [closedInvestedFrom, setClosedInvestedFrom] = useState<string>('');
+  // Chart toggle: start the chart from the first buy date instead of first available price
+  const [closedSinceInvested, setClosedSinceInvested] = useState(false);
+  // Chart toggle: end the chart at the last sale date instead of latest available price
+  const [closedUntilSold, setClosedUntilSold] = useState(false);
+  // Ref for click-outside detection on the Closed tab filter dropdowns
+  const closedFilterRef = useRef<HTMLDivElement>(null);
+
   // Close Years dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -310,6 +329,19 @@ const PortfolioBacktester = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [yearsDropdownOpen]);
+
+  // Close Closed tab filter dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (closedFilterRef.current && !closedFilterRef.current.contains(event.target as Node)) {
+        setClosedOpenFilterDropdown(null);
+      }
+    };
+    if (closedOpenFilterDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [closedOpenFilterDropdown]);
 
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
@@ -334,13 +366,17 @@ const PortfolioBacktester = () => {
 
     try {
       // Fetch and parse the CSV data from all sheets
-      const { data, assets, lookup, yearsData: fetchedYearsData } = await fetchSheetData();
+      const { data, assets, lookup, yearsData: fetchedYearsData, closedData: fetchedClosedData } = await fetchSheetData();
 
       // Update all our state with the new data
       setAssetData(data);
       setAvailableAssets(assets);
       setAssetLookup(lookup);
       setYearsData(fetchedYearsData);
+      setClosedData(fetchedClosedData);
+      // Auto-select all closed tab assets by default
+      const closedTickers = new Set(fetchedClosedData.map((row: ClosedPositionRow) => row.ticker));
+      setClosedSelectedTickers(lookup.filter(a => closedTickers.has(a.ticker)).map(a => a.ticker));
       setIsConnected(true);
 
       // Initialize filters to "all selected" when data loads
@@ -476,6 +512,268 @@ const PortfolioBacktester = () => {
    */
   const toggleAllCurrencies = (selectAll: boolean) => {
     setSelectedCurrencies(selectAll ? getUniqueCurrencies() : []);
+  };
+
+  // ----------------------------------------
+  // CLOSED POSITIONS TAB HELPER FUNCTIONS
+  // ----------------------------------------
+  // These support the Closed tab: filtering, transactions, XIRR, chart data, and dashboard stats
+
+  /**
+   * Returns assets that exist in BOTH the lookup table AND the closed positions data.
+   * This ensures the Closed tab only shows assets we have full info for.
+   */
+  const getClosedTabLookup = (): AssetLookup[] => {
+    const closedTickers = new Set(closedData.map(row => row.ticker));
+    return assetLookup.filter(asset => closedTickers.has(asset.ticker));
+  };
+
+  /**
+   * Applies the Closed tab's asset filter.
+   * Returns only the assets that are selected in the Assets dropdown.
+   */
+  const getClosedFilteredLookup = (): AssetLookup[] => {
+    return getClosedTabLookup().filter(asset =>
+      closedSelectedTickers.includes(asset.ticker)
+    );
+  };
+
+  /** Select/deselect all closed tab assets. */
+  const toggleAllClosedAssets = (selectAll: boolean) => {
+    setClosedSelectedTickers(selectAll ? getClosedTabLookup().map(a => a.ticker) : []);
+  };
+
+  /** Returns all closed position rows for a specific ticker. */
+  const getClosedTransactions = (ticker: string): ClosedPositionRow[] => {
+    return closedData.filter(row => row.ticker === ticker);
+  };
+
+  /**
+   * XIRR (Extended Internal Rate of Return) — same concept as Excel's XIRR formula.
+   *
+   * Think of it like this: if you made multiple investments and withdrawals at different
+   * dates, XIRR tells you the single annual interest rate that would produce the same result.
+   *
+   * Uses Newton-Raphson iteration (a mathematical technique to find where a function equals zero).
+   * Cash flows: negative = money going out (buying), positive = money coming back (selling).
+   *
+   * @returns Annual rate as a percentage, or null if calculation fails
+   */
+  const calculateXIRR = (cashFlows: { date: Date; amount: number }[]): number | null => {
+    if (cashFlows.length < 2) return null;
+
+    const d0 = cashFlows[0].date.getTime();
+    const MS_PER_YEAR = 365.25 * 86400000; // milliseconds in a year
+
+    // NPV (Net Present Value) at a given rate
+    // If NPV = 0, we found the correct rate (that's what XIRR solves for)
+    const npv = (rate: number): number => {
+      return cashFlows.reduce((sum, cf) => {
+        const years = (cf.date.getTime() - d0) / MS_PER_YEAR;
+        return sum + cf.amount / Math.pow(1 + rate, years);
+      }, 0);
+    };
+
+    // Derivative of NPV (needed for Newton-Raphson to know which direction to adjust)
+    const dnpv = (rate: number): number => {
+      return cashFlows.reduce((sum, cf) => {
+        const years = (cf.date.getTime() - d0) / MS_PER_YEAR;
+        return sum - years * cf.amount / Math.pow(1 + rate, years + 1);
+      }, 0);
+    };
+
+    // Newton-Raphson: start with a guess and iteratively improve
+    let rate = 0.1; // Initial guess: 10% annual return
+    for (let i = 0; i < 100; i++) {
+      const f = npv(rate);
+      const df = dnpv(rate);
+      if (Math.abs(df) < 1e-10) return null; // derivative too small, can't converge
+      const newRate = rate - f / df;
+      if (isNaN(newRate) || !isFinite(newRate)) return null; // guard against NaN/Infinity
+      if (Math.abs(newRate - rate) < 1e-7) return newRate * 100; // converged!
+      rate = newRate;
+      // Safety: if rate goes crazy, bail out
+      if (rate < -0.99 || rate > 100) return null;
+    }
+    return rate * 100; // return best guess as percentage
+  };
+
+  /**
+   * Computes all dashboard statistics for a given closed ticker.
+   * Returns aggregate metrics across ALL transactions for that asset.
+   */
+  const getClosedDashboardStats = (ticker: string) => {
+    const transactions = getClosedTransactions(ticker);
+    if (transactions.length === 0) return null;
+
+    // 1. Total Holding Time: from earliest buy to latest sale
+    const buyDates = transactions.map(t => new Date(t.invDate)).sort((a, b) => a.getTime() - b.getTime());
+    const saleDates = transactions.map(t => new Date(t.divDate)).sort((a, b) => a.getTime() - b.getTime());
+    const firstBuy = buyDates[0];
+    const lastSale = saleDates[saleDates.length - 1];
+    const holdingDays = Math.round((lastSale.getTime() - firstBuy.getTime()) / 86400000);
+    const holdingYears = holdingDays / 365.25;
+
+    // 2. Total PnL (sum all costs vs sum all final values)
+    const totalCost = transactions.reduce((sum, t) => sum + t.initialCost, 0);
+    const totalFinalValue = transactions.reduce((sum, t) => sum + t.finalNetValue, 0);
+    const totalPnL = totalFinalValue - totalCost;
+    const totalPnLPct = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0;
+
+    // 3. XIRR (annualized return across all buy/sell transactions)
+    const cashFlows = transactions.flatMap(t => [
+      { date: new Date(t.invDate), amount: -t.initialCost },   // money out (buying)
+      { date: new Date(t.divDate), amount: t.finalNetValue }   // money back (selling + dividends)
+    ]).sort((a, b) => a.date.getTime() - b.date.getTime());
+    const xirr = calculateXIRR(cashFlows);
+
+    // 4. "If Not Sold" — what the shares would be worth today at current market price
+    const totalShares = transactions.reduce((sum, t) => sum + t.sharesSold, 0);
+    let currentPrice = 0;
+    if (assetData && assetData.length > 0) {
+      // Walk backwards through price data to find the most recent price
+      for (let i = assetData.length - 1; i >= 0; i--) {
+        const p = Number(assetData[i][ticker]);
+        if (p && p > 0) { currentPrice = p; break; }
+      }
+    }
+    const ifNotSold = currentPrice * totalShares;
+
+    // 5. Current Price vs Sold Price (weighted average sell price)
+    const weightedSellPrice = totalShares > 0
+      ? transactions.reduce((sum, t) => sum + t.sellPrice * t.sharesSold, 0) / totalShares
+      : 0;
+    const priceVsSoldPct = weightedSellPrice > 0
+      ? ((currentPrice - weightedSellPrice) / weightedSellPrice) * 100
+      : 0;
+
+    return {
+      holdingDays, holdingYears, totalCost, totalFinalValue,
+      totalPnL, totalPnLPct, xirr, ifNotSold,
+      currentPrice, weightedSellPrice, priceVsSoldPct, totalShares,
+      firstBuy, lastSale,
+    };
+  };
+
+  /**
+   * Builds chart data for the performance line chart in the Closed tab.
+   * Uses monthly price data for the selected ticker and identifies buy/sell months.
+   *
+   * Returns:
+   * - chartData: array of {date, price} for the LineChart
+   * - buyDots: array of {date, price} for green buy markers
+   * - sellDots: array of {date, price} for red sell markers
+   */
+  const getClosedChartData = (ticker: string) => {
+    if (!assetData) return { chartData: [] as { date: string; price: number }[], buyDots: [] as { date: string; price: number }[], sellDots: [] as { date: string; price: number }[] };
+
+    const transactions = getClosedTransactions(ticker);
+
+    // Collect buy and sell months in YYYY-MM format for matching against monthly price data
+    const buyMonths = new Set(transactions.map(t => {
+      const d = new Date(t.invDate);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }));
+    const sellMonths = new Set(transactions.map(t => {
+      const d = new Date(t.divDate);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }));
+
+    // Determine date boundaries for "Since Invested" and "Until Sold" toggles
+    const sortedBuyDates = transactions.map(t => t.invDate).sort();
+    const sortedSaleDates = transactions.map(t => t.divDate).sort();
+    const firstBuyDate = sortedBuyDates[0] || '';
+    const lastSaleDate = sortedSaleDates[sortedSaleDates.length - 1] || '';
+
+    // Convert to YYYY-MM for comparison with price data
+    const firstBuyYM = firstBuyDate ? (() => {
+      const d = new Date(firstBuyDate);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    })() : '';
+    const lastSaleYM = lastSaleDate ? (() => {
+      const d = new Date(lastSaleDate);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    })() : '';
+
+    const chartData: { date: string; price: number }[] = [];
+    const buyDots: { date: string; price: number }[] = [];
+    const sellDots: { date: string; price: number }[] = [];
+
+    for (const row of assetData) {
+      const price = Number(row[ticker]);
+      if (!price || price <= 0) continue;
+
+      // Extract YYYY-MM from the price data date
+      const rowDate = new Date(row.date);
+      if (isNaN(rowDate.getTime())) continue; // skip invalid dates
+      const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+
+      // Apply toggle filters (compare at month level)
+      if (closedSinceInvested && firstBuyYM && rowYM < firstBuyYM) continue;
+      if (closedUntilSold && lastSaleYM && rowYM > lastSaleYM) continue;
+
+      chartData.push({ date: row.date, price });
+
+      // Mark buy/sell months with dots
+      if (buyMonths.has(rowYM)) buyDots.push({ date: row.date, price });
+      if (sellMonths.has(rowYM)) sellDots.push({ date: row.date, price });
+    }
+
+    return { chartData, buyDots, sellDots };
+  };
+
+  /**
+   * Builds normalized comparison data for the "Invested Into" overlay.
+   *
+   * How it works: If you sold Gold in Jan 2021 and bought Silver, this function
+   * scales Silver's price so that it starts at the same value as Gold on that date.
+   * This lets you visually compare "what if I had kept Gold" vs "how Silver did since then".
+   *
+   * @param baseTicker - The ticker of the asset you sold
+   * @param compTicker - The ticker of the asset you invested into
+   * @param fromDateStr - The sale date to normalize from (YYYY-MM-DD)
+   * @returns Array of {date, normalizedPrice} for the comparison line
+   */
+  const getNormalizedComparisonData = (baseTicker: string, compTicker: string, fromDateStr: string) => {
+    if (!assetData || !fromDateStr) return [];
+
+    // Find both asset prices at the normalization date (match by month)
+    const fromDate = new Date(fromDateStr);
+    if (isNaN(fromDate.getTime())) return []; // invalid date guard
+    const fromYM = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}`;
+
+    let basePriceAtDate = 0;
+    let compPriceAtDate = 0;
+
+    for (const row of assetData) {
+      const rowDate = new Date(row.date);
+      if (isNaN(rowDate.getTime())) continue; // skip invalid dates
+      const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+      if (rowYM === fromYM) {
+        const bp = Number(row[baseTicker]);
+        const cp = Number(row[compTicker]);
+        if (bp > 0) basePriceAtDate = bp;
+        if (cp > 0) compPriceAtDate = cp;
+      }
+    }
+
+    if (compPriceAtDate === 0 || basePriceAtDate === 0) return [];
+
+    // Scale the comparison asset so its value at the sale date equals the base asset's value
+    const scaleFactor = basePriceAtDate / compPriceAtDate;
+
+    const result: { date: string; normalizedPrice: number }[] = [];
+    for (const row of assetData) {
+      const rowDate = new Date(row.date);
+      if (isNaN(rowDate.getTime())) continue; // skip invalid dates
+      const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+      if (rowYM < fromYM) continue; // Only show from the sale date onward
+      const cp = Number(row[compTicker]);
+      if (!cp || cp <= 0) continue;
+      result.push({ date: row.date, normalizedPrice: cp * scaleFactor });
+    }
+
+    return result;
   };
 
   // ----------------------------------------
@@ -2926,7 +3224,7 @@ const PortfolioBacktester = () => {
                     : 'bg-gray-200 text-gray-700 hover:bg-gray-300'  // Inactive: muted
                 }`}
               >
-                Portfolio Backtest
+                Backtest
               </button>
               <button
                 onClick={() => setActiveView('annualReturns')}
@@ -2936,7 +3234,7 @@ const PortfolioBacktester = () => {
                     : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                 }`}
               >
-                Assets Annual Returns
+                Annual Returns
               </button>
               <button
                 onClick={() => setActiveView('bestToWorst')}
@@ -2976,7 +3274,7 @@ const PortfolioBacktester = () => {
                     : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                 }`}
               >
-                Correlation Matrix
+                Correlations
               </button>
               <button
                 onClick={() => setActiveView('portfolio')}
@@ -2987,6 +3285,16 @@ const PortfolioBacktester = () => {
                 }`}
               >
                 Portfolio
+              </button>
+              <button
+                onClick={() => setActiveView('closed')}
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                  activeView === 'closed'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                Closed
               </button>
             </div>
           )}
@@ -3625,7 +3933,7 @@ const PortfolioBacktester = () => {
           {/* This table shows yearly returns for ALL assets in the lookup table */}
           {isConnected && assetData && activeView === 'annualReturns' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Assets Annual Returns</h2>
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Annual Returns</h2>
 
               {(() => {
                 // Calculate annual returns once — used by both the Years dropdown and the table
@@ -4999,7 +5307,7 @@ const PortfolioBacktester = () => {
           {/* 0 means no relationship at all. */}
           {isConnected && assetData && activeView === 'correlationMatrix' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Correlation Matrix</h2>
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Correlations</h2>
 
               {/* Reuse the same asset/class/currency filter controls as other tabs, with Correlation Period added inline */}
               <AssetFilterControls>
@@ -5512,6 +5820,596 @@ const PortfolioBacktester = () => {
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {/* ============================================ */}
+          {/* CLOSED POSITIONS TAB                        */}
+          {/* ============================================ */}
+          {isConnected && assetData && activeView === 'closed' && (
+            <div className="mt-2">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Closed Positions</h2>
+
+              {/* --- Closed Tab Filter Controls --- */}
+              {/* Same 3-dropdown pattern as other tabs but with separate state (nothing selected by default) */}
+              <div ref={closedFilterRef} className="flex flex-wrap gap-2 mb-4">
+                {/* Assets Dropdown (only filter for Closed tab) */}
+                {(() => {
+                  const closedLookup = getClosedTabLookup();
+                  const allAssetsSelected = closedSelectedTickers.length === closedLookup.length && closedLookup.length > 0;
+
+                  const getSelectionText = (selected: number, total: number, label: string) => {
+                    if (selected === 0) return `No ${label}`;
+                    if (selected === total) return `All ${label}`;
+                    return `${selected} of ${total}`;
+                  };
+
+                  return (
+                    <div className="relative">
+                      <button
+                        onClick={() => setClosedOpenFilterDropdown(closedOpenFilterDropdown === 'assets' ? null : 'assets')}
+                        className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+                          closedOpenFilterDropdown === 'assets' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+                        }`}
+                      >
+                        <span className="font-medium">Assets:</span>
+                        <span className="text-gray-600">{getSelectionText(closedSelectedTickers.length, closedLookup.length, 'assets')}</span>
+                        <svg className={`w-4 h-4 transition-transform ${closedOpenFilterDropdown === 'assets' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                      {closedOpenFilterDropdown === 'assets' && (
+                        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[280px]">
+                          <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+                            <span className="text-sm font-medium text-gray-700">Select Assets</span>
+                            <button onClick={() => toggleAllClosedAssets(!allAssetsSelected)} className="text-xs text-blue-600 hover:underline">
+                              {allAssetsSelected ? 'Deselect All' : 'Select All'}
+                            </button>
+                          </div>
+                          <div className="max-h-60 overflow-y-auto p-2">
+                            {closedLookup.map(asset => (
+                              <label key={asset.ticker} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={closedSelectedTickers.includes(asset.ticker)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setClosedSelectedTickers([...closedSelectedTickers, asset.ticker]);
+                                    } else {
+                                      setClosedSelectedTickers(closedSelectedTickers.filter(t => t !== asset.ticker));
+                                    }
+                                  }}
+                                />
+                                <span>{asset.ticker} - {asset.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* --- SUMMARY VIEW (when no specific asset is drilled into) --- */}
+              {!closedSelectedTicker && (() => {
+                const filteredAssets = getClosedFilteredLookup();
+
+                if (closedSelectedTickers.length === 0) {
+                  return (
+                    <div className="bg-white p-8 rounded-lg shadow text-center text-gray-500">
+                      <p className="text-lg mb-2">Select assets using the filters above</p>
+                      <p className="text-sm">Use the Assets filter to choose which closed positions to view.</p>
+                    </div>
+                  );
+                }
+
+                if (filteredAssets.length === 0) {
+                  return (
+                    <div className="bg-white p-8 rounded-lg shadow text-center text-gray-500">
+                      <p>No closed positions match the current filters.</p>
+                    </div>
+                  );
+                }
+
+                // Build summary data for each filtered asset
+                const summaryData = filteredAssets.map(asset => {
+                  const transactions = getClosedTransactions(asset.ticker);
+                  const totalCost = transactions.reduce((sum, t) => sum + t.initialCost, 0);
+                  const totalFinalValue = transactions.reduce((sum, t) => sum + t.finalNetValue, 0);
+                  const totalPnL = totalFinalValue - totalCost;
+                  const totalPnLPct = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0;
+                  const sortedBuyDates = transactions.map(t => t.invDate).sort();
+                  const sortedSaleDates = transactions.map(t => t.divDate).sort();
+                  const firstBuyDate = sortedBuyDates[0] || '';
+                  const lastSaleDate = sortedSaleDates[sortedSaleDates.length - 1] || '';
+
+                  // XIRR for the summary
+                  const cashFlows = transactions.flatMap(t => [
+                    { date: new Date(t.invDate), amount: -t.initialCost },
+                    { date: new Date(t.divDate), amount: t.finalNetValue }
+                  ]).sort((a, b) => a.date.getTime() - b.date.getTime());
+                  const xirr = calculateXIRR(cashFlows);
+
+                  return {
+                    ticker: asset.ticker,
+                    name: asset.name,
+                    numTransactions: transactions.length,
+                    firstBuyDate,
+                    lastSaleDate,
+                    totalInvested: totalCost,
+                    totalFinalValue,
+                    totalPnL,
+                    totalPnLPct,
+                    xirr,
+                  };
+                });
+
+                return (
+                  <div className="bg-white p-4 rounded-lg shadow">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b border-gray-200">
+                            <th className="text-left py-2 px-2 bg-gray-50">Ticker</th>
+                            <th className="text-left py-2 px-2 bg-gray-50">Asset Name</th>
+                            <th className="text-right py-2 px-2 bg-gray-50"># Txns</th>
+                            <th className="text-right py-2 px-2 bg-gray-50">First Buy</th>
+                            <th className="text-right py-2 px-2 bg-gray-50">Last Sale</th>
+                            <th className="text-right py-2 px-2 bg-gray-50">Total Invested</th>
+                            <th className="text-right py-2 px-2 bg-gray-50">Total Final Value</th>
+                            <th className="text-right py-2 px-2 bg-gray-50">Total PnL</th>
+                            <th className="text-right py-2 px-2 bg-gray-50">PnL %</th>
+                            <th className="text-right py-2 px-2 bg-gray-50">XIRR</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {summaryData.map((row, idx) => (
+                            <tr
+                              key={row.ticker}
+                              className={`border-b border-gray-50 cursor-pointer hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}
+                              onClick={() => {
+                                setClosedSelectedTicker(row.ticker);
+                                // Reset comparison state when drilling into a new asset
+                                setClosedInvestedInto('');
+                                setClosedInvestedFrom('');
+                                setClosedSinceInvested(false);
+                                setClosedUntilSold(false);
+                              }}
+                            >
+                              <td className="py-2 px-2 font-medium text-blue-600">{row.ticker}</td>
+                              <td className="py-2 px-2 text-gray-700">{row.name}</td>
+                              <td className="text-right py-2 px-2">{row.numTransactions}</td>
+                              <td className="text-right py-2 px-2 font-mono">{row.firstBuyDate}</td>
+                              <td className="text-right py-2 px-2 font-mono">{row.lastSaleDate}</td>
+                              <td className="text-right py-2 px-2 font-mono">{row.totalInvested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                              <td className="text-right py-2 px-2 font-mono">{row.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                              <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {row.totalPnL >= 0 ? '+' : ''}{row.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                              </td>
+                              <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {row.totalPnLPct >= 0 ? '+' : ''}{row.totalPnLPct.toFixed(1)}%
+                              </td>
+                              <td className={`text-right py-2 px-2 font-mono font-medium ${(row.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {row.xirr !== null ? `${row.xirr >= 0 ? '+' : ''}${row.xirr.toFixed(1)}%` : 'N/A'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-3">Click a row to see detailed transactions, chart, and statistics.</p>
+                  </div>
+                );
+              })()}
+
+              {/* --- DETAIL VIEW (when a specific asset is drilled into) --- */}
+              {closedSelectedTicker && (() => {
+                const transactions = getClosedTransactions(closedSelectedTicker);
+                const assetInfo = assetLookup.find(a => a.ticker === closedSelectedTicker);
+                const stats = getClosedDashboardStats(closedSelectedTicker);
+                const { chartData, buyDots, sellDots } = getClosedChartData(closedSelectedTicker);
+
+                // Get sale dates for "Invested From" dropdown
+                const saleDates = Array.from(new Set(transactions.map(t => t.divDate))).sort();
+
+                // Build comparison data if "Invested Into" is selected
+                const comparisonData = closedInvestedInto && closedInvestedFrom
+                  ? getNormalizedComparisonData(closedSelectedTicker, closedInvestedInto, closedInvestedFrom)
+                  : [];
+
+                // Merge chart data with comparison data for the LineChart
+                const mergedChartData = chartData.map(d => {
+                  const comp = comparisonData.find(c => c.date === d.date);
+                  return { ...d, compPrice: comp ? comp.normalizedPrice : undefined };
+                });
+                // Add any comparison data points that extend beyond the base asset
+                const baseDates = new Set(chartData.map(d => d.date));
+                comparisonData.forEach(c => {
+                  if (!baseDates.has(c.date)) {
+                    mergedChartData.push({ date: c.date, price: undefined as unknown as number, compPrice: c.normalizedPrice });
+                  }
+                });
+                mergedChartData.sort((a, b) => a.date.localeCompare(b.date));
+
+                // Compute comparison stats (how much each asset gained since the sale)
+                let compGainBase: number | null = null;
+                let compGainInvested: number | null = null;
+                if (closedInvestedInto && closedInvestedFrom && assetData) {
+                  const fromDate = new Date(closedInvestedFrom);
+                  const fromYM = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}`;
+                  let basePriceAtSale = 0;
+                  let compPriceAtSale = 0;
+                  let baseCurrentPrice = 0;
+                  let compCurrentPrice = 0;
+
+                  for (const row of assetData) {
+                    const rowDate = new Date(row.date);
+                    const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+                    const bp = Number(row[closedSelectedTicker]);
+                    const cp = Number(row[closedInvestedInto]);
+                    if (rowYM === fromYM) {
+                      if (bp > 0) basePriceAtSale = bp;
+                      if (cp > 0) compPriceAtSale = cp;
+                    }
+                    if (bp > 0) baseCurrentPrice = bp;
+                    if (cp > 0) compCurrentPrice = cp;
+                  }
+
+                  if (basePriceAtSale > 0) compGainBase = ((baseCurrentPrice - basePriceAtSale) / basePriceAtSale) * 100;
+                  if (compPriceAtSale > 0) compGainInvested = ((compCurrentPrice - compPriceAtSale) / compPriceAtSale) * 100;
+                }
+
+                const compAssetInfo = closedInvestedInto ? assetLookup.find(a => a.ticker === closedInvestedInto) : null;
+
+                return (
+                  <div>
+                    {/* Back button and asset header */}
+                    <div className="flex items-center gap-3 mb-4">
+                      <button
+                        onClick={() => setClosedSelectedTicker('')}
+                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                        </svg>
+                        Back to list
+                      </button>
+                      <h3 className="text-lg font-semibold text-gray-800">
+                        {closedSelectedTicker} — {assetInfo?.name || 'Unknown'}
+                      </h3>
+                    </div>
+
+                    {/* --- Transaction Table --- */}
+                    <div className="bg-white p-4 rounded-lg shadow mb-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">Transactions</h4>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs border-collapse">
+                          <thead>
+                            <tr className="border-b border-gray-200">
+                              <th className="text-left py-1.5 px-2 bg-gray-50">Inv Date</th>
+                              <th className="text-left py-1.5 px-2 bg-gray-50">Div Date</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Hold (D)</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Hold (Y)</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Shares</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Buy Price</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Initial Cost</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Sell Price</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Value After Fee</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Cum. Div</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Tax</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Final Net Value</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-100">Total Return</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-100">Return %</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-100">CAGR</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {transactions.map((t, idx) => (
+                              <tr key={idx} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                                <td className="py-1.5 px-2 font-mono">{t.invDate}</td>
+                                <td className="py-1.5 px-2 font-mono">{t.divDate}</td>
+                                <td className="text-right py-1.5 px-2">{t.holdingPeriodDays}</td>
+                                <td className="text-right py-1.5 px-2">{t.holdingPeriodYears.toFixed(1)}</td>
+                                <td className="text-right py-1.5 px-2">{t.sharesSold.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{t.buyPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{t.initialCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{t.sellPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{t.valueAfterFee.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{t.cumDividend.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{t.totalTax.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{t.finalNetValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                <td className={`text-right py-1.5 px-2 font-mono font-medium ${t.totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {t.totalReturn >= 0 ? '+' : ''}{t.totalReturn.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                </td>
+                                <td className={`text-right py-1.5 px-2 font-mono font-medium ${t.totalReturnPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {t.totalReturnPct >= 0 ? '+' : ''}{t.totalReturnPct.toFixed(1)}%
+                                </td>
+                                <td className={`text-right py-1.5 px-2 font-mono font-medium ${t.cagr >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {t.cagr >= 0 ? '+' : ''}{t.cagr.toFixed(1)}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* --- Performance Chart --- */}
+                    <div className="bg-white p-4 rounded-lg shadow mb-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">Price History</h4>
+
+                      {/* Chart controls: toggles and Invested Into / From */}
+                      <div className="flex flex-wrap items-end gap-4 mb-4">
+                        {/* Since Invested toggle */}
+                        <button
+                          onClick={() => setClosedSinceInvested(!closedSinceInvested)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                            closedSinceInvested
+                              ? 'bg-blue-500 text-white border-blue-500'
+                              : 'bg-white border-gray-300 hover:bg-gray-100'
+                          }`}
+                        >
+                          Since Invested
+                        </button>
+
+                        {/* Until Sold toggle */}
+                        <button
+                          onClick={() => setClosedUntilSold(!closedUntilSold)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                            closedUntilSold
+                              ? 'bg-blue-500 text-white border-blue-500'
+                              : 'bg-white border-gray-300 hover:bg-gray-100'
+                          }`}
+                        >
+                          Until Sold
+                        </button>
+
+                        <div className="border-l border-gray-300 h-6 mx-1" />
+
+                        {/* Invested Into dropdown */}
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-0.5">Invested Into</label>
+                          <select
+                            value={closedInvestedInto}
+                            onChange={(e) => {
+                              const newValue = e.target.value;
+                              setClosedInvestedInto(newValue);
+                              // Auto-set "Invested From" to last sale date when a comparison is selected
+                              if (newValue && saleDates.length > 0) {
+                                setClosedInvestedFrom(saleDates[saleDates.length - 1]);
+                              } else {
+                                setClosedInvestedFrom('');
+                              }
+                            }}
+                            className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[180px]"
+                          >
+                            <option value="">— None —</option>
+                            {assetLookup
+                              .filter(a => a.ticker !== closedSelectedTicker)
+                              .map(a => (
+                                <option key={a.ticker} value={a.ticker}>{a.ticker} - {a.name}</option>
+                              ))}
+                          </select>
+                        </div>
+
+                        {/* Invested From dropdown (only enabled when Invested Into is selected) */}
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-0.5">Invested From</label>
+                          <select
+                            value={closedInvestedFrom}
+                            onChange={(e) => setClosedInvestedFrom(e.target.value)}
+                            disabled={!closedInvestedInto}
+                            className={`px-2 py-1.5 border rounded text-xs min-w-[130px] ${
+                              closedInvestedInto ? 'border-gray-300' : 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                            }`}
+                          >
+                            {saleDates.map(d => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* The chart itself */}
+                      {chartData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={350}>
+                          <LineChart data={mergedChartData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="date" tick={{ fontSize: 9 }} />
+                            <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} />
+                            <Tooltip
+                              formatter={(value: number, name: string) => {
+                                if (value === undefined || value === null) return ['-', name];
+                                return [value.toFixed(2), name];
+                              }}
+                            />
+                            <Legend />
+                            {/* Main asset price line */}
+                            <Line
+                              type="monotone"
+                              dataKey="price"
+                              name={closedSelectedTicker}
+                              stroke="#4F46E5"
+                              strokeWidth={2}
+                              dot={false}
+                              connectNulls
+                            />
+                            {/* Comparison asset line (only when "Invested Into" is active) */}
+                            {closedInvestedInto && comparisonData.length > 0 && (
+                              <Line
+                                type="monotone"
+                                dataKey="compPrice"
+                                name={closedInvestedInto}
+                                stroke="#F59E0B"
+                                strokeWidth={2}
+                                dot={false}
+                                strokeDasharray="5 3"
+                                connectNulls
+                              />
+                            )}
+                            {/* Green dots for buy months */}
+                            {buyDots.map((dot, i) => (
+                              <ReferenceDot
+                                key={`buy-${i}`}
+                                x={dot.date}
+                                y={dot.price}
+                                r={6}
+                                fill="#22c55e"
+                                stroke="#fff"
+                                strokeWidth={2}
+                              />
+                            ))}
+                            {/* Red dots for sell months */}
+                            {sellDots.map((dot, i) => (
+                              <ReferenceDot
+                                key={`sell-${i}`}
+                                x={dot.date}
+                                y={dot.price}
+                                r={6}
+                                fill="#ef4444"
+                                stroke="#fff"
+                                strokeWidth={2}
+                              />
+                            ))}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="text-center py-8 text-gray-400 text-sm">
+                          No price data available for {closedSelectedTicker} in the monthly prices sheet.
+                        </div>
+                      )}
+
+                      {/* Chart legend for dots */}
+                      <div className="mt-2 flex gap-4 text-xs text-gray-600">
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                          <span>Buy month</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                          <span>Sell month</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* --- Dashboard Statistics --- */}
+                    {stats && (
+                      <div className="bg-white p-4 rounded-lg shadow">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3">Summary Statistics</h4>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                          {/* Total Holding Time */}
+                          <div className="p-3 bg-gray-50 rounded-lg">
+                            <div className="text-xs text-gray-500 mb-1">Total Holding Time</div>
+                            <div className="text-lg font-semibold text-gray-800">
+                              {stats.holdingYears.toFixed(1)} years
+                            </div>
+                            <div className="text-xs text-gray-400">{stats.holdingDays} days</div>
+                          </div>
+
+                          {/* Total PnL */}
+                          <div className="p-3 bg-gray-50 rounded-lg">
+                            <div className="text-xs text-gray-500 mb-1">Total PnL</div>
+                            <div className={`text-lg font-semibold ${stats.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {stats.totalPnL >= 0 ? '+' : ''}{stats.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ({stats.totalPnLPct >= 0 ? '+' : ''}{stats.totalPnLPct.toFixed(1)}%)
+                            </div>
+                          </div>
+
+                          {/* XIRR (Annualized Return) */}
+                          <div className="p-3 bg-gray-50 rounded-lg">
+                            <div className="text-xs text-gray-500 mb-1">XIRR (Annualized)</div>
+                            <div className={`text-lg font-semibold ${(stats.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {stats.xirr !== null ? `${stats.xirr >= 0 ? '+' : ''}${stats.xirr.toFixed(1)}%` : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-400">annualized rate of return</div>
+                          </div>
+
+                          {/* If Not Sold */}
+                          <div className="p-3 bg-gray-50 rounded-lg">
+                            <div className="text-xs text-gray-500 mb-1">If Not Sold (Current Value)</div>
+                            <div className="text-lg font-semibold text-gray-800">
+                              {stats.currentPrice > 0
+                                ? stats.ifNotSold.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+                                : 'N/A'
+                              }
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {stats.currentPrice > 0
+                                ? `${stats.totalShares.toLocaleString(undefined, { maximumFractionDigits: 4 })} shares × ${stats.currentPrice.toFixed(2)}`
+                                : 'No current price data'
+                              }
+                            </div>
+                            {/* Show what was actually sold for and the unrealized difference */}
+                            {stats.currentPrice > 0 && (
+                              <div className="text-xs mt-1.5 pt-1.5 border-t border-gray-200">
+                                <span className="text-gray-400">
+                                  Sold for {stats.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                </span>
+                                <span className="text-gray-300 mx-1">·</span>
+                                <span className={stats.ifNotSold - stats.totalFinalValue >= 0 ? 'text-red-500' : 'text-green-500'}>
+                                  {stats.ifNotSold - stats.totalFinalValue >= 0 ? '+' : ''}
+                                  {(stats.ifNotSold - stats.totalFinalValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} unrealized
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Current Price vs Sold Price */}
+                          <div className="p-3 bg-gray-50 rounded-lg">
+                            <div className="text-xs text-gray-500 mb-1">Current vs Sold Price</div>
+                            <div className={`text-lg font-semibold ${stats.priceVsSoldPct >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                              {stats.currentPrice > 0
+                                ? `${stats.priceVsSoldPct >= 0 ? '+' : ''}${stats.priceVsSoldPct.toFixed(1)}%`
+                                : 'N/A'
+                              }
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {stats.currentPrice > 0
+                                ? (stats.priceVsSoldPct >= 0
+                                    ? 'Price went up after selling'
+                                    : 'Good timing — price dropped after selling')
+                                : ''
+                              }
+                            </div>
+                            {/* Show the actual current price and weighted average sell price */}
+                            {stats.currentPrice > 0 && (
+                              <div className="text-xs mt-1.5 pt-1.5 border-t border-gray-200 text-gray-400">
+                                Now {stats.currentPrice.toFixed(2)} vs sold avg {stats.weightedSellPrice.toFixed(2)}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Comparison with "Invested Into" (only shown when comparison is active) */}
+                          {closedInvestedInto && compGainBase !== null && compGainInvested !== null && (
+                            <div className="p-3 bg-gray-50 rounded-lg">
+                              <div className="text-xs text-gray-500 mb-1">
+                                {closedSelectedTicker} vs {closedInvestedInto} since sale
+                              </div>
+                              <div className="text-sm font-semibold text-gray-800">
+                                <span className={compGainBase >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                  {closedSelectedTicker}: {compGainBase >= 0 ? '+' : ''}{compGainBase.toFixed(1)}%
+                                </span>
+                                {' vs '}
+                                <span className={compGainInvested >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                  {closedInvestedInto}: {compGainInvested >= 0 ? '+' : ''}{compGainInvested.toFixed(1)}%
+                                </span>
+                              </div>
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                {(() => {
+                                  const diff = compGainInvested - compGainBase;
+                                  if (diff > 0) return `${compAssetInfo?.name || closedInvestedInto} outperformed by ${diff.toFixed(1)}pp`;
+                                  if (diff < 0) return `${assetInfo?.name || closedSelectedTicker} would have outperformed by ${Math.abs(diff).toFixed(1)}pp`;
+                                  return 'Same performance';
+                                })()}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>

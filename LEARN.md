@@ -16,6 +16,7 @@ That's exactly what a **backtester** does. It takes historical price data and si
 - Run simulations to see how those portfolios would have performed
 - View beautiful charts and detailed statistics
 - See monthly returns broken down by year
+- Analyze closed positions with XIRR, "what if I kept it?" analysis, and comparison to alternative investments
 
 ---
 
@@ -89,17 +90,18 @@ portfolio-backtester/
 
 ### Key Files Explained
 
-**`components/PortfolioBacktester.tsx`** - This is the heart of the app. It's about 700 lines, but breaks down into clear sections:
+**`components/PortfolioBacktester.tsx`** - This is the heart of the app. It's a large component (~6,200 lines) that breaks down into clear sections:
 - State management (tracking what data we have, user selections)
 - Data loading (fetching from Google Sheets)
 - Portfolio management (adding/removing assets)
 - Backtest calculations (the math that simulates investing)
-- UI rendering (displaying forms, charts, tables)
+- Closed positions analysis (XIRR, comparison charts, dashboard stats)
+- UI rendering (displaying forms, charts, tables across 8 tabs)
 
 **`lib/fetchData.ts`** - A helper that:
-- Fetches CSV text from your Google Sheet URL
-- Parses the CSV (handling tricky cases like commas inside quoted fields)
-- Returns clean, structured data
+- Fetches CSV text from your Google Sheet URL (4 sheets in parallel: prices, years, lookup, closed positions)
+- Parses the CSV (handling tricky cases like commas inside quoted fields, and multiline headers)
+- Returns clean, structured data including computed fields like CAGR and total returns
 
 ---
 
@@ -176,6 +178,24 @@ A React library for drawing charts. We use:
 - Simpler code (no sync logic)
 - Users clicking "Refresh" actually refreshes
 
+### Why does the Closed tab have separate filter state?
+
+**Decision:** Give the Closed tab its own independent filter state (`closedSelectedTickers`, `closedSelectedClasses`, `closedSelectedCurrencies`) instead of sharing with the Monthly Prices tab.
+
+**Why:**
+- The Closed tab only shows assets that appear in BOTH the lookup table and the closed positions data — a much smaller set than all assets
+- Default behavior differs: other tabs start with everything selected, but Closed starts with nothing selected (you choose what to analyze)
+- Prevents confusing crosstalk: switching between tabs shouldn't reset your filters
+
+### Why normalize comparison prices instead of showing raw prices?
+
+**Decision:** When comparing "what if I invested in CSPX instead of selling IWDA?", normalize the comparison asset's price to match the sold asset's price at the sale date.
+
+**Why:**
+- Raw prices are meaningless to compare (IWDA at $106 vs CSPX at $500 — apples and oranges)
+- Normalizing makes the chart visually intuitive: both lines start at the same point on the sale date, and you can immediately see which grew more
+- The math: `normalizedPrice = comparisonPrice × (baseAssetPriceAtSaleDate / comparisonPriceAtSaleDate)`
+
 ### Why use 'use client' for the main component?
 
 **Decision:** Mark PortfolioBacktester as a client component.
@@ -230,6 +250,32 @@ This is a fundamental Next.js concept: some things must run in the browser, othe
 **Why Google Sheets Works:** When you "publish" a Google Sheet, Google adds the right headers to allow browser requests.
 
 **Lesson:** When fetching data in a browser, you need the server's permission.
+
+### 5. Multiline CSV Headers Need Special Handling
+
+**The Bug:** The Closed positions spreadsheet had column headers with line breaks inside quoted fields (e.g., `"Inv\nDate"`). The naive `split('\n')` approach tore the header row apart, so every column name was wrong and nothing parsed.
+
+**The Fix:** Created a `splitCSVRows()` function that tracks whether it's inside a quoted field before splitting on newlines. Also normalized headers by collapsing whitespace: `"Inv\nDate"` becomes `"Inv Date"`.
+
+**Lesson:** CSV parsing has more edge cases than you'd think. Quoted fields can contain newlines, commas, and even quotes themselves. Always test with real data, not just clean examples.
+
+### 6. XIRR: When Simple Returns Lie
+
+**The Concept:** If you bought stock in 5 separate batches over 3 years and sold all at once, what was your "real" return? A simple total return (money out minus money in) doesn't account for *when* you invested. Money invested earlier was at risk longer, so it should count more.
+
+**XIRR (Extended Internal Rate of Return)** solves this. It's the annualized return that makes all your cash flows sum to zero when discounted. Think of it as: "What savings account interest rate would have given me the same result, considering my exact timing?"
+
+**Implementation:** Uses the Newton-Raphson method — an iterative algorithm that starts with a guess and refines it until it converges. Each buy is a negative cash flow on its date; each sale is a positive cash flow on its date.
+
+**Edge case:** Sometimes Newton-Raphson doesn't converge (e.g., very unusual cash flow patterns). The app shows "N/A" instead of crashing.
+
+### 7. TypeScript's downlevelIteration Trap
+
+**The Bug:** `[...new Set(dates)]` compiled fine but failed at runtime because TypeScript's default target (ES5) doesn't know how to spread Sets.
+
+**The Fix:** Use `Array.from(new Set(dates))` instead. The `Array.from()` approach works at all TypeScript target levels.
+
+**Lesson:** Just because TypeScript doesn't show an error doesn't mean it'll work at runtime. Know your `tsconfig.json` target.
 
 ---
 
@@ -321,6 +367,10 @@ That's it! Vercel automatically:
 **Rebalancing:** Periodically adjusting your portfolio back to target weights. If stocks grow faster than bonds, you sell some stocks and buy bonds to maintain your 60/40 split.
 
 **CSV (Comma-Separated Values):** A simple text format for spreadsheet data. Each line is a row, commas separate columns.
+
+**XIRR (Extended Internal Rate of Return):** The annualized return on an investment where money went in and out at different times. Unlike simple return (which just compares final value to initial value), XIRR accounts for the timing of each cash flow. If you invested $1,000 in January and another $1,000 in June, then sold everything in December, XIRR tells you the true annualized rate of return considering that the January money was invested for 12 months but the June money only for 6.
+
+**Newton-Raphson Method:** An iterative algorithm for finding roots of equations. Start with a guess, calculate how far off you are, adjust the guess, repeat. Used in this app to compute XIRR, since there's no closed-form formula for it.
 
 ---
 
