@@ -314,6 +314,11 @@ const PortfolioBacktester = () => {
   const [closedSinceInvested, setClosedSinceInvested] = useState(false);
   // Chart toggle: end the chart at the last sale date instead of latest available price
   const [closedUntilSold, setClosedUntilSold] = useState(false);
+  // Set of transaction indices that are currently included (checked) in stats/chart.
+  // null means "all included" (default) — avoids rebuilding a Set every time you switch assets.
+  const [closedIncludedTxns, setClosedIncludedTxns] = useState<Set<number> | null>(null);
+  // Ref for the "select all" checkbox so we can set the indeterminate DOM property
+  const closedSelectAllRef = useRef<HTMLInputElement>(null);
   // Ref for click-outside detection on the Closed tab filter dropdowns
   const closedFilterRef = useRef<HTMLDivElement>(null);
 
@@ -342,6 +347,17 @@ const PortfolioBacktester = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [closedOpenFilterDropdown]);
+
+  // Manage the "indeterminate" state of the select-all checkbox in the Closed tab.
+  // HTML checkbox has three visual states: checked, unchecked, and indeterminate (dash icon).
+  // React can't set indeterminate via props — it's a DOM property, so we use a ref.
+  useEffect(() => {
+    if (closedSelectAllRef.current && closedSelectedTicker) {
+      const total = getClosedTransactions(closedSelectedTicker).length;
+      const included = closedIncludedTxns === null ? total : closedIncludedTxns.size;
+      closedSelectAllRef.current.indeterminate = included > 0 && included < total;
+    }
+  }, [closedIncludedTxns, closedSelectedTicker]);
 
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
@@ -549,6 +565,18 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Returns only the INCLUDED (checked) closed transactions for a ticker.
+   * When closedIncludedTxns is null, all transactions are included (default).
+   * When it's a Set, only transactions at those indices are returned.
+   * Used by stats and chart functions so they only reflect checked rows.
+   */
+  const getFilteredClosedTransactions = (ticker: string): ClosedPositionRow[] => {
+    const all = getClosedTransactions(ticker);
+    if (closedIncludedTxns === null) return all;
+    return all.filter((_, idx) => closedIncludedTxns.has(idx));
+  };
+
+  /**
    * XIRR (Extended Internal Rate of Return) — same concept as Excel's XIRR formula.
    *
    * Think of it like this: if you made multiple investments and withdrawals at different
@@ -603,7 +631,7 @@ const PortfolioBacktester = () => {
    * Returns aggregate metrics across ALL transactions for that asset.
    */
   const getClosedDashboardStats = (ticker: string) => {
-    const transactions = getClosedTransactions(ticker);
+    const transactions = getFilteredClosedTransactions(ticker);
     if (transactions.length === 0) return null;
 
     // 1. Total Holding Time: from earliest buy to latest sale
@@ -667,7 +695,7 @@ const PortfolioBacktester = () => {
   const getClosedChartData = (ticker: string) => {
     if (!assetData) return { chartData: [] as { date: string; price: number }[], buyDots: [] as { date: string; price: number }[], sellDots: [] as { date: string; price: number }[] };
 
-    const transactions = getClosedTransactions(ticker);
+    const transactions = getFilteredClosedTransactions(ticker);
 
     // Collect buy and sell months in YYYY-MM format for matching against monthly price data
     const buyMonths = new Set(transactions.map(t => {
@@ -695,9 +723,76 @@ const PortfolioBacktester = () => {
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     })() : '';
 
-    const chartData: { date: string; price: number }[] = [];
+    // ---- Build the FIFO average buy price line ----
+    // This tracks the weighted average cost basis of shares still held over time.
+    // When shares are bought, they go into a FIFO queue (first in, first out).
+    // When shares are sold, the oldest lots are removed first, and the average
+    // recalculates based on whatever lots remain.
+    //
+    // Events are: buys (invDate) and sells (divDate), sorted chronologically.
+    // Between events, the average stays flat (horizontal line).
+
+    type CostEvent = { date: string; ym: string; type: 'buy' | 'sell'; shares: number; price: number };
+    const costEvents: CostEvent[] = [];
+    for (const t of transactions) {
+      const buyD = new Date(t.invDate);
+      const sellD = new Date(t.divDate);
+      costEvents.push({
+        date: t.invDate,
+        ym: `${buyD.getFullYear()}-${String(buyD.getMonth() + 1).padStart(2, '0')}`,
+        type: 'buy',
+        shares: t.sharesSold,
+        price: t.buyPrice,
+      });
+      costEvents.push({
+        date: t.divDate,
+        ym: `${sellD.getFullYear()}-${String(sellD.getMonth() + 1).padStart(2, '0')}`,
+        type: 'sell',
+        shares: t.sharesSold,
+        price: 0, // sell price doesn't affect cost basis
+      });
+    }
+    // Sort chronologically; if same date, process buys before sells
+    costEvents.sort((a, b) => a.date.localeCompare(b.date) || (a.type === 'buy' ? -1 : 1));
+
+    // FIFO queue: each lot is {shares, price}
+    const fifoLots: { shares: number; price: number }[] = [];
+    // Map of YYYY-MM → average buy price (only for months where we hold shares)
+    const avgPriceByMonth = new Map<string, number>();
+
+    for (const evt of costEvents) {
+      if (evt.type === 'buy') {
+        // Add a new lot to the back of the queue
+        fifoLots.push({ shares: evt.shares, price: evt.price });
+      } else {
+        // Sell: remove shares from the FRONT of the queue (FIFO)
+        let toSell = evt.shares;
+        while (toSell > 0 && fifoLots.length > 0) {
+          if (fifoLots[0].shares <= toSell) {
+            toSell -= fifoLots[0].shares;
+            fifoLots.shift(); // entire lot consumed
+          } else {
+            fifoLots[0].shares -= toSell;
+            toSell = 0;
+          }
+        }
+      }
+
+      // After this event, compute the weighted average of remaining lots
+      const totalShares = fifoLots.reduce((s, lot) => s + lot.shares, 0);
+      if (totalShares > 0) {
+        const weightedSum = fifoLots.reduce((s, lot) => s + lot.shares * lot.price, 0);
+        avgPriceByMonth.set(evt.ym, weightedSum / totalShares);
+      }
+      // If totalShares is 0 (all sold), we stop — don't set a value for this month
+    }
+
+    // Now build chart data, carrying the avg price forward through months
+    const chartData: { date: string; price: number; avgBuyPrice?: number }[] = [];
     const buyDots: { date: string; price: number }[] = [];
     const sellDots: { date: string; price: number }[] = [];
+
+    let currentAvgPrice: number | undefined = undefined;
 
     for (const row of assetData) {
       const price = Number(row[ticker]);
@@ -712,7 +807,15 @@ const PortfolioBacktester = () => {
       if (closedSinceInvested && firstBuyYM && rowYM < firstBuyYM) continue;
       if (closedUntilSold && lastSaleYM && rowYM > lastSaleYM) continue;
 
-      chartData.push({ date: row.date, price });
+      // Update avg price if there's an event this month
+      if (avgPriceByMonth.has(rowYM)) {
+        currentAvgPrice = avgPriceByMonth.get(rowYM);
+      }
+
+      // Only show avg price line between first buy and last sale
+      const showAvg = currentAvgPrice !== undefined && rowYM >= (firstBuyYM || '') && rowYM <= (lastSaleYM || '');
+
+      chartData.push({ date: row.date, price, avgBuyPrice: showAvg ? currentAvgPrice : undefined });
 
       // Mark buy/sell months with dots
       if (buyMonths.has(rowYM)) buyDots.push({ date: row.date, price });
@@ -5970,7 +6073,8 @@ const PortfolioBacktester = () => {
                               className={`border-b border-gray-50 cursor-pointer hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}
                               onClick={() => {
                                 setClosedSelectedTicker(row.ticker);
-                                // Reset comparison state when drilling into a new asset
+                                // Reset all detail-view state when drilling into a new asset
+                                setClosedIncludedTxns(null); // all transactions checked by default
                                 setClosedInvestedInto('');
                                 setClosedInvestedFrom('');
                                 setClosedSinceInvested(false);
@@ -6005,13 +6109,16 @@ const PortfolioBacktester = () => {
 
               {/* --- DETAIL VIEW (when a specific asset is drilled into) --- */}
               {closedSelectedTicker && (() => {
-                const transactions = getClosedTransactions(closedSelectedTicker);
+                // allTransactions = every row for this ticker (used by the table to show all rows)
+                // filteredTransactions = only checked rows (used for sale dates dropdown)
+                const allTransactions = getClosedTransactions(closedSelectedTicker);
+                const filteredTransactions = getFilteredClosedTransactions(closedSelectedTicker);
                 const assetInfo = assetLookup.find(a => a.ticker === closedSelectedTicker);
                 const stats = getClosedDashboardStats(closedSelectedTicker);
                 const { chartData, buyDots, sellDots } = getClosedChartData(closedSelectedTicker);
 
-                // Get sale dates for "Invested From" dropdown
-                const saleDates = Array.from(new Set(transactions.map(t => t.divDate))).sort();
+                // Get sale dates from FILTERED transactions only (so dropdown matches checked rows)
+                const saleDates = Array.from(new Set(filteredTransactions.map(t => t.divDate))).sort();
 
                 // Build comparison data if "Invested Into" is selected
                 const comparisonData = closedInvestedInto && closedInvestedFrom
@@ -6027,7 +6134,7 @@ const PortfolioBacktester = () => {
                 const baseDates = new Set(chartData.map(d => d.date));
                 comparisonData.forEach(c => {
                   if (!baseDates.has(c.date)) {
-                    mergedChartData.push({ date: c.date, price: undefined as unknown as number, compPrice: c.normalizedPrice });
+                    mergedChartData.push({ date: c.date, price: undefined as unknown as number, compPrice: c.normalizedPrice, avgBuyPrice: undefined });
                   }
                 });
                 mergedChartData.sort((a, b) => a.date.localeCompare(b.date));
@@ -6067,7 +6174,7 @@ const PortfolioBacktester = () => {
                     {/* Back button and asset header */}
                     <div className="flex items-center gap-3 mb-4">
                       <button
-                        onClick={() => setClosedSelectedTicker('')}
+                        onClick={() => { setClosedSelectedTicker(''); setClosedIncludedTxns(null); }}
                         className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -6087,6 +6194,22 @@ const PortfolioBacktester = () => {
                         <table className="w-full text-xs border-collapse">
                           <thead>
                             <tr className="border-b border-gray-200">
+                              <th className="text-center py-1.5 px-2 bg-gray-50 w-8">
+                                <input
+                                  ref={closedSelectAllRef}
+                                  type="checkbox"
+                                  checked={closedIncludedTxns === null || closedIncludedTxns.size === allTransactions.length}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setClosedIncludedTxns(null); // all included
+                                    } else {
+                                      setClosedIncludedTxns(new Set()); // none included
+                                    }
+                                  }}
+                                  className="rounded border-gray-300 cursor-pointer"
+                                  title="Include/exclude all transactions from stats and chart"
+                                />
+                              </th>
                               <th className="text-left py-1.5 px-2 bg-gray-50">Inv Date</th>
                               <th className="text-left py-1.5 px-2 bg-gray-50">Div Date</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Hold (D)</th>
@@ -6105,8 +6228,34 @@ const PortfolioBacktester = () => {
                             </tr>
                           </thead>
                           <tbody>
-                            {transactions.map((t, idx) => (
-                              <tr key={idx} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                            {allTransactions.map((t, idx) => (
+                              <tr key={idx} className={`border-b border-gray-50 ${closedIncludedTxns !== null && !closedIncludedTxns.has(idx) ? 'opacity-40' : idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                                <td className="text-center py-1.5 px-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={closedIncludedTxns === null || closedIncludedTxns.has(idx)}
+                                    onChange={(e) => {
+                                      if (closedIncludedTxns === null) {
+                                        // Transitioning from "all included" (null) to explicit set:
+                                        // Build a set with all indices, then remove the unchecked one
+                                        const allIndices = new Set(allTransactions.map((_, i) => i));
+                                        allIndices.delete(idx);
+                                        setClosedIncludedTxns(allIndices);
+                                      } else {
+                                        const next = new Set(closedIncludedTxns);
+                                        if (e.target.checked) {
+                                          next.add(idx);
+                                          // If all are now included, collapse back to null for simplicity
+                                          setClosedIncludedTxns(next.size === allTransactions.length ? null : next);
+                                        } else {
+                                          next.delete(idx);
+                                          setClosedIncludedTxns(next);
+                                        }
+                                      }
+                                    }}
+                                    className="rounded border-gray-300 cursor-pointer"
+                                  />
+                                </td>
                                 <td className="py-1.5 px-2 font-mono">{t.invDate}</td>
                                 <td className="py-1.5 px-2 font-mono">{t.divDate}</td>
                                 <td className="text-right py-1.5 px-2">{t.holdingPeriodDays}</td>
@@ -6248,6 +6397,19 @@ const PortfolioBacktester = () => {
                                 connectNulls
                               />
                             )}
+                            {/* Dashed black line showing FIFO average buy price over time.
+                                Steps up/down when new shares are bought or old ones sold.
+                                Stops at last sale date. */}
+                            <Line
+                              type="stepAfter"
+                              dataKey="avgBuyPrice"
+                              name="Avg Buy Price"
+                              stroke="#000000"
+                              strokeWidth={1.5}
+                              dot={false}
+                              strokeDasharray="6 3"
+                              connectNulls
+                            />
                             {/* Green dots for buy months */}
                             {buyDots.map((dot, i) => (
                               <ReferenceDot

@@ -518,8 +518,14 @@ function parseClosedData(csvText: string): ClosedPositionRow[] {
     const totalReturn = finalNetValue - initialCost;
     const totalReturnPct = initialCost > 0 ? (totalReturn / initialCost) * 100 : 0;
     // CAGR = ((end / start) ^ (1 / years) - 1) × 100
-    const cagr = (holdingPeriodYears > 0 && initialCost > 0 && finalNetValue > 0)
-      ? (Math.pow(finalNetValue / initialCost, 1 / holdingPeriodYears) - 1) * 100
+    // Use exact days between dates (matching XIRR's time calculation) instead of
+    // the spreadsheet's rounded holdingPeriodYears, so CAGR and XIRR agree
+    // for single transactions.
+    const exactYears = (invDate && divDate)
+      ? (new Date(divDate).getTime() - new Date(invDate).getTime()) / (365.25 * 86400000)
+      : holdingPeriodYears;
+    const cagr = (exactYears > 0 && initialCost > 0 && finalNetValue > 0)
+      ? (Math.pow(finalNetValue / initialCost, 1 / exactYears) - 1) * 100
       : 0;
 
     rows.push({
