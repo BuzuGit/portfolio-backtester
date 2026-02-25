@@ -17,7 +17,7 @@
 */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot } from 'recharts';
+import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow } from '@/lib/fetchData';
 
@@ -787,6 +787,16 @@ const PortfolioBacktester = () => {
       // If totalShares is 0 (all sold), we stop — don't set a value for this month
     }
 
+    // If all shares were sold in the final month, remove that month's avg price entry.
+    // Without this, intermediate partial sells within the same month (e.g. selling 9 out of
+    // 10 positions) would change the avg to reflect only the last remaining lot's price,
+    // causing a misleading jump in the line right before it ends. By deleting the entry,
+    // the chart carries forward the pre-sale avg price unchanged into the sale month.
+    const finalRemainingShares = fifoLots.reduce((s, lot) => s + lot.shares, 0);
+    if (finalRemainingShares === 0 && lastSaleYM) {
+      avgPriceByMonth.delete(lastSaleYM);
+    }
+
     // Now build chart data, carrying the avg price forward through months
     const chartData: { date: string; price: number; avgBuyPrice?: number }[] = [];
     const buyDots: { date: string; price: number }[] = [];
@@ -823,6 +833,157 @@ const PortfolioBacktester = () => {
     }
 
     return { chartData, buyDots, sellDots };
+  };
+
+  /**
+   * Builds data for the "Invested Capital" charts in the Closed tab detail view.
+   *
+   * Tracks how the invested capital and its market value changed over time using FIFO
+   * lot accounting. For each month between first buy and last sale, computes:
+   *   - investedCapital: total cost basis of shares currently held (goes up on buys, down on sales)
+   *   - marketValue: shares currently held × current market price (fluctuates with the market)
+   *   - pnl: marketValue - investedCapital (positive = profit, negative = loss)
+   */
+  const getClosedCapitalChartData = (ticker: string): { date: string; investedCapital: number; marketValue: number; pnl: number }[] => {
+    if (!assetData) return [];
+
+    const transactions = getFilteredClosedTransactions(ticker);
+    if (transactions.length === 0) return [];
+
+    // Collect all buy and sell events from the checked transactions
+    type CapitalEvent = { date: string; ym: string; type: 'buy' | 'sell'; shares: number; price: number };
+    const events: CapitalEvent[] = [];
+    for (const t of transactions) {
+      const buyD = new Date(t.invDate);
+      const sellD = new Date(t.divDate);
+      events.push({
+        date: t.invDate,
+        ym: `${buyD.getFullYear()}-${String(buyD.getMonth() + 1).padStart(2, '0')}`,
+        type: 'buy',
+        shares: t.sharesSold,
+        price: t.buyPrice,
+      });
+      events.push({
+        date: t.divDate,
+        ym: `${sellD.getFullYear()}-${String(sellD.getMonth() + 1).padStart(2, '0')}`,
+        type: 'sell',
+        shares: t.sharesSold,
+        price: 0,
+      });
+    }
+    // Sort: chronological, buys before sells on same date
+    events.sort((a, b) => a.date.localeCompare(b.date) || (a.type === 'buy' ? -1 : 1));
+
+    // FIFO lot queue — same pattern as avg buy price, but we also track total cost basis
+    const lots: { shares: number; price: number }[] = [];
+    // Map of YYYY-MM → {invested: total cost basis, shares: total shares held}
+    const capitalByMonth = new Map<string, { invested: number; shares: number }>();
+
+    // Determine first buy and last sale months for bounding the chart (computed early
+    // so we can capture the pre-sale state during FIFO processing)
+    const sortedBuyDates = transactions.map(t => t.invDate).sort();
+    const sortedSaleDates = transactions.map(t => t.divDate).sort();
+    const lastSaleYM = (() => { const d = new Date(sortedSaleDates[sortedSaleDates.length - 1]); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+
+    // Track the cost basis just before the final sale(s) so the chart can end at the
+    // actual sale values instead of dropping to zero
+    let preFinalSaleInvested = 0;
+    let capturedPreSaleState = false;
+
+    for (const evt of events) {
+      // Before the first sell in the final sale month, snapshot the current lots —
+      // this is how much capital was at risk right before liquidation
+      if (!capturedPreSaleState && evt.type === 'sell' && evt.ym === lastSaleYM) {
+        preFinalSaleInvested = lots.reduce((s, lot) => s + lot.shares * lot.price, 0);
+        capturedPreSaleState = true;
+      }
+
+      if (evt.type === 'buy') {
+        lots.push({ shares: evt.shares, price: evt.price });
+      } else {
+        // FIFO: remove oldest lots first
+        let toSell = evt.shares;
+        while (toSell > 0 && lots.length > 0) {
+          if (lots[0].shares <= toSell) {
+            toSell -= lots[0].shares;
+            lots.shift();
+          } else {
+            lots[0].shares -= toSell;
+            toSell = 0;
+          }
+        }
+      }
+
+      // After this event, record the state of remaining lots
+      const totalShares = lots.reduce((s, lot) => s + lot.shares, 0);
+      const totalInvested = lots.reduce((s, lot) => s + lot.shares * lot.price, 0);
+      capitalByMonth.set(evt.ym, { invested: totalInvested, shares: totalShares });
+    }
+
+    // Actual sale proceeds for the final month — sum of finalNetValue (includes fees/divs)
+    // so the chart's final data point matches the summary line's "sold for" figure
+    const finalSaleProceeds = transactions
+      .filter(t => {
+        const d = new Date(t.divDate);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === lastSaleYM;
+      })
+      .reduce((sum, t) => sum + t.finalNetValue, 0);
+    const firstBuyYM = (() => { const d = new Date(sortedBuyDates[0]); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+
+    // Iterate through monthly price data, carrying forward the capital state
+    const result: { date: string; investedCapital: number; marketValue: number; pnl: number }[] = [];
+    let currentInvested = 0;
+    let currentShares = 0;
+
+    for (const row of assetData) {
+      const price = Number(row[ticker]);
+      if (!price || price <= 0) continue;
+
+      const rowDate = new Date(row.date);
+      if (isNaN(rowDate.getTime())) continue;
+      const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+
+      // Only show data between first buy and last sale
+      if (rowYM < firstBuyYM || rowYM > lastSaleYM) continue;
+
+      // Update capital state if there's an event this month
+      if (capitalByMonth.has(rowYM)) {
+        const state = capitalByMonth.get(rowYM)!;
+        currentInvested = state.invested;
+        currentShares = state.shares;
+      }
+
+      // Skip months where we don't hold anything yet (before first buy event is processed)
+      if (currentShares === 0 && currentInvested === 0 && result.length === 0) continue;
+
+      const marketValue = currentShares * price;
+      result.push({
+        date: row.date,
+        investedCapital: Math.round(currentInvested),
+        marketValue: Math.round(marketValue),
+        pnl: Math.round(marketValue - currentInvested),
+      });
+    }
+
+    // After the final sale, investedCapital and marketValue both drop to 0 (no shares held).
+    // Replace trailing zeros with the actual sale outcome so the chart ends at the real
+    // sale proceeds — matching the summary line's "invested → sold for → profit" figures.
+    // Pop the zero entries first, then append one final point with the true sale values.
+    while (result.length > 0 && result[result.length - 1].investedCapital === 0 && result[result.length - 1].marketValue === 0) {
+      result.pop();
+    }
+    // Append the sale month's actual outcome: cost basis before selling vs real sale proceeds
+    if (preFinalSaleInvested > 0 || finalSaleProceeds > 0) {
+      const lastSaleDate = sortedSaleDates[sortedSaleDates.length - 1];
+      result.push({
+        date: lastSaleDate,
+        investedCapital: Math.round(preFinalSaleInvested),
+        marketValue: Math.round(finalSaleProceeds),
+        pnl: Math.round(finalSaleProceeds - preFinalSaleInvested),
+      });
+    }
+
+    return result;
   };
 
   /**
@@ -6116,6 +6277,7 @@ const PortfolioBacktester = () => {
                 const assetInfo = assetLookup.find(a => a.ticker === closedSelectedTicker);
                 const stats = getClosedDashboardStats(closedSelectedTicker);
                 const { chartData, buyDots, sellDots } = getClosedChartData(closedSelectedTicker);
+                const capitalChartData = getClosedCapitalChartData(closedSelectedTicker);
 
                 // Get sale dates from FILTERED transactions only (so dropdown matches checked rows)
                 const saleDates = Array.from(new Set(filteredTransactions.map(t => t.divDate))).sort();
@@ -6454,6 +6616,120 @@ const PortfolioBacktester = () => {
                         </div>
                       </div>
                     </div>
+
+                    {/* --- Invested Capital Charts --- */}
+                    {capitalChartData.length > 0 && stats && (
+                      <div className="bg-white p-4 rounded-lg shadow mb-4">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-1">Invested Capital</h4>
+                        <div className="text-xs text-gray-500 mb-3">
+                          {stats.totalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} invested → sold for {stats.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          <span className="mx-1">·</span>
+                          <span className={stats.totalPnL >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                            {stats.totalPnL >= 0 ? 'Profit' : 'Loss'} of {stats.totalPnL >= 0 ? '+' : ''}{stats.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ({stats.totalPnLPct >= 0 ? '+' : ''}{stats.totalPnLPct.toFixed(1)}%)
+                          </span>
+                        </div>
+
+                        {/* Chart 1: Invested Capital vs Market Value */}
+                        <ResponsiveContainer width="100%" height={250}>
+                          <AreaChart data={capitalChartData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="date" tick={{ fontSize: 9 }} />
+                            <YAxis tick={{ fontSize: 9 }} width={55} />
+                            <Tooltip
+                              formatter={(value: number, name: string) => {
+                                if (value === undefined || value === null) return ['-', name];
+                                return [value.toLocaleString(), name];
+                              }}
+                            />
+                            <Legend />
+                            <Area
+                              type="stepAfter"
+                              dataKey="investedCapital"
+                              name="Invested"
+                              stroke="#000000"
+                              fill="#000000"
+                              fillOpacity={0.08}
+                              strokeWidth={1.5}
+                              strokeDasharray="6 3"
+                            />
+                            <Area
+                              type="monotone"
+                              dataKey="marketValue"
+                              name="Market Value"
+                              stroke="#4F46E5"
+                              fill="#4F46E5"
+                              fillOpacity={0.2}
+                              strokeWidth={2}
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+
+                        {/* Chart 2: Cumulative PnL (green above 0, red below 0) */}
+                        <h4 className="text-sm font-semibold text-gray-700 mt-4 mb-2">Unrealized Profit / Loss Over Time</h4>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <AreaChart data={capitalChartData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                            <defs>
+                              <linearGradient id="pnlGradient" x1="0" y1="0" x2="0" y2="1">
+                                {(() => {
+                                  // Compute the gradient stop point so green is above 0 and red is below 0.
+                                  // The Y axis goes from max (top) to min (bottom), so the zero-crossing
+                                  // as a percentage from top = max / (max - min).
+                                  const pnlValues = capitalChartData.map(d => d.pnl);
+                                  const maxPnl = Math.max(...pnlValues, 0);
+                                  const minPnl = Math.min(...pnlValues, 0);
+                                  const range = maxPnl - minPnl;
+                                  // zeroFraction: how far down from the top the zero line is (0 = top, 1 = bottom)
+                                  const zeroFraction = range > 0 ? maxPnl / range : 0.5;
+                                  return (
+                                    <>
+                                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.4} />
+                                      <stop offset={`${(zeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" stopOpacity={0.05} />
+                                      <stop offset={`${(zeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" stopOpacity={0.05} />
+                                      <stop offset="100%" stopColor="#ef4444" stopOpacity={0.4} />
+                                    </>
+                                  );
+                                })()}
+                              </linearGradient>
+                              <linearGradient id="pnlStrokeGradient" x1="0" y1="0" x2="0" y2="1">
+                                {(() => {
+                                  const pnlValues = capitalChartData.map(d => d.pnl);
+                                  const maxPnl = Math.max(...pnlValues, 0);
+                                  const minPnl = Math.min(...pnlValues, 0);
+                                  const range = maxPnl - minPnl;
+                                  const zeroFraction = range > 0 ? maxPnl / range : 0.5;
+                                  return (
+                                    <>
+                                      <stop offset="0%" stopColor="#22c55e" />
+                                      <stop offset={`${(zeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" />
+                                      <stop offset={`${(zeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" />
+                                      <stop offset="100%" stopColor="#ef4444" />
+                                    </>
+                                  );
+                                })()}
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="date" tick={{ fontSize: 9 }} />
+                            <YAxis tick={{ fontSize: 9 }} width={55} />
+                            <Tooltip
+                              formatter={(value: number) => {
+                                if (value === undefined || value === null) return ['-', 'PnL'];
+                                return [`${value >= 0 ? '+' : ''}${value.toLocaleString()}`, 'PnL'];
+                              }}
+                            />
+                            <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                            <Area
+                              type="monotone"
+                              dataKey="pnl"
+                              name="PnL"
+                              stroke="url(#pnlStrokeGradient)"
+                              fill="url(#pnlGradient)"
+                              strokeWidth={2}
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
 
                     {/* --- Dashboard Statistics --- */}
                     {stats && (
