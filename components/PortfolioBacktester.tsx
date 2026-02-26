@@ -943,11 +943,9 @@ const PortfolioBacktester = () => {
       }
     }
 
-    // First sale month (for showing the avg sell price line from this point onward)
-    const firstSaleYM = (() => {
-      const saleDatesArr = transactions.map(t => t.divDate).sort();
-      return saleDatesArr.length > 0 ? toYM(new Date(saleDatesArr[0])) : '';
-    })();
+    // First sale month (for showing the avg sell price line from this point onward).
+    // Reuses sortedSaleDates (already computed above) instead of re-sorting.
+    const firstSaleYM = sortedSaleDates.length > 0 ? toYM(new Date(sortedSaleDates[0])) : '';
 
     // Now build chart data, carrying the avg prices forward through months
     const chartData: { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number }[] = [];
@@ -6920,21 +6918,27 @@ const PortfolioBacktester = () => {
                             ? validPriceData.reduce((worst, d) => d.price < worst.price ? d : worst, validPriceData[0])
                             : null;
 
-                          // Find the last valid price and last valid avg buy price by walking
-                          // backwards. The last entry may be a comparison-only point (no price),
-                          // so we can't just grab the last element. A backward loop avoids
-                          // creating temporary array copies ([...arr].reverse().find()).
+                          // Find the last valid values by walking backwards. The last entry may
+                          // be a comparison-only point (no price), so we can't just grab the
+                          // last element. A backward loop avoids creating temporary array copies.
+                          // We track which values we still need so we can break early even when
+                          // some data series don't exist (e.g. no comparison asset selected).
                           let lastPrice: number | null = null;
                           let lastAvgBuyPrice: number | null = null;
                           let lastAvgSellPrice: number | null = null;
                           let lastCompPrice: number | null = null;
+                          const hasComp = !!(closedInvestedInto && comparisonData.length > 0);
                           for (let i = mergedChartData.length - 1; i >= 0; i--) {
                             const d = mergedChartData[i];
                             if (lastPrice === null && d.price != null && d.price > 0) lastPrice = d.price;
                             if (lastAvgBuyPrice === null && d.avgBuyPrice != null && d.avgBuyPrice > 0) lastAvgBuyPrice = d.avgBuyPrice;
                             if (lastAvgSellPrice === null && d.avgSellPrice != null && d.avgSellPrice > 0) lastAvgSellPrice = d.avgSellPrice;
                             if (lastCompPrice === null && d.compPrice != null && d.compPrice > 0) lastCompPrice = d.compPrice;
-                            if (lastPrice !== null && lastAvgBuyPrice !== null && lastAvgSellPrice !== null && lastCompPrice !== null) break;
+                            // Break early once we've found all values that can possibly exist
+                            if (lastPrice !== null
+                              && (lastAvgBuyPrice !== null || !closedShowAvgBuy)
+                              && (lastAvgSellPrice !== null || !closedShowAvgSell)
+                              && (lastCompPrice !== null || !hasComp)) break;
                           }
 
                           /* Bubble definitions for the Price History chart. Defined here (inside
