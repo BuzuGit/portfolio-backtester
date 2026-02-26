@@ -22,6 +22,15 @@ import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow } from '@/lib/fetchData';
 
 // ============================================
+// UTILITY FUNCTIONS
+// ============================================
+
+/** Convert a Date to "YYYY-MM" string (e.g. 2024-02). Used everywhere to compare
+ *  transaction dates against monthly price data rows. */
+const toYM = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+// ============================================
 // TYPE DEFINITIONS
 // ============================================
 // TypeScript interfaces describe the "shape" of our data.
@@ -698,14 +707,8 @@ const PortfolioBacktester = () => {
     const transactions = getFilteredClosedTransactions(ticker);
 
     // Collect buy and sell months in YYYY-MM format for matching against monthly price data
-    const buyMonths = new Set(transactions.map(t => {
-      const d = new Date(t.invDate);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    }));
-    const sellMonths = new Set(transactions.map(t => {
-      const d = new Date(t.divDate);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    }));
+    const buyMonths = new Set(transactions.map(t => toYM(new Date(t.invDate))));
+    const sellMonths = new Set(transactions.map(t => toYM(new Date(t.divDate))));
 
     // Determine date boundaries for "Since Invested" and "Until Sold" toggles
     const sortedBuyDates = transactions.map(t => t.invDate).sort();
@@ -714,14 +717,8 @@ const PortfolioBacktester = () => {
     const lastSaleDate = sortedSaleDates[sortedSaleDates.length - 1] || '';
 
     // Convert to YYYY-MM for comparison with price data
-    const firstBuyYM = firstBuyDate ? (() => {
-      const d = new Date(firstBuyDate);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    })() : '';
-    const lastSaleYM = lastSaleDate ? (() => {
-      const d = new Date(lastSaleDate);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    })() : '';
+    const firstBuyYM = firstBuyDate ? toYM(new Date(firstBuyDate)) : '';
+    const lastSaleYM = lastSaleDate ? toYM(new Date(lastSaleDate)) : '';
 
     // ---- Build the FIFO average buy price line ----
     // This tracks the weighted average cost basis of shares still held over time.
@@ -737,16 +734,19 @@ const PortfolioBacktester = () => {
     for (const t of transactions) {
       const buyD = new Date(t.invDate);
       const sellD = new Date(t.divDate);
+      // Use initialCost / shares as the per-share cost (includes buy commission).
+      // If commission data is missing, initialCost = buyPrice × shares, so this still works.
+      const costPerShare = t.sharesSold > 0 ? t.initialCost / t.sharesSold : t.buyPrice;
       costEvents.push({
         date: t.invDate,
-        ym: `${buyD.getFullYear()}-${String(buyD.getMonth() + 1).padStart(2, '0')}`,
+        ym: toYM(buyD),
         type: 'buy',
         shares: t.sharesSold,
-        price: t.buyPrice,
+        price: costPerShare,
       });
       costEvents.push({
         date: t.divDate,
-        ym: `${sellD.getFullYear()}-${String(sellD.getMonth() + 1).padStart(2, '0')}`,
+        ym: toYM(sellD),
         type: 'sell',
         shares: t.sharesSold,
         price: 0, // sell price doesn't affect cost basis
@@ -778,9 +778,11 @@ const PortfolioBacktester = () => {
         }
       }
 
-      // After this event, compute the weighted average of remaining lots
+      // After this event, compute the weighted average of remaining lots.
+      // Use epsilon comparison to avoid floating-point dust (e.g. 1.77e-15 instead of 0)
+      // that can accumulate from repeated subtraction of fractional share counts.
       const totalShares = fifoLots.reduce((s, lot) => s + lot.shares, 0);
-      if (totalShares > 0) {
+      if (totalShares > 1e-9) {
         const weightedSum = fifoLots.reduce((s, lot) => s + lot.shares * lot.price, 0);
         avgPriceByMonth.set(evt.ym, weightedSum / totalShares);
       }
@@ -793,7 +795,7 @@ const PortfolioBacktester = () => {
     // causing a misleading jump in the line right before it ends. By deleting the entry,
     // the chart carries forward the pre-sale avg price unchanged into the sale month.
     const finalRemainingShares = fifoLots.reduce((s, lot) => s + lot.shares, 0);
-    if (finalRemainingShares === 0 && lastSaleYM) {
+    if (finalRemainingShares < 1e-9 && lastSaleYM) {
       avgPriceByMonth.delete(lastSaleYM);
     }
 
@@ -811,7 +813,7 @@ const PortfolioBacktester = () => {
       // Extract YYYY-MM from the price data date
       const rowDate = new Date(row.date);
       if (isNaN(rowDate.getTime())) continue; // skip invalid dates
-      const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+      const rowYM = toYM(rowDate);
 
       // Apply toggle filters (compare at month level)
       if (closedSinceInvested && firstBuyYM && rowYM < firstBuyYM) continue;
@@ -856,16 +858,17 @@ const PortfolioBacktester = () => {
     for (const t of transactions) {
       const buyD = new Date(t.invDate);
       const sellD = new Date(t.divDate);
+      const costPerShare = t.sharesSold > 0 ? t.initialCost / t.sharesSold : t.buyPrice;
       events.push({
         date: t.invDate,
-        ym: `${buyD.getFullYear()}-${String(buyD.getMonth() + 1).padStart(2, '0')}`,
+        ym: toYM(buyD),
         type: 'buy',
         shares: t.sharesSold,
-        price: t.buyPrice,
+        price: costPerShare,
       });
       events.push({
         date: t.divDate,
-        ym: `${sellD.getFullYear()}-${String(sellD.getMonth() + 1).padStart(2, '0')}`,
+        ym: toYM(sellD),
         type: 'sell',
         shares: t.sharesSold,
         price: 0,
@@ -883,7 +886,8 @@ const PortfolioBacktester = () => {
     // so we can capture the pre-sale state during FIFO processing)
     const sortedBuyDates = transactions.map(t => t.invDate).sort();
     const sortedSaleDates = transactions.map(t => t.divDate).sort();
-    const lastSaleYM = (() => { const d = new Date(sortedSaleDates[sortedSaleDates.length - 1]); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+    const firstBuyYM = toYM(new Date(sortedBuyDates[0]));
+    const lastSaleYM = toYM(new Date(sortedSaleDates[sortedSaleDates.length - 1]));
 
     // Track the cost basis just before the final sale(s) so the chart can end at the
     // actual sale values instead of dropping to zero
@@ -925,10 +929,9 @@ const PortfolioBacktester = () => {
     const finalSaleProceeds = transactions
       .filter(t => {
         const d = new Date(t.divDate);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === lastSaleYM;
+        return toYM(d) === lastSaleYM;
       })
       .reduce((sum, t) => sum + t.finalNetValue, 0);
-    const firstBuyYM = (() => { const d = new Date(sortedBuyDates[0]); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
 
     // Iterate through monthly price data, carrying forward the capital state
     const result: { date: string; investedCapital: number; marketValue: number; pnl: number }[] = [];
@@ -941,7 +944,7 @@ const PortfolioBacktester = () => {
 
       const rowDate = new Date(row.date);
       if (isNaN(rowDate.getTime())) continue;
-      const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+      const rowYM = toYM(rowDate);
 
       // Only show data between first buy and last sale
       if (rowYM < firstBuyYM || rowYM > lastSaleYM) continue;
@@ -953,8 +956,9 @@ const PortfolioBacktester = () => {
         currentShares = state.shares;
       }
 
-      // Skip months where we don't hold anything yet (before first buy event is processed)
-      if (currentShares === 0 && currentInvested === 0 && result.length === 0) continue;
+      // Skip months where we don't hold anything yet (before first buy event is processed).
+      // Use epsilon for floating-point dust from fractional share arithmetic.
+      if (currentShares < 1e-9 && currentInvested < 1e-9 && result.length === 0) continue;
 
       const marketValue = currentShares * price;
       result.push({
@@ -969,7 +973,7 @@ const PortfolioBacktester = () => {
     // Replace trailing zeros with the actual sale outcome so the chart ends at the real
     // sale proceeds — matching the summary line's "invested → sold for → profit" figures.
     // Pop the zero entries first, then append one final point with the true sale values.
-    while (result.length > 0 && result[result.length - 1].investedCapital === 0 && result[result.length - 1].marketValue === 0) {
+    while (result.length > 0 && Math.abs(result[result.length - 1].investedCapital) < 1 && Math.abs(result[result.length - 1].marketValue) < 1) {
       result.pop();
     }
     // Append the sale month's actual outcome: cost basis before selling vs real sale proceeds
@@ -1004,7 +1008,7 @@ const PortfolioBacktester = () => {
     // Find both asset prices at the normalization date (match by month)
     const fromDate = new Date(fromDateStr);
     if (isNaN(fromDate.getTime())) return []; // invalid date guard
-    const fromYM = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}`;
+    const fromYM = toYM(fromDate);
 
     let basePriceAtDate = 0;
     let compPriceAtDate = 0;
@@ -1012,7 +1016,7 @@ const PortfolioBacktester = () => {
     for (const row of assetData) {
       const rowDate = new Date(row.date);
       if (isNaN(rowDate.getTime())) continue; // skip invalid dates
-      const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+      const rowYM = toYM(rowDate);
       if (rowYM === fromYM) {
         const bp = Number(row[baseTicker]);
         const cp = Number(row[compTicker]);
@@ -1030,7 +1034,7 @@ const PortfolioBacktester = () => {
     for (const row of assetData) {
       const rowDate = new Date(row.date);
       if (isNaN(rowDate.getTime())) continue; // skip invalid dates
-      const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+      const rowYM = toYM(rowDate);
       if (rowYM < fromYM) continue; // Only show from the sale date onward
       const cp = Number(row[compTicker]);
       if (!cp || cp <= 0) continue;
@@ -6279,6 +6283,17 @@ const PortfolioBacktester = () => {
                 const { chartData, buyDots, sellDots } = getClosedChartData(closedSelectedTicker);
                 const capitalChartData = getClosedCapitalChartData(closedSelectedTicker);
 
+                // Pre-compute the zero-crossing fraction for the PnL gradient once,
+                // rather than computing it twice inline within the SVG gradient defs.
+                // zeroFraction = how far down from the chart's top the y=0 line sits (0 = top, 1 = bottom).
+                const pnlZeroFraction = (() => {
+                  if (capitalChartData.length === 0) return 0.5;
+                  const maxPnl = capitalChartData.reduce((max, d) => d.pnl > max ? d.pnl : max, 0);
+                  const minPnl = capitalChartData.reduce((min, d) => d.pnl < min ? d.pnl : min, 0);
+                  const range = maxPnl - minPnl;
+                  return range > 0 ? maxPnl / range : 0.5;
+                })();
+
                 // Get sale dates from FILTERED transactions only (so dropdown matches checked rows)
                 const saleDates = Array.from(new Set(filteredTransactions.map(t => t.divDate))).sort();
 
@@ -6306,7 +6321,7 @@ const PortfolioBacktester = () => {
                 let compGainInvested: number | null = null;
                 if (closedInvestedInto && closedInvestedFrom && assetData) {
                   const fromDate = new Date(closedInvestedFrom);
-                  const fromYM = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}`;
+                  const fromYM = toYM(fromDate);
                   let basePriceAtSale = 0;
                   let compPriceAtSale = 0;
                   let baseCurrentPrice = 0;
@@ -6314,7 +6329,7 @@ const PortfolioBacktester = () => {
 
                   for (const row of assetData) {
                     const rowDate = new Date(row.date);
-                    const rowYM = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}`;
+                    const rowYM = toYM(rowDate);
                     const bp = Number(row[closedSelectedTicker]);
                     const cp = Number(row[closedInvestedInto]);
                     if (rowYM === fromYM) {
@@ -6378,8 +6393,10 @@ const PortfolioBacktester = () => {
                               <th className="text-right py-1.5 px-2 bg-gray-50">Hold (Y)</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Shares</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Buy Price</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Buy Comm.</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Initial Cost</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Sell Price</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50">Sell Comm.</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Value After Fee</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Cum. Div</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Tax</th>
@@ -6424,8 +6441,10 @@ const PortfolioBacktester = () => {
                                 <td className="text-right py-1.5 px-2">{t.holdingPeriodYears.toFixed(1)}</td>
                                 <td className="text-right py-1.5 px-2">{t.sharesSold.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.buyPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{t.buyCommission.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.initialCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.sellPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{t.sellCommission.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.valueAfterFee.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.cumDividend.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.totalTax.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
@@ -6442,6 +6461,88 @@ const PortfolioBacktester = () => {
                               </tr>
                             ))}
                           </tbody>
+                          {/* --- Summary Row (uses only checked/filtered transactions) --- */}
+                          {filteredTransactions.length > 0 && (() => {
+                            // Compute summary stats from the checked transactions only
+                            const sumShares = filteredTransactions.reduce((s, t) => s + t.sharesSold, 0);
+                            const sumCost = filteredTransactions.reduce((s, t) => s + t.initialCost, 0);
+                            const sumBuyComm = filteredTransactions.reduce((s, t) => s + t.buyCommission, 0);
+                            const sumSellComm = filteredTransactions.reduce((s, t) => s + t.sellCommission, 0);
+                            const sumValueAfterFee = filteredTransactions.reduce((s, t) => s + t.valueAfterFee, 0);
+                            const sumCumDiv = filteredTransactions.reduce((s, t) => s + t.cumDividend, 0);
+                            const sumTax = filteredTransactions.reduce((s, t) => s + t.totalTax, 0);
+                            const sumFinalNet = filteredTransactions.reduce((s, t) => s + t.finalNetValue, 0);
+                            const sumReturn = sumFinalNet - sumCost;
+                            const sumReturnPct = sumCost > 0 ? (sumReturn / sumCost) * 100 : 0;
+                            // Weighted average buy price (includes commission = true cost basis per share)
+                            const wAvgBuy = sumShares > 0 ? sumCost / sumShares : 0;
+                            // Weighted average sell price (weighted by shares in each transaction)
+                            const wAvgSell = sumShares > 0
+                              ? filteredTransactions.reduce((s, t) => s + t.sellPrice * t.sharesSold, 0) / sumShares
+                              : 0;
+                            // Max holding days/years across the checked transactions
+                            const maxDays = Math.max(...filteredTransactions.map(t => t.holdingPeriodDays));
+                            const maxYears = maxDays / 365.25;
+                            // XIRR across all checked transactions (cumulative CAGR)
+                            const cashFlows = filteredTransactions.flatMap(t => [
+                              { date: new Date(t.invDate), amount: -t.initialCost },
+                              { date: new Date(t.divDate), amount: t.finalNetValue },
+                            ]).sort((a, b) => a.date.getTime() - b.date.getTime());
+                            const xirr = calculateXIRR(cashFlows);
+
+                            return (
+                              <tfoot>
+                                <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
+                                  {/* Checkbox column — empty */}
+                                  <td className="py-2 px-2"></td>
+                                  {/* Inv Date — label */}
+                                  <td className="py-2 px-2 text-left text-gray-700" colSpan={2}>Summary</td>
+                                  {/* Hold (D) — max */}
+                                  <td className="text-right py-2 px-2 font-mono">{maxDays.toLocaleString()}</td>
+                                  {/* Hold (Y) — max */}
+                                  <td className="text-right py-2 px-2 font-mono">{maxYears.toFixed(1)}</td>
+                                  {/* Shares — cumulative */}
+                                  <td className="text-right py-2 px-2 font-mono">{sumShares.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                                  {/* Buy Price — weighted avg */}
+                                  <td className="text-right py-2 px-2 font-mono">{wAvgBuy.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  {/* Buy Comm. — cumulative + basis points vs invested amount (shares × buyPrice, excl. commission) */}
+                                  <td className="text-right py-2 px-2 font-mono">
+                                    {sumBuyComm.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    {(sumCost - sumBuyComm) > 0 && <span className="text-gray-400 text-[10px] ml-0.5">({Math.round(sumBuyComm / (sumCost - sumBuyComm) * 10000)}bps)</span>}
+                                  </td>
+                                  {/* Initial Cost — cumulative */}
+                                  <td className="text-right py-2 px-2 font-mono">{sumCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  {/* Sell Price — weighted avg */}
+                                  <td className="text-right py-2 px-2 font-mono">{wAvgSell.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  {/* Sell Comm. — cumulative + basis points vs gross sale proceeds */}
+                                  <td className="text-right py-2 px-2 font-mono">
+                                    {sumSellComm.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    {(sumValueAfterFee + sumSellComm) > 0 && <span className="text-gray-400 text-[10px] ml-0.5">({Math.round(sumSellComm / (sumValueAfterFee + sumSellComm) * 10000)}bps)</span>}
+                                  </td>
+                                  {/* Value After Fee — cumulative */}
+                                  <td className="text-right py-2 px-2 font-mono">{sumValueAfterFee.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  {/* Cum. Div — cumulative */}
+                                  <td className="text-right py-2 px-2 font-mono">{sumCumDiv.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  {/* Tax — cumulative */}
+                                  <td className="text-right py-2 px-2 font-mono">{sumTax.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  {/* Final Net Value — cumulative */}
+                                  <td className="text-right py-2 px-2 font-mono">{sumFinalNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  {/* Total Return — cumulative */}
+                                  <td className={`text-right py-2 px-2 font-mono ${sumReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {sumReturn >= 0 ? '+' : ''}{sumReturn.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                  </td>
+                                  {/* Return % — cumulative */}
+                                  <td className={`text-right py-2 px-2 font-mono ${sumReturnPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {sumReturnPct >= 0 ? '+' : ''}{sumReturnPct.toFixed(1)}%
+                                  </td>
+                                  {/* CAGR — XIRR */}
+                                  <td className={`text-right py-2 px-2 font-mono ${xirr !== null && xirr >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {xirr !== null ? `${xirr >= 0 ? '+' : ''}${xirr.toFixed(1)}%` : '—'}
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            );
+                          })()}
                         </table>
                       </div>
                     </div>
@@ -6669,43 +6770,19 @@ const PortfolioBacktester = () => {
                         <ResponsiveContainer width="100%" height={200}>
                           <AreaChart data={capitalChartData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
                             <defs>
+                              {/* Fill gradient: green above zero, red below zero (semi-transparent) */}
                               <linearGradient id="pnlGradient" x1="0" y1="0" x2="0" y2="1">
-                                {(() => {
-                                  // Compute the gradient stop point so green is above 0 and red is below 0.
-                                  // The Y axis goes from max (top) to min (bottom), so the zero-crossing
-                                  // as a percentage from top = max / (max - min).
-                                  const pnlValues = capitalChartData.map(d => d.pnl);
-                                  const maxPnl = Math.max(...pnlValues, 0);
-                                  const minPnl = Math.min(...pnlValues, 0);
-                                  const range = maxPnl - minPnl;
-                                  // zeroFraction: how far down from the top the zero line is (0 = top, 1 = bottom)
-                                  const zeroFraction = range > 0 ? maxPnl / range : 0.5;
-                                  return (
-                                    <>
-                                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.4} />
-                                      <stop offset={`${(zeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" stopOpacity={0.05} />
-                                      <stop offset={`${(zeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" stopOpacity={0.05} />
-                                      <stop offset="100%" stopColor="#ef4444" stopOpacity={0.4} />
-                                    </>
-                                  );
-                                })()}
+                                <stop offset="0%" stopColor="#22c55e" stopOpacity={0.4} />
+                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" stopOpacity={0.05} />
+                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" stopOpacity={0.05} />
+                                <stop offset="100%" stopColor="#ef4444" stopOpacity={0.4} />
                               </linearGradient>
+                              {/* Stroke gradient: green above zero, red below zero (solid line) */}
                               <linearGradient id="pnlStrokeGradient" x1="0" y1="0" x2="0" y2="1">
-                                {(() => {
-                                  const pnlValues = capitalChartData.map(d => d.pnl);
-                                  const maxPnl = Math.max(...pnlValues, 0);
-                                  const minPnl = Math.min(...pnlValues, 0);
-                                  const range = maxPnl - minPnl;
-                                  const zeroFraction = range > 0 ? maxPnl / range : 0.5;
-                                  return (
-                                    <>
-                                      <stop offset="0%" stopColor="#22c55e" />
-                                      <stop offset={`${(zeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" />
-                                      <stop offset={`${(zeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" />
-                                      <stop offset="100%" stopColor="#ef4444" />
-                                    </>
-                                  );
-                                })()}
+                                <stop offset="0%" stopColor="#22c55e" />
+                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" />
+                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" />
+                                <stop offset="100%" stopColor="#ef4444" />
                               </linearGradient>
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" />
