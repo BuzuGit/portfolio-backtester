@@ -30,6 +30,26 @@ import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow } fr
 const toYM = (d: Date): string =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 
+/** Month abbreviations for X-axis date labels. */
+const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+/** Custom two-line X-axis tick: month abbreviation on top, full year below.
+ *  e.g.  Jan
+ *        2025
+ *  Recharts passes { x, y, payload } to custom tick components. */
+const DateAxisTick = ({ x, y, payload }: { x: number; y: number; payload: { value: string } }) => {
+  const d = new Date(payload.value);
+  if (isNaN(d.getTime())) {
+    return <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
+  }
+  return (
+    <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">
+      <tspan x={x} dy="0.5em">{MONTH_ABBR[d.getMonth()]}</tspan>
+      <tspan x={x} dy="1.2em">{d.getFullYear()}</tspan>
+    </text>
+  );
+};
+
 // ============================================
 // TYPE DEFINITIONS
 // ============================================
@@ -846,7 +866,7 @@ const PortfolioBacktester = () => {
    *   - marketValue: shares currently held × current market price (fluctuates with the market)
    *   - pnl: marketValue - investedCapital (positive = profit, negative = loss)
    */
-  const getClosedCapitalChartData = (ticker: string): { date: string; investedCapital: number; marketValue: number; pnl: number }[] => {
+  const getClosedCapitalChartData = (ticker: string): { date: string; investedCapital: number; marketValue: number; pnl: number; shares: number }[] => {
     if (!assetData) return [];
 
     const transactions = getFilteredClosedTransactions(ticker);
@@ -934,7 +954,7 @@ const PortfolioBacktester = () => {
       .reduce((sum, t) => sum + t.finalNetValue, 0);
 
     // Iterate through monthly price data, carrying forward the capital state
-    const result: { date: string; investedCapital: number; marketValue: number; pnl: number }[] = [];
+    const result: { date: string; investedCapital: number; marketValue: number; pnl: number; shares: number }[] = [];
     let currentInvested = 0;
     let currentShares = 0;
 
@@ -966,6 +986,7 @@ const PortfolioBacktester = () => {
         investedCapital: Math.round(currentInvested),
         marketValue: Math.round(marketValue),
         pnl: Math.round(marketValue - currentInvested),
+        shares: currentShares,
       });
     }
 
@@ -984,6 +1005,7 @@ const PortfolioBacktester = () => {
         investedCapital: Math.round(preFinalSaleInvested),
         marketValue: Math.round(finalSaleProceeds),
         pnl: Math.round(finalSaleProceeds - preFinalSaleInvested),
+        shares: 0, // all shares sold at this point
       });
     }
 
@@ -6548,11 +6570,11 @@ const PortfolioBacktester = () => {
                     </div>
 
                     {/* --- Performance Chart --- */}
-                    <div className="bg-white p-4 rounded-lg shadow mb-4">
-                      <h4 className="text-sm font-semibold text-gray-700 mb-3">Price History</h4>
+                    <div className="bg-white px-2 py-4 rounded-lg shadow mb-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3 px-2">Price History</h4>
 
                       {/* Chart controls: toggles and Invested Into / From */}
-                      <div className="flex flex-wrap items-end gap-4 mb-4">
+                      <div className="flex flex-wrap items-end gap-4 mb-4 px-2">
                         {/* Since Invested toggle */}
                         <button
                           onClick={() => setClosedSinceInvested(!closedSinceInvested)}
@@ -6626,10 +6648,10 @@ const PortfolioBacktester = () => {
                       {/* The chart itself */}
                       {chartData.length > 0 ? (
                         <ResponsiveContainer width="100%" height={350}>
-                          <LineChart data={mergedChartData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                          <LineChart data={mergedChartData} margin={{ top: 5, right: 5, left: -5, bottom: 15 }}>
                             <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="date" tick={{ fontSize: 9 }} />
-                            <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} />
+                            <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
+                            <YAxis tick={{ fontSize: 9 }} width={40} domain={['auto', 'auto']} />
                             <Tooltip
                               formatter={(value: number, name: string) => {
                                 if (value === undefined || value === null) return ['-', name];
@@ -6720,9 +6742,9 @@ const PortfolioBacktester = () => {
 
                     {/* --- Invested Capital Charts --- */}
                     {capitalChartData.length > 0 && stats && (
-                      <div className="bg-white p-4 rounded-lg shadow mb-4">
-                        <h4 className="text-sm font-semibold text-gray-700 mb-1">Invested Capital</h4>
-                        <div className="text-xs text-gray-500 mb-3">
+                      <div className="bg-white px-2 py-4 rounded-lg shadow mb-4">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-1 px-2">Invested Capital</h4>
+                        <div className="text-sm text-gray-500 mb-3 px-2">
                           {stats.totalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} invested → sold for {stats.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                           <span className="mx-1">·</span>
                           <span className={stats.totalPnL >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
@@ -6730,12 +6752,33 @@ const PortfolioBacktester = () => {
                           </span>
                         </div>
 
-                        {/* Chart 1: Invested Capital vs Market Value */}
+                        {/* --- Compute green (max) and red (min) market value dots ---
+                           Green dot: the month with the highest market value.
+                           Red dot: the month with the LOWEST market value, but only among
+                           months where we held the same number of shares as the max-value month.
+                           This avoids showing a misleading "min" from early on when we held
+                           fewer shares (e.g. 100 shares vs 500 shares later). */}
+                        {(() => {
+                          // Filter out data points where shares are zero (e.g. the final sale point)
+                          const nonZeroShareData = capitalChartData.filter(d => d.shares > 1e-9);
+                          // Find the data point with the highest market value
+                          const maxMVPoint = nonZeroShareData.length > 0
+                            ? nonZeroShareData.reduce((best, d) => d.marketValue > best.marketValue ? d : best, nonZeroShareData[0])
+                            : null;
+                          // Among data points with the same share count as the max, find the lowest market value
+                          const sameSharesData = maxMVPoint
+                            ? nonZeroShareData.filter(d => Math.abs(d.shares - maxMVPoint.shares) < 1e-9)
+                            : [];
+                          const minMVPoint = sameSharesData.length > 0
+                            ? sameSharesData.reduce((worst, d) => d.marketValue < worst.marketValue ? d : worst, sameSharesData[0])
+                            : null;
+
+                          return (
                         <ResponsiveContainer width="100%" height={250}>
-                          <AreaChart data={capitalChartData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                          <AreaChart data={capitalChartData} margin={{ top: 20, right: 5, left: -5, bottom: 15 }}>
                             <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="date" tick={{ fontSize: 9 }} />
-                            <YAxis tick={{ fontSize: 9 }} width={55} />
+                            <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
+                            <YAxis tick={{ fontSize: 9 }} width={40} />
                             <Tooltip
                               formatter={(value: number, name: string) => {
                                 if (value === undefined || value === null) return ['-', name];
@@ -6762,13 +6805,68 @@ const PortfolioBacktester = () => {
                               fillOpacity={0.2}
                               strokeWidth={2}
                             />
+                            {/* Green dot at maximum market value */}
+                            {maxMVPoint && (
+                              <ReferenceDot
+                                x={maxMVPoint.date}
+                                y={maxMVPoint.marketValue}
+                                r={6}
+                                fill="#22c55e"
+                                stroke="#fff"
+                                strokeWidth={2}
+                                label={{
+                                  value: maxMVPoint.marketValue.toLocaleString(),
+                                  position: 'left',
+                                  fontSize: 12,
+                                  fill: '#111827',
+                                  fontWeight: 600,
+                                }}
+                              />
+                            )}
+                            {/* Red dot at minimum market value (same share count as max) */}
+                            {minMVPoint && (
+                              <ReferenceDot
+                                x={minMVPoint.date}
+                                y={minMVPoint.marketValue}
+                                r={6}
+                                fill="#ef4444"
+                                stroke="#fff"
+                                strokeWidth={2}
+                                label={{
+                                  value: minMVPoint.marketValue.toLocaleString(),
+                                  position: 'left',
+                                  fontSize: 12,
+                                  fill: '#111827',
+                                  fontWeight: 600,
+                                }}
+                              />
+                            )}
                           </AreaChart>
                         </ResponsiveContainer>
+                          );
+                        })()}
 
                         {/* Chart 2: Cumulative PnL (green above 0, red below 0) */}
-                        <h4 className="text-sm font-semibold text-gray-700 mt-4 mb-2">Unrealized Profit / Loss Over Time</h4>
+                        <h4 className="text-sm font-semibold text-gray-700 mt-4 mb-2 px-2">Unrealized Profit / Loss Over Time</h4>
+                        {/* --- Compute green (max profit) and red (max loss) dots for PnL chart ---
+                           Green dot: the month with the highest profit (biggest positive PnL).
+                           Red dot: the month with the biggest loss (most negative PnL).
+                           No share-count filtering here — we show the actual best/worst PnL moments. */}
+                        {(() => {
+                          // Only consider data points where we actually hold shares (shares > 0)
+                          const pnlData = capitalChartData.filter(d => d.shares > 1e-9);
+                          // Find the point with the highest profit
+                          const maxPnLPoint = pnlData.length > 0
+                            ? pnlData.reduce((best, d) => d.pnl > best.pnl ? d : best, pnlData[0])
+                            : null;
+                          // Find the point with the biggest loss (lowest PnL)
+                          const minPnLPoint = pnlData.length > 0
+                            ? pnlData.reduce((worst, d) => d.pnl < worst.pnl ? d : worst, pnlData[0])
+                            : null;
+
+                          return (
                         <ResponsiveContainer width="100%" height={200}>
-                          <AreaChart data={capitalChartData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                          <AreaChart data={capitalChartData} margin={{ top: 5, right: 5, left: -5, bottom: 15 }}>
                             <defs>
                               {/* Fill gradient: green above zero, red below zero (semi-transparent) */}
                               <linearGradient id="pnlGradient" x1="0" y1="0" x2="0" y2="1">
@@ -6786,8 +6884,8 @@ const PortfolioBacktester = () => {
                               </linearGradient>
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="date" tick={{ fontSize: 9 }} />
-                            <YAxis tick={{ fontSize: 9 }} width={55} />
+                            <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
+                            <YAxis tick={{ fontSize: 9 }} width={40} />
                             <Tooltip
                               formatter={(value: number) => {
                                 if (value === undefined || value === null) return ['-', 'PnL'];
@@ -6803,8 +6901,46 @@ const PortfolioBacktester = () => {
                               fill="url(#pnlGradient)"
                               strokeWidth={2}
                             />
+                            {/* Green dot at highest profit */}
+                            {maxPnLPoint && (
+                              <ReferenceDot
+                                x={maxPnLPoint.date}
+                                y={maxPnLPoint.pnl}
+                                r={6}
+                                fill="#22c55e"
+                                stroke="#fff"
+                                strokeWidth={2}
+                                label={{
+                                  value: `${maxPnLPoint.pnl >= 0 ? '+' : ''}${maxPnLPoint.pnl.toLocaleString()}`,
+                                  position: 'left',
+                                  fontSize: 12,
+                                  fill: '#111827',
+                                  fontWeight: 600,
+                                }}
+                              />
+                            )}
+                            {/* Red dot at biggest loss */}
+                            {minPnLPoint && (
+                              <ReferenceDot
+                                x={minPnLPoint.date}
+                                y={minPnLPoint.pnl}
+                                r={6}
+                                fill="#ef4444"
+                                stroke="#fff"
+                                strokeWidth={2}
+                                label={{
+                                  value: `${minPnLPoint.pnl >= 0 ? '+' : ''}${minPnLPoint.pnl.toLocaleString()}`,
+                                  position: 'left',
+                                  fontSize: 12,
+                                  fill: '#111827',
+                                  fontWeight: 600,
+                                }}
+                              />
+                            )}
                           </AreaChart>
                         </ResponsiveContainer>
+                          );
+                        })()}
                       </div>
                     )}
 
