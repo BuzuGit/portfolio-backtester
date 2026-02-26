@@ -436,6 +436,10 @@ const PortfolioBacktester = () => {
   const [closedGraphEnds, setClosedGraphEnds] = useState<string>('');
   // "Graph Starts": optional start date for the price chart (from first available data to first buy)
   const [closedGraphStarts, setClosedGraphStarts] = useState<string>('');
+  // Toggle: show/hide the average buy price line on the price chart (default: on)
+  const [closedShowAvgBuy, setClosedShowAvgBuy] = useState(true);
+  // Toggle: show/hide the average sell price line on the price chart (default: on)
+  const [closedShowAvgSell, setClosedShowAvgSell] = useState(true);
   // Set of transaction indices that are currently included (checked) in stats/chart.
   // null means "all included" (default) — avoids rebuilding a Set every time you switch assets.
   const [closedIncludedTxns, setClosedIncludedTxns] = useState<Set<number> | null>(null);
@@ -912,12 +916,46 @@ const PortfolioBacktester = () => {
       avgPriceByMonth.delete(lastSaleYM);
     }
 
-    // Now build chart data, carrying the avg price forward through months
-    const chartData: { date: string; price: number; avgBuyPrice?: number }[] = [];
+    // ---- Build the cumulative average sell price line ----
+    // Tracks the running weighted-average sale price across all sales to date.
+    // Unlike the buy price (which uses FIFO lots), this is a simple running average:
+    // cumulative proceeds / cumulative shares sold, updated after each sale event.
+    const avgSellPriceByMonth = new Map<string, number>();
+    {
+      // Collect sell events sorted by date
+      const sellEvents = transactions
+        .map(t => ({
+          ym: toYM(new Date(t.divDate)),
+          date: t.divDate,
+          shares: t.sharesSold,
+          price: t.sellPrice, // raw sell price per share (matches "Sell Price" column)
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      let cumShares = 0;
+      let cumProceeds = 0;
+      for (const evt of sellEvents) {
+        cumShares += evt.shares;
+        cumProceeds += evt.shares * evt.price;
+        if (cumShares > 1e-9) {
+          avgSellPriceByMonth.set(evt.ym, cumProceeds / cumShares);
+        }
+      }
+    }
+
+    // First sale month (for showing the avg sell price line from this point onward)
+    const firstSaleYM = (() => {
+      const saleDatesArr = transactions.map(t => t.divDate).sort();
+      return saleDatesArr.length > 0 ? toYM(new Date(saleDatesArr[0])) : '';
+    })();
+
+    // Now build chart data, carrying the avg prices forward through months
+    const chartData: { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number }[] = [];
     const buyDots: { date: string; price: number }[] = [];
     const sellDots: { date: string; price: number }[] = [];
 
     let currentAvgPrice: number | undefined = undefined;
+    let currentAvgSellPrice: number | undefined = undefined;
 
     // Pre-compute filter boundaries once (instead of inside the loop)
     const graphStartsYM = closedGraphStarts ? toYM(new Date(closedGraphStarts)) : '';
@@ -940,15 +978,26 @@ const PortfolioBacktester = () => {
       // "Graph Ends" dropdown: if a specific end date is selected, cut off after it
       if (graphEndsYM && rowYM > graphEndsYM) continue;
 
-      // Update avg price if there's an event this month
+      // Update avg buy price if there's a buy/sell event this month
       if (avgPriceByMonth.has(rowYM)) {
         currentAvgPrice = avgPriceByMonth.get(rowYM);
       }
+      // Update avg sell price if there's a sale event this month
+      if (avgSellPriceByMonth.has(rowYM)) {
+        currentAvgSellPrice = avgSellPriceByMonth.get(rowYM);
+      }
 
-      // Only show avg price line between first buy and last sale
-      const showAvg = currentAvgPrice !== undefined && rowYM >= (firstBuyYM || '') && rowYM <= (lastSaleYM || '');
+      // Only show avg buy price line between first buy and last sale
+      const showAvgBuy = currentAvgPrice !== undefined && rowYM >= (firstBuyYM || '') && rowYM <= (lastSaleYM || '');
+      // Show avg sell price line from first sale onward (continues to end of chart)
+      const showAvgSell = currentAvgSellPrice !== undefined && rowYM >= (firstSaleYM || '');
 
-      chartData.push({ date: row.date, price, avgBuyPrice: showAvg ? currentAvgPrice : undefined });
+      chartData.push({
+        date: row.date,
+        price,
+        avgBuyPrice: showAvgBuy ? currentAvgPrice : undefined,
+        avgSellPrice: showAvgSell ? currentAvgSellPrice : undefined,
+      });
 
       // Mark buy/sell months with dots
       if (buyMonths.has(rowYM)) buyDots.push({ date: row.date, price });
@@ -6369,6 +6418,8 @@ const PortfolioBacktester = () => {
                                 setClosedGraphStarts('');
                                 setClosedSinceInvested(false);
                                 setClosedUntilSold(false);
+                                setClosedShowAvgBuy(true);
+                                setClosedShowAvgSell(true);
                               }}
                             >
                               <td className="py-2 px-2 font-medium text-blue-600">{row.ticker}</td>
@@ -6481,7 +6532,7 @@ const PortfolioBacktester = () => {
                   : comparisonDataRaw;
 
                 // Merge chart data with comparison data for the LineChart
-                const mergedChartData: { date: string; price: number; avgBuyPrice?: number; compPrice?: number }[] = chartData.map(d => {
+                const mergedChartData: { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number; compPrice?: number }[] = chartData.map(d => {
                   const comp = comparisonData.find(c => c.date === d.date);
                   return { ...d, compPrice: comp ? comp.normalizedPrice : undefined };
                 });
@@ -6755,6 +6806,30 @@ const PortfolioBacktester = () => {
                           Until Sold
                         </button>
 
+                        {/* Avg Buy Price toggle — shows/hides the green dashed avg buy line */}
+                        <button
+                          onClick={() => setClosedShowAvgBuy(!closedShowAvgBuy)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                            closedShowAvgBuy
+                              ? 'bg-green-500 text-white border-green-500'
+                              : 'bg-white border-gray-300 hover:bg-gray-100'
+                          }`}
+                        >
+                          Avg Buy Price
+                        </button>
+
+                        {/* Avg Sell Price toggle — shows/hides the red dashed avg sell line */}
+                        <button
+                          onClick={() => setClosedShowAvgSell(!closedShowAvgSell)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                            closedShowAvgSell
+                              ? 'bg-red-500 text-white border-red-500'
+                              : 'bg-white border-gray-300 hover:bg-gray-100'
+                          }`}
+                        >
+                          Avg Sell Price
+                        </button>
+
                         <div className="border-l border-gray-300 h-6 mx-1" />
 
                         {/* Invested Into dropdown */}
@@ -6851,13 +6926,15 @@ const PortfolioBacktester = () => {
                           // creating temporary array copies ([...arr].reverse().find()).
                           let lastPrice: number | null = null;
                           let lastAvgBuyPrice: number | null = null;
+                          let lastAvgSellPrice: number | null = null;
                           let lastCompPrice: number | null = null;
                           for (let i = mergedChartData.length - 1; i >= 0; i--) {
                             const d = mergedChartData[i];
                             if (lastPrice === null && d.price != null && d.price > 0) lastPrice = d.price;
                             if (lastAvgBuyPrice === null && d.avgBuyPrice != null && d.avgBuyPrice > 0) lastAvgBuyPrice = d.avgBuyPrice;
+                            if (lastAvgSellPrice === null && d.avgSellPrice != null && d.avgSellPrice > 0) lastAvgSellPrice = d.avgSellPrice;
                             if (lastCompPrice === null && d.compPrice != null && d.compPrice > 0) lastCompPrice = d.compPrice;
-                            if (lastPrice !== null && lastAvgBuyPrice !== null && lastCompPrice !== null) break;
+                            if (lastPrice !== null && lastAvgBuyPrice !== null && lastAvgSellPrice !== null && lastCompPrice !== null) break;
                           }
 
                           /* Bubble definitions for the Price History chart. Defined here (inside
@@ -6865,10 +6942,11 @@ const PortfolioBacktester = () => {
                              Customized doesn't support custom props, so closure is the cleanest
                              approach. All rendering is delegated to the shared renderEdgeBubbles. */
                           const priceBubbleDefs: BubbleDef[] = [];
-                          if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#4F46E5', label: lastPrice.toFixed(2) });
+                          if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#000000', label: lastPrice.toFixed(2) });
                           // Only show comparison bubble when the comparison line is actually visible
                           if (lastCompPrice != null && closedInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: '#F59E0B', label: lastCompPrice.toFixed(2) });
-                          if (lastAvgBuyPrice != null) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#000000', label: lastAvgBuyPrice.toFixed(2) });
+                          if (lastAvgBuyPrice != null && closedShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#22c55e', label: lastAvgBuyPrice.toFixed(2) });
+                          if (lastAvgSellPrice != null && closedShowAvgSell) priceBubbleDefs.push({ value: lastAvgSellPrice, color: '#ef4444', label: lastAvgSellPrice.toFixed(2) });
                           const PriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
 
                           return (
@@ -6885,14 +6963,14 @@ const PortfolioBacktester = () => {
                               }}
                             />
                             <Legend />
-                            {/* Bubbles at the right edge showing latest price, comparison, & avg buy price */}
+                            {/* Bubbles at the right edge showing latest price, comparison, avg buy & avg sell */}
                             <Customized component={PriceBubbles} />
-                            {/* Main asset price line */}
+                            {/* Main asset price line (black) */}
                             <Line
                               type="monotone"
                               dataKey="price"
                               name={closedSelectedTicker}
-                              stroke="#4F46E5"
+                              stroke="#000000"
                               strokeWidth={2}
                               dot={false}
                               connectNulls
@@ -6910,19 +6988,36 @@ const PortfolioBacktester = () => {
                                 connectNulls
                               />
                             )}
-                            {/* Dashed black line showing FIFO average buy price over time.
+                            {/* Dashed green line showing FIFO average buy price over time.
                                 Steps up/down when new shares are bought or old ones sold.
-                                Stops at last sale date. */}
-                            <Line
-                              type="stepAfter"
-                              dataKey="avgBuyPrice"
-                              name="Avg Buy Price"
-                              stroke="#000000"
-                              strokeWidth={1.5}
-                              dot={false}
-                              strokeDasharray="6 3"
-                              connectNulls
-                            />
+                                Stops at last sale date. Only shown when toggle is enabled. */}
+                            {closedShowAvgBuy && (
+                              <Line
+                                type="stepAfter"
+                                dataKey="avgBuyPrice"
+                                name="Avg Buy Price"
+                                stroke="#22c55e"
+                                strokeWidth={1.5}
+                                dot={false}
+                                strokeDasharray="6 3"
+                                connectNulls
+                              />
+                            )}
+                            {/* Dashed red line showing cumulative weighted avg sell price.
+                                Starts at first sale date and continues to end of chart.
+                                Only shown when toggle is enabled. */}
+                            {closedShowAvgSell && (
+                              <Line
+                                type="stepAfter"
+                                dataKey="avgSellPrice"
+                                name="Avg Sell Price"
+                                stroke="#ef4444"
+                                strokeWidth={1.5}
+                                dot={false}
+                                strokeDasharray="6 3"
+                                connectNulls
+                              />
+                            )}
                             {/* Max/min price dots render FIRST (behind) so buy/sell dots
                                appear on top when they overlap. Larger radius (r=9) creates
                                a visible ring around any overlapping buy/sell dot (r=6). */}
