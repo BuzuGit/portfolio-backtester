@@ -6762,11 +6762,13 @@ const PortfolioBacktester = () => {
                           // creating temporary array copies ([...arr].reverse().find()).
                           let lastPrice: number | null = null;
                           let lastAvgBuyPrice: number | null = null;
+                          let lastCompPrice: number | null = null;
                           for (let i = mergedChartData.length - 1; i >= 0; i--) {
                             const d = mergedChartData[i];
                             if (lastPrice === null && d.price != null && d.price > 0) lastPrice = d.price;
                             if (lastAvgBuyPrice === null && d.avgBuyPrice != null && d.avgBuyPrice > 0) lastAvgBuyPrice = d.avgBuyPrice;
-                            if (lastPrice !== null && lastAvgBuyPrice !== null) break; // found both, stop early
+                            if (lastCompPrice === null && d.compPrice != null && d.compPrice > 0) lastCompPrice = d.compPrice;
+                            if (lastPrice !== null && lastAvgBuyPrice !== null && lastCompPrice !== null) break;
                           }
 
                           /* Custom SVG renderer that draws the price/avg-buy-price bubbles at the right edge.
@@ -6792,27 +6794,28 @@ const PortfolioBacktester = () => {
                             // Position bubbles just to the right of the plot area
                             const bubbleX = chartWidth - offsetData.right + 4;
 
-                            // Build list of bubbles to draw
-                            const bubbles: { value: number; color: string; yRaw: number }[] = [];
+                            // Build list of bubbles to draw (one per visible line)
+                            const bubbles: { value: number; color: string; yRaw: number; fmt?: string }[] = [];
                             if (lastPrice != null) {
                               bubbles.push({ value: lastPrice, color: '#4F46E5', yRaw: yAxis.scale(lastPrice) });
+                            }
+                            if (lastCompPrice != null) {
+                              bubbles.push({ value: lastCompPrice, color: '#F59E0B', yRaw: yAxis.scale(lastCompPrice) });
                             }
                             if (lastAvgBuyPrice != null) {
                               bubbles.push({ value: lastAvgBuyPrice, color: '#000000', yRaw: yAxis.scale(lastAvgBuyPrice) });
                             }
                             if (bubbles.length === 0) return null;
 
-                            // Sort so the one with the higher Y-value (higher price) comes first (top)
-                            bubbles.sort((a, b) => a.yRaw - b.yRaw); // smaller yRaw = higher on screen
+                            // Sort so the highest value sits at the top (smallest Y pixel = top of screen)
+                            bubbles.sort((a, b) => a.yRaw - b.yRaw);
 
-                            // Prevent overlap: if the two bubbles are too close, push them apart
-                            if (bubbles.length === 2) {
-                              const minDist = bubbleH + gap;
-                              const diff = bubbles[1].yRaw - bubbles[0].yRaw;
+                            // Prevent overlap: walk top-to-bottom pushing any bubble that's too close
+                            const minDist = bubbleH + gap;
+                            for (let i = 1; i < bubbles.length; i++) {
+                              const diff = bubbles[i].yRaw - bubbles[i - 1].yRaw;
                               if (diff < minDist) {
-                                const mid = (bubbles[0].yRaw + bubbles[1].yRaw) / 2;
-                                bubbles[0].yRaw = mid - minDist / 2;
-                                bubbles[1].yRaw = mid + minDist / 2;
+                                bubbles[i].yRaw = bubbles[i - 1].yRaw + minDist;
                               }
                             }
 
@@ -7029,9 +7032,48 @@ const PortfolioBacktester = () => {
                             ? sameSharesData.reduce((worst, d) => d.marketValue < worst.marketValue ? d : worst, sameSharesData[0])
                             : null;
 
+                          // Last values for right-edge bubbles
+                          const lastCapRow = capitalChartData.length > 0 ? capitalChartData[capitalChartData.length - 1] : null;
+                          const lastMV = lastCapRow?.marketValue ?? null;
+                          const lastInvested = lastCapRow?.investedCapital ?? null;
+
+                          /* Right-edge bubbles for Invested Capital chart (same pattern as Price History).
+                             Shows final Market Value (indigo) and final Invested Capital (black). */
+                          const CapitalBubbles = (props: {
+                            yAxisMap?: Record<string, { scale: (v: number) => number }>;
+                            offset?: { top: number; bottom: number; left: number; right: number };
+                            width?: number;
+                          }) => {
+                            const { yAxisMap, offset: offsetData, width: chartWidth } = props;
+                            if (!yAxisMap || !offsetData || !chartWidth) return null;
+                            const yAxis = Object.values(yAxisMap)[0];
+                            if (!yAxis?.scale) return null;
+                            const bW = 62; const bH = 20; const gap = 2;
+                            const bX = chartWidth - offsetData.right + 4;
+                            const bubbles: { value: number; color: string; yRaw: number }[] = [];
+                            if (lastMV != null) bubbles.push({ value: lastMV, color: '#4F46E5', yRaw: yAxis.scale(lastMV) });
+                            if (lastInvested != null) bubbles.push({ value: lastInvested, color: '#000000', yRaw: yAxis.scale(lastInvested) });
+                            if (bubbles.length === 0) return null;
+                            bubbles.sort((a, b) => a.yRaw - b.yRaw);
+                            const minDist = bH + gap;
+                            for (let i = 1; i < bubbles.length; i++) {
+                              if (bubbles[i].yRaw - bubbles[i - 1].yRaw < minDist) bubbles[i].yRaw = bubbles[i - 1].yRaw + minDist;
+                            }
+                            return (
+                              <g>{bubbles.map((b, i) => (
+                                <g key={i}>
+                                  <rect x={bX} y={b.yRaw - bH / 2} width={bW} height={bH} rx={4} ry={4} fill={b.color} />
+                                  <text x={bX + bW / 2} y={b.yRaw} textAnchor="middle" dominantBaseline="central" fill="#fff" fontSize={11} fontWeight={600}>
+                                    {b.value.toLocaleString()}
+                                  </text>
+                                </g>
+                              ))}</g>
+                            );
+                          };
+
                           return (
                         <ResponsiveContainer width="100%" height={250}>
-                          <AreaChart data={capitalChartData} margin={{ top: 20, right: 5, left: -5, bottom: 15 }}>
+                          <AreaChart data={capitalChartData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                             <YAxis tick={{ fontSize: 9 }} width={40} />
@@ -7042,6 +7084,7 @@ const PortfolioBacktester = () => {
                               }}
                             />
                             <Legend />
+                            <Customized component={CapitalBubbles} />
                             <Area
                               type="stepAfter"
                               dataKey="investedCapital"
@@ -7127,6 +7170,35 @@ const PortfolioBacktester = () => {
                             ? (minPnLPoint.pnl / minPnLPoint.investedCapital * 100)
                             : null;
 
+                          // Last PnL value for right-edge bubble
+                          const lastPnLRow = capitalChartData.length > 0 ? capitalChartData[capitalChartData.length - 1] : null;
+                          const lastPnL = lastPnLRow?.pnl ?? null;
+
+                          /* Right-edge bubble for PnL chart. Green if positive, red if negative. */
+                          const PnLBubble = (props: {
+                            yAxisMap?: Record<string, { scale: (v: number) => number }>;
+                            offset?: { top: number; bottom: number; left: number; right: number };
+                            width?: number;
+                          }) => {
+                            const { yAxisMap, offset: offsetData, width: chartWidth } = props;
+                            if (!yAxisMap || !offsetData || !chartWidth || lastPnL == null) return null;
+                            const yAxis = Object.values(yAxisMap)[0];
+                            if (!yAxis?.scale) return null;
+                            const bW = 62; const bH = 20;
+                            const bX = chartWidth - offsetData.right + 4;
+                            const yPos = yAxis.scale(lastPnL);
+                            const color = lastPnL >= 0 ? '#22c55e' : '#ef4444';
+                            const label = `${lastPnL >= 0 ? '+' : ''}${lastPnL.toLocaleString()}`;
+                            return (
+                              <g>
+                                <rect x={bX} y={yPos - bH / 2} width={bW} height={bH} rx={4} ry={4} fill={color} />
+                                <text x={bX + bW / 2} y={yPos} textAnchor="middle" dominantBaseline="central" fill="#fff" fontSize={11} fontWeight={600}>
+                                  {label}
+                                </text>
+                              </g>
+                            );
+                          };
+
                           return (
                         <>
                         <h4 className="text-sm font-semibold text-gray-700 mt-4 mb-1 px-2">Unrealized Profit / Loss Over Time</h4>
@@ -7151,7 +7223,7 @@ const PortfolioBacktester = () => {
                           )}
                         </div>
                         <ResponsiveContainer width="100%" height={200}>
-                          <AreaChart data={capitalChartData} margin={{ top: 5, right: 5, left: -5, bottom: 15 }}>
+                          <AreaChart data={capitalChartData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
                             <defs>
                               {/* Fill gradient: green above zero, red below zero (semi-transparent) */}
                               <linearGradient id="pnlGradient" x1="0" y1="0" x2="0" y2="1">
@@ -7177,6 +7249,7 @@ const PortfolioBacktester = () => {
                                 return [`${value >= 0 ? '+' : ''}${value.toLocaleString()}`, 'PnL'];
                               }}
                             />
+                            <Customized component={PnLBubble} />
                             <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
                             <Area
                               type="monotone"
