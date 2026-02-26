@@ -18,7 +18,17 @@
       "Bash(taskkill:*)",
       "Bash(npm run build:*)",
       "Bash(npx tsc:*)",
-      "Bash(npx next dev:*)"
+      "Bash(npx next dev:*)",
+      "Bash(npx next build)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(cmd /c \"taskkill /F /IM node.exe\")",
+      "Bash(cmd /c \"netstat -ano | findstr :3000\")",
+      "Bash(cmd /c \"npx tsc --noEmit 2>&1 | head -20\")",
+      "Bash(npx kill-port 3000)",
+      "Bash(npx kill-port 3000 3001)",
+      "Bash(git status -u)"
     ]
   }
 }

@@ -343,8 +343,10 @@ const PortfolioBacktester = () => {
   const [closedSinceInvested, setClosedSinceInvested] = useState(false);
   // Chart toggle: end the chart at the last sale date instead of latest available price
   const [closedUntilSold, setClosedUntilSold] = useState(false);
-  // "Invested To": optional end date for the price chart (from last sale to last available month)
+  // "Graph Ends": optional end date for the price chart (from last sale to last available month)
   const [closedInvestedTo, setClosedInvestedTo] = useState<string>('');
+  // "Graph Starts": optional start date for the price chart (from first available data to first buy)
+  const [closedGraphStarts, setClosedGraphStarts] = useState<string>('');
   // Set of transaction indices that are currently included (checked) in stats/chart.
   // null means "all included" (default) — avoids rebuilding a Set every time you switch assets.
   const [closedIncludedTxns, setClosedIncludedTxns] = useState<Set<number> | null>(null);
@@ -840,7 +842,12 @@ const PortfolioBacktester = () => {
       // Apply toggle filters (compare at month level)
       if (closedSinceInvested && firstBuyYM && rowYM < firstBuyYM) continue;
       if (closedUntilSold && lastSaleYM && rowYM > lastSaleYM) continue;
-      // "Invested To" dropdown: if a specific end date is selected, cut off there
+      // "Graph Starts" dropdown: if a specific start date is selected, cut off before it
+      if (closedGraphStarts) {
+        const fromYMStr = toYM(new Date(closedGraphStarts));
+        if (rowYM < fromYMStr) continue;
+      }
+      // "Graph Ends" dropdown: if a specific end date is selected, cut off after it
       if (closedInvestedTo) {
         const toYMStr = toYM(new Date(closedInvestedTo));
         if (rowYM > toYMStr) continue;
@@ -6272,6 +6279,7 @@ const PortfolioBacktester = () => {
                                 setClosedInvestedInto('');
                                 setClosedInvestedFrom('');
                                 setClosedInvestedTo('');
+                                setClosedGraphStarts('');
                                 setClosedSinceInvested(false);
                                 setClosedUntilSold(false);
                               }}
@@ -6327,9 +6335,9 @@ const PortfolioBacktester = () => {
                 // Get sale dates from FILTERED transactions only (so dropdown matches checked rows)
                 const saleDates = Array.from(new Set(filteredTransactions.map(t => t.divDate))).sort();
 
-                // Build monthly date options for the "Invested To" dropdown:
+                // Build monthly date options for the "Graph Ends" dropdown:
                 // from the last sale date through the last available data month
-                const investedToOptions: string[] = (() => {
+                const graphEndsOptions: string[] = (() => {
                   if (!assetData || saleDates.length === 0) return [];
                   const lastSale = saleDates[saleDates.length - 1];
                   const lastSaleD = new Date(lastSale);
@@ -6342,6 +6350,26 @@ const PortfolioBacktester = () => {
                     if (isNaN(d.getTime())) continue;
                     const ym = toYM(d);
                     if (ym >= lastSaleYMStr) monthSet.add(row.date);
+                  }
+                  return Array.from(monthSet).sort();
+                })();
+
+                // Build monthly date options for the "Graph Starts" dropdown:
+                // from the first available data month up to (and including) the first buy date
+                // Uses filtered transactions so it respects checkboxes
+                const buyDates = Array.from(new Set(filteredTransactions.map(t => t.invDate))).sort();
+                const graphStartsOptions: string[] = (() => {
+                  if (!assetData || buyDates.length === 0) return [];
+                  const firstBuy = buyDates[0];
+                  const firstBuyD = new Date(firstBuy);
+                  if (isNaN(firstBuyD.getTime())) return [];
+                  const firstBuyYMStr = toYM(firstBuyD);
+                  const monthSet = new Set<string>();
+                  for (const row of assetData) {
+                    const d = new Date(row.date);
+                    if (isNaN(d.getTime())) continue;
+                    const ym = toYM(d);
+                    if (ym <= firstBuyYMStr) monthSet.add(row.date);
                   }
                   return Array.from(monthSet).sort();
                 })();
@@ -6661,9 +6689,9 @@ const PortfolioBacktester = () => {
                           </select>
                         </div>
 
-                        {/* Invested From dropdown (only enabled when Invested Into is selected) */}
+                        {/* Asset 2 Invested From dropdown (only enabled when Invested Into is selected) */}
                         <div>
-                          <label className="block text-xs font-medium text-gray-600 mb-0.5">Invested From</label>
+                          <label className="block text-xs font-medium text-gray-600 mb-0.5">Asset 2 Invested From</label>
                           <select
                             value={closedInvestedFrom}
                             onChange={(e) => setClosedInvestedFrom(e.target.value)}
@@ -6680,16 +6708,31 @@ const PortfolioBacktester = () => {
 
                         <div className="border-l border-gray-300 h-6 mx-1" />
 
-                        {/* Invested To dropdown: pick an end date from last sale onward */}
+                        {/* Graph Starts dropdown: pick a start date from first available data up to first buy */}
                         <div>
-                          <label className="block text-xs font-medium text-gray-600 mb-0.5">Invested To</label>
+                          <label className="block text-xs font-medium text-gray-600 mb-0.5">Graph Starts</label>
+                          <select
+                            value={closedGraphStarts}
+                            onChange={(e) => setClosedGraphStarts(e.target.value)}
+                            className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[130px]"
+                          >
+                            <option value="">— All —</option>
+                            {graphStartsOptions.map(d => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Graph Ends dropdown: pick an end date from last sale onward */}
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-0.5">Graph Ends</label>
                           <select
                             value={closedInvestedTo}
                             onChange={(e) => setClosedInvestedTo(e.target.value)}
                             className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[130px]"
                           >
                             <option value="">— All —</option>
-                            {investedToOptions.map(d => (
+                            {graphEndsOptions.map(d => (
                               <option key={d} value={d}>{d}</option>
                             ))}
                           </select>
