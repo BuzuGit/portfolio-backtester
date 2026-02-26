@@ -343,6 +343,8 @@ const PortfolioBacktester = () => {
   const [closedSinceInvested, setClosedSinceInvested] = useState(false);
   // Chart toggle: end the chart at the last sale date instead of latest available price
   const [closedUntilSold, setClosedUntilSold] = useState(false);
+  // "Invested To": optional end date for the price chart (from last sale to last available month)
+  const [closedInvestedTo, setClosedInvestedTo] = useState<string>('');
   // Set of transaction indices that are currently included (checked) in stats/chart.
   // null means "all included" (default) — avoids rebuilding a Set every time you switch assets.
   const [closedIncludedTxns, setClosedIncludedTxns] = useState<Set<number> | null>(null);
@@ -838,6 +840,11 @@ const PortfolioBacktester = () => {
       // Apply toggle filters (compare at month level)
       if (closedSinceInvested && firstBuyYM && rowYM < firstBuyYM) continue;
       if (closedUntilSold && lastSaleYM && rowYM > lastSaleYM) continue;
+      // "Invested To" dropdown: if a specific end date is selected, cut off there
+      if (closedInvestedTo) {
+        const toYMStr = toYM(new Date(closedInvestedTo));
+        if (rowYM > toYMStr) continue;
+      }
 
       // Update avg price if there's an event this month
       if (avgPriceByMonth.has(rowYM)) {
@@ -6264,6 +6271,7 @@ const PortfolioBacktester = () => {
                                 setClosedIncludedTxns(null); // all transactions checked by default
                                 setClosedInvestedInto('');
                                 setClosedInvestedFrom('');
+                                setClosedInvestedTo('');
                                 setClosedSinceInvested(false);
                                 setClosedUntilSold(false);
                               }}
@@ -6319,10 +6327,36 @@ const PortfolioBacktester = () => {
                 // Get sale dates from FILTERED transactions only (so dropdown matches checked rows)
                 const saleDates = Array.from(new Set(filteredTransactions.map(t => t.divDate))).sort();
 
-                // Build comparison data if "Invested Into" is selected
-                const comparisonData = closedInvestedInto && closedInvestedFrom
+                // Build monthly date options for the "Invested To" dropdown:
+                // from the last sale date through the last available data month
+                const investedToOptions: string[] = (() => {
+                  if (!assetData || saleDates.length === 0) return [];
+                  const lastSale = saleDates[saleDates.length - 1];
+                  const lastSaleD = new Date(lastSale);
+                  if (isNaN(lastSaleD.getTime())) return [];
+                  // Find all data months from the last sale onward
+                  const lastSaleYMStr = toYM(lastSaleD);
+                  const monthSet = new Set<string>();
+                  for (const row of assetData) {
+                    const d = new Date(row.date);
+                    if (isNaN(d.getTime())) continue;
+                    const ym = toYM(d);
+                    if (ym >= lastSaleYMStr) monthSet.add(row.date);
+                  }
+                  return Array.from(monthSet).sort();
+                })();
+
+                // Build comparison data if "Invested Into" is selected,
+                // then filter it by the "Invested To" cutoff so both lines end at the same date
+                const comparisonDataRaw = closedInvestedInto && closedInvestedFrom
                   ? getNormalizedComparisonData(closedSelectedTicker, closedInvestedInto, closedInvestedFrom)
                   : [];
+                const comparisonData = closedInvestedTo
+                  ? comparisonDataRaw.filter(c => {
+                      const d = new Date(c.date);
+                      return !isNaN(d.getTime()) && toYM(d) <= toYM(new Date(closedInvestedTo));
+                    })
+                  : comparisonDataRaw;
 
                 // Merge chart data with comparison data for the LineChart
                 const mergedChartData: { date: string; price: number; avgBuyPrice?: number; compPrice?: number }[] = chartData.map(d => {
@@ -6643,6 +6677,23 @@ const PortfolioBacktester = () => {
                             ))}
                           </select>
                         </div>
+
+                        <div className="border-l border-gray-300 h-6 mx-1" />
+
+                        {/* Invested To dropdown: pick an end date from last sale onward */}
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-0.5">Invested To</label>
+                          <select
+                            value={closedInvestedTo}
+                            onChange={(e) => setClosedInvestedTo(e.target.value)}
+                            className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[130px]"
+                          >
+                            <option value="">— All —</option>
+                            {investedToOptions.map(d => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
 
                       {/* The chart itself */}
@@ -6847,7 +6898,6 @@ const PortfolioBacktester = () => {
                         })()}
 
                         {/* Chart 2: Cumulative PnL (green above 0, red below 0) */}
-                        <h4 className="text-sm font-semibold text-gray-700 mt-4 mb-2 px-2">Unrealized Profit / Loss Over Time</h4>
                         {/* --- Compute green (max profit) and red (max loss) dots for PnL chart ---
                            Green dot: the month with the highest profit (biggest positive PnL).
                            Red dot: the month with the biggest loss (most negative PnL).
@@ -6863,8 +6913,37 @@ const PortfolioBacktester = () => {
                           const minPnLPoint = pnlData.length > 0
                             ? pnlData.reduce((worst, d) => d.pnl < worst.pnl ? d : worst, pnlData[0])
                             : null;
+                          // Compute % return for max and min points (PnL / invested capital)
+                          const maxPnLPct = maxPnLPoint && maxPnLPoint.investedCapital > 0
+                            ? (maxPnLPoint.pnl / maxPnLPoint.investedCapital * 100)
+                            : null;
+                          const minPnLPct = minPnLPoint && minPnLPoint.investedCapital > 0
+                            ? (minPnLPoint.pnl / minPnLPoint.investedCapital * 100)
+                            : null;
 
                           return (
+                        <>
+                        <h4 className="text-sm font-semibold text-gray-700 mt-4 mb-1 px-2">Unrealized Profit / Loss Over Time</h4>
+                        <div className="text-sm text-gray-500 mb-3 px-2">
+                          {/* Show max profit (green) and min/loss (red) aligned with the dot labels */}
+                          {minPnLPoint && (
+                            <span>
+                              <span className="text-red-500 font-medium">
+                                Min {minPnLPoint.pnl >= 0 ? '+' : ''}{minPnLPoint.pnl.toLocaleString()}
+                                {minPnLPct !== null && ` (${minPnLPct >= 0 ? '+' : ''}${minPnLPct.toFixed(1)}%)`}
+                              </span>
+                            </span>
+                          )}
+                          {minPnLPoint && maxPnLPoint && <span className="mx-1">·</span>}
+                          {maxPnLPoint && (
+                            <span>
+                              <span className="text-green-600 font-medium">
+                                Max {maxPnLPoint.pnl >= 0 ? '+' : ''}{maxPnLPoint.pnl.toLocaleString()}
+                                {maxPnLPct !== null && ` (${maxPnLPct >= 0 ? '+' : ''}${maxPnLPct.toFixed(1)}%)`}
+                              </span>
+                            </span>
+                          )}
+                        </div>
                         <ResponsiveContainer width="100%" height={200}>
                           <AreaChart data={capitalChartData} margin={{ top: 5, right: 5, left: -5, bottom: 15 }}>
                             <defs>
@@ -6939,6 +7018,7 @@ const PortfolioBacktester = () => {
                             )}
                           </AreaChart>
                         </ResponsiveContainer>
+                        </>
                           );
                         })()}
                       </div>
