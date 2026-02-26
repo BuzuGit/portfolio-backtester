@@ -17,7 +17,7 @@
 */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart } from 'recharts';
+import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow } from '@/lib/fetchData';
 
@@ -6751,9 +6751,92 @@ const PortfolioBacktester = () => {
                             ? validPriceData.reduce((worst, d) => d.price < worst.price ? d : worst, validPriceData[0])
                             : null;
 
+                          // Find the last valid price and last valid avg buy price by searching
+                          // backwards through the data. The last entry may be a comparison-only
+                          // point (no price), so we can't just grab the last element.
+                          const lastPriceRow = [...mergedChartData].reverse().find(d => d.price != null && d.price > 0);
+                          const lastPrice = lastPriceRow?.price ?? null;
+                          // Avg buy price uses stepAfter, so find the last row that has an avgBuyPrice value
+                          const lastAvgRow = [...mergedChartData].reverse().find(d => d.avgBuyPrice != null && d.avgBuyPrice > 0);
+                          const lastAvgBuyPrice = lastAvgRow?.avgBuyPrice ?? null;
+
+                          /* Custom SVG renderer that draws the price/avg-buy-price bubbles at the right edge.
+                             Recharts passes chart internals (xAxisMap, yAxisMap, offset, etc.) as props
+                             to the Customized component — we use the Y-axis scale to position bubbles. */
+                          const RightEdgeBubbles = (props: any) => {
+                            // Recharts injects yAxisMap and offset via props
+                            const yAxisMap = props.yAxisMap;
+                            const offsetData = props.offset; // { top, bottom, left, right }
+                            if (!yAxisMap || !offsetData) return null;
+                            const yAxis = Object.values(yAxisMap)[0] as any;
+                            if (!yAxis?.scale) return null;
+
+                            const bubbleW = 54; // width of the bubble rectangle
+                            const bubbleH = 20; // height of the bubble rectangle
+                            const gap = 2;       // minimum pixel gap between bubbles
+                            // Position bubbles just to the right of the plot area
+                            const bubbleX = offsetData.left + (props.width ?? 0) - offsetData.right - offsetData.left + 4;
+
+                            // Build list of bubbles to draw
+                            const bubbles: { value: number; color: string; yRaw: number }[] = [];
+                            if (lastPrice != null) {
+                              bubbles.push({ value: lastPrice, color: '#4F46E5', yRaw: yAxis.scale(lastPrice) });
+                            }
+                            if (lastAvgBuyPrice != null) {
+                              bubbles.push({ value: lastAvgBuyPrice, color: '#000000', yRaw: yAxis.scale(lastAvgBuyPrice) });
+                            }
+                            if (bubbles.length === 0) return null;
+
+                            // Sort so the one with the higher Y-value (higher price) comes first (top)
+                            bubbles.sort((a, b) => a.yRaw - b.yRaw); // smaller yRaw = higher on screen
+
+                            // Prevent overlap: if the two bubbles are too close, push them apart
+                            if (bubbles.length === 2) {
+                              const minDist = bubbleH + gap;
+                              const diff = bubbles[1].yRaw - bubbles[0].yRaw;
+                              if (diff < minDist) {
+                                const mid = (bubbles[0].yRaw + bubbles[1].yRaw) / 2;
+                                bubbles[0].yRaw = mid - minDist / 2;
+                                bubbles[1].yRaw = mid + minDist / 2;
+                              }
+                            }
+
+                            return (
+                              <g>
+                                {bubbles.map((b, i) => (
+                                  <g key={i}>
+                                    {/* Rounded rectangle bubble */}
+                                    <rect
+                                      x={bubbleX}
+                                      y={b.yRaw - bubbleH / 2}
+                                      width={bubbleW}
+                                      height={bubbleH}
+                                      rx={4}
+                                      ry={4}
+                                      fill={b.color}
+                                    />
+                                    {/* Value text inside the bubble */}
+                                    <text
+                                      x={bubbleX + bubbleW / 2}
+                                      y={b.yRaw}
+                                      textAnchor="middle"
+                                      dominantBaseline="central"
+                                      fill="#ffffff"
+                                      fontSize={11}
+                                      fontWeight={600}
+                                    >
+                                      {b.value.toFixed(2)}
+                                    </text>
+                                  </g>
+                                ))}
+                              </g>
+                            );
+                          };
+
                           return (
                         <ResponsiveContainer width="100%" height={350}>
-                          <LineChart data={mergedChartData} margin={{ top: 20, right: 5, left: -5, bottom: 15 }}>
+                          {/* Right margin widened to 62 to make room for the price/avg bubbles */}
+                          <LineChart data={mergedChartData} margin={{ top: 20, right: 62, left: -5, bottom: 15 }}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                             <YAxis tick={{ fontSize: 9 }} width={40} domain={['auto', 'auto']} />
@@ -6764,6 +6847,8 @@ const PortfolioBacktester = () => {
                               }}
                             />
                             <Legend />
+                            {/* Bubbles at the right edge showing latest price & avg buy price */}
+                            <Customized component={RightEdgeBubbles} />
                             {/* Main asset price line */}
                             <Line
                               type="monotone"
