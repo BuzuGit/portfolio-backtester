@@ -344,7 +344,7 @@ const PortfolioBacktester = () => {
   // Chart toggle: end the chart at the last sale date instead of latest available price
   const [closedUntilSold, setClosedUntilSold] = useState(false);
   // "Graph Ends": optional end date for the price chart (from last sale to last available month)
-  const [closedInvestedTo, setClosedInvestedTo] = useState<string>('');
+  const [closedGraphEnds, setClosedGraphEnds] = useState<string>('');
   // "Graph Starts": optional start date for the price chart (from first available data to first buy)
   const [closedGraphStarts, setClosedGraphStarts] = useState<string>('');
   // Set of transaction indices that are currently included (checked) in stats/chart.
@@ -830,6 +830,10 @@ const PortfolioBacktester = () => {
 
     let currentAvgPrice: number | undefined = undefined;
 
+    // Pre-compute filter boundaries once (instead of inside the loop)
+    const graphStartsYM = closedGraphStarts ? toYM(new Date(closedGraphStarts)) : '';
+    const graphEndsYM = closedGraphEnds ? toYM(new Date(closedGraphEnds)) : '';
+
     for (const row of assetData) {
       const price = Number(row[ticker]);
       if (!price || price <= 0) continue;
@@ -843,15 +847,9 @@ const PortfolioBacktester = () => {
       if (closedSinceInvested && firstBuyYM && rowYM < firstBuyYM) continue;
       if (closedUntilSold && lastSaleYM && rowYM > lastSaleYM) continue;
       // "Graph Starts" dropdown: if a specific start date is selected, cut off before it
-      if (closedGraphStarts) {
-        const fromYMStr = toYM(new Date(closedGraphStarts));
-        if (rowYM < fromYMStr) continue;
-      }
+      if (graphStartsYM && rowYM < graphStartsYM) continue;
       // "Graph Ends" dropdown: if a specific end date is selected, cut off after it
-      if (closedInvestedTo) {
-        const toYMStr = toYM(new Date(closedInvestedTo));
-        if (rowYM > toYMStr) continue;
-      }
+      if (graphEndsYM && rowYM > graphEndsYM) continue;
 
       // Update avg price if there's an event this month
       if (avgPriceByMonth.has(rowYM)) {
@@ -6278,7 +6276,7 @@ const PortfolioBacktester = () => {
                                 setClosedIncludedTxns(null); // all transactions checked by default
                                 setClosedInvestedInto('');
                                 setClosedInvestedFrom('');
-                                setClosedInvestedTo('');
+                                setClosedGraphEnds('');
                                 setClosedGraphStarts('');
                                 setClosedSinceInvested(false);
                                 setClosedUntilSold(false);
@@ -6379,10 +6377,17 @@ const PortfolioBacktester = () => {
                 const comparisonDataRaw = closedInvestedInto && closedInvestedFrom
                   ? getNormalizedComparisonData(closedSelectedTicker, closedInvestedInto, closedInvestedFrom)
                   : [];
-                const comparisonData = closedInvestedTo
+                // Filter comparison data to respect both Graph Starts and Graph Ends
+                const compGraphStartsYM = closedGraphStarts ? toYM(new Date(closedGraphStarts)) : '';
+                const compGraphEndsYM = closedGraphEnds ? toYM(new Date(closedGraphEnds)) : '';
+                const comparisonData = (compGraphStartsYM || compGraphEndsYM)
                   ? comparisonDataRaw.filter(c => {
                       const d = new Date(c.date);
-                      return !isNaN(d.getTime()) && toYM(d) <= toYM(new Date(closedInvestedTo));
+                      if (isNaN(d.getTime())) return false;
+                      const ym = toYM(d);
+                      if (compGraphStartsYM && ym < compGraphStartsYM) return false;
+                      if (compGraphEndsYM && ym > compGraphEndsYM) return false;
+                      return true;
                     })
                   : comparisonDataRaw;
 
@@ -6727,8 +6732,8 @@ const PortfolioBacktester = () => {
                         <div>
                           <label className="block text-xs font-medium text-gray-600 mb-0.5">Graph Ends</label>
                           <select
-                            value={closedInvestedTo}
-                            onChange={(e) => setClosedInvestedTo(e.target.value)}
+                            value={closedGraphEnds}
+                            onChange={(e) => setClosedGraphEnds(e.target.value)}
                             className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[130px]"
                           >
                             <option value="">— All —</option>
@@ -6751,31 +6756,41 @@ const PortfolioBacktester = () => {
                             ? validPriceData.reduce((worst, d) => d.price < worst.price ? d : worst, validPriceData[0])
                             : null;
 
-                          // Find the last valid price and last valid avg buy price by searching
-                          // backwards through the data. The last entry may be a comparison-only
-                          // point (no price), so we can't just grab the last element.
-                          const lastPriceRow = [...mergedChartData].reverse().find(d => d.price != null && d.price > 0);
-                          const lastPrice = lastPriceRow?.price ?? null;
-                          // Avg buy price uses stepAfter, so find the last row that has an avgBuyPrice value
-                          const lastAvgRow = [...mergedChartData].reverse().find(d => d.avgBuyPrice != null && d.avgBuyPrice > 0);
-                          const lastAvgBuyPrice = lastAvgRow?.avgBuyPrice ?? null;
+                          // Find the last valid price and last valid avg buy price by walking
+                          // backwards. The last entry may be a comparison-only point (no price),
+                          // so we can't just grab the last element. A backward loop avoids
+                          // creating temporary array copies ([...arr].reverse().find()).
+                          let lastPrice: number | null = null;
+                          let lastAvgBuyPrice: number | null = null;
+                          for (let i = mergedChartData.length - 1; i >= 0; i--) {
+                            const d = mergedChartData[i];
+                            if (lastPrice === null && d.price != null && d.price > 0) lastPrice = d.price;
+                            if (lastAvgBuyPrice === null && d.avgBuyPrice != null && d.avgBuyPrice > 0) lastAvgBuyPrice = d.avgBuyPrice;
+                            if (lastPrice !== null && lastAvgBuyPrice !== null) break; // found both, stop early
+                          }
 
                           /* Custom SVG renderer that draws the price/avg-buy-price bubbles at the right edge.
                              Recharts passes chart internals (xAxisMap, yAxisMap, offset, etc.) as props
-                             to the Customized component — we use the Y-axis scale to position bubbles. */
-                          const RightEdgeBubbles = (props: any) => {
-                            // Recharts injects yAxisMap and offset via props
-                            const yAxisMap = props.yAxisMap;
-                            const offsetData = props.offset; // { top, bottom, left, right }
-                            if (!yAxisMap || !offsetData) return null;
-                            const yAxis = Object.values(yAxisMap)[0] as any;
+                             to the Customized component — we use the Y-axis scale to position bubbles.
+                             NOTE: This component is intentionally defined inside the IIFE so it can
+                             close over lastPrice/lastAvgBuyPrice. Recharts' Customized doesn't support
+                             passing custom props, so closure is the cleanest approach. The function
+                             reference changes each render, but that only matters when data changes. */
+                          const RightEdgeBubbles = (props: {
+                            yAxisMap?: Record<string, { scale: (v: number) => number }>;
+                            offset?: { top: number; bottom: number; left: number; right: number };
+                            width?: number;
+                          }) => {
+                            const { yAxisMap, offset: offsetData, width: chartWidth } = props;
+                            if (!yAxisMap || !offsetData || !chartWidth) return null;
+                            const yAxis = Object.values(yAxisMap)[0];
                             if (!yAxis?.scale) return null;
 
                             const bubbleW = 54; // width of the bubble rectangle
                             const bubbleH = 20; // height of the bubble rectangle
                             const gap = 2;       // minimum pixel gap between bubbles
                             // Position bubbles just to the right of the plot area
-                            const bubbleX = offsetData.left + (props.width ?? 0) - offsetData.right - offsetData.left + 4;
+                            const bubbleX = chartWidth - offsetData.right + 4;
 
                             // Build list of bubbles to draw
                             const bubbles: { value: number; color: string; yRaw: number }[] = [];
