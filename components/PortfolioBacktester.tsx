@@ -6698,8 +6698,19 @@ const PortfolioBacktester = () => {
 
                       {/* The chart itself */}
                       {chartData.length > 0 ? (
+                        (() => {
+                          // Compute highest and lowest price points from the filtered chart data
+                          const validPriceData = chartData.filter(d => d.price > 0);
+                          const maxPricePoint = validPriceData.length > 0
+                            ? validPriceData.reduce((best, d) => d.price > best.price ? d : best, validPriceData[0])
+                            : null;
+                          const minPricePoint = validPriceData.length > 0
+                            ? validPriceData.reduce((worst, d) => d.price < worst.price ? d : worst, validPriceData[0])
+                            : null;
+
+                          return (
                         <ResponsiveContainer width="100%" height={350}>
-                          <LineChart data={mergedChartData} margin={{ top: 5, right: 5, left: -5, bottom: 15 }}>
+                          <LineChart data={mergedChartData} margin={{ top: 20, right: 5, left: -5, bottom: 15 }}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                             <YAxis tick={{ fontSize: 9 }} width={40} domain={['auto', 'auto']} />
@@ -6746,7 +6757,46 @@ const PortfolioBacktester = () => {
                               strokeDasharray="6 3"
                               connectNulls
                             />
-                            {/* Green dots for buy months */}
+                            {/* Max/min price dots render FIRST (behind) so buy/sell dots
+                               appear on top when they overlap. Larger radius (r=9) creates
+                               a visible ring around any overlapping buy/sell dot (r=6). */}
+                            {/* Blue dot at highest price */}
+                            {maxPricePoint && (
+                              <ReferenceDot
+                                x={maxPricePoint.date}
+                                y={maxPricePoint.price}
+                                r={9}
+                                fill="#3b82f6"
+                                stroke="#fff"
+                                strokeWidth={2}
+                                label={{
+                                  value: maxPricePoint.price.toFixed(2),
+                                  position: 'left',
+                                  fontSize: 12,
+                                  fill: '#111827',
+                                  fontWeight: 600,
+                                }}
+                              />
+                            )}
+                            {/* Yellow dot at lowest price */}
+                            {minPricePoint && (
+                              <ReferenceDot
+                                x={minPricePoint.date}
+                                y={minPricePoint.price}
+                                r={9}
+                                fill="#eab308"
+                                stroke="#fff"
+                                strokeWidth={2}
+                                label={{
+                                  value: minPricePoint.price.toFixed(2),
+                                  position: 'left',
+                                  fontSize: 12,
+                                  fill: '#111827',
+                                  fontWeight: 600,
+                                }}
+                              />
+                            )}
+                            {/* Green dots for buy months (on top of max/min) */}
                             {buyDots.map((dot, i) => (
                               <ReferenceDot
                                 key={`buy-${i}`}
@@ -6758,7 +6808,7 @@ const PortfolioBacktester = () => {
                                 strokeWidth={2}
                               />
                             ))}
-                            {/* Red dots for sell months */}
+                            {/* Red dots for sell months (on top of max/min) */}
                             {sellDots.map((dot, i) => (
                               <ReferenceDot
                                 key={`sell-${i}`}
@@ -6772,6 +6822,8 @@ const PortfolioBacktester = () => {
                             ))}
                           </LineChart>
                         </ResponsiveContainer>
+                          );
+                        })()
                       ) : (
                         <div className="text-center py-8 text-gray-400 text-sm">
                           No price data available for {closedSelectedTicker} in the monthly prices sheet.
@@ -6787,6 +6839,14 @@ const PortfolioBacktester = () => {
                         <div className="flex items-center gap-1">
                           <div className="w-3 h-3 rounded-full bg-red-500"></div>
                           <span>Sell month</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                          <span>Max price</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                          <span>Min price</span>
                         </div>
                       </div>
                     </div>
@@ -6810,15 +6870,17 @@ const PortfolioBacktester = () => {
                            This avoids showing a misleading "min" from early on when we held
                            fewer shares (e.g. 100 shares vs 500 shares later). */}
                         {(() => {
-                          // Filter out data points where shares are zero (e.g. the final sale point)
-                          const nonZeroShareData = capitalChartData.filter(d => d.shares > 1e-9);
+                          // Include ALL data points (including the final sale month where shares=0)
+                          // so that sale proceeds are considered for max/min market value
+                          const allData = capitalChartData;
                           // Find the data point with the highest market value
-                          const maxMVPoint = nonZeroShareData.length > 0
-                            ? nonZeroShareData.reduce((best, d) => d.marketValue > best.marketValue ? d : best, nonZeroShareData[0])
+                          const maxMVPoint = allData.length > 0
+                            ? allData.reduce((best, d) => d.marketValue > best.marketValue ? d : best, allData[0])
                             : null;
-                          // Among data points with the same share count as the max, find the lowest market value
+                          // Among data points with the same share count as the max, find the lowest market value.
+                          // This avoids showing a misleading "min" from early on when we held fewer shares.
                           const sameSharesData = maxMVPoint
-                            ? nonZeroShareData.filter(d => Math.abs(d.shares - maxMVPoint.shares) < 1e-9)
+                            ? allData.filter(d => Math.abs(d.shares - maxMVPoint.shares) < 1e-9)
                             : [];
                           const minMVPoint = sameSharesData.length > 0
                             ? sameSharesData.reduce((worst, d) => d.marketValue < worst.marketValue ? d : worst, sameSharesData[0])
@@ -6903,8 +6965,9 @@ const PortfolioBacktester = () => {
                            Red dot: the month with the biggest loss (most negative PnL).
                            No share-count filtering here — we show the actual best/worst PnL moments. */}
                         {(() => {
-                          // Only consider data points where we actually hold shares (shares > 0)
-                          const pnlData = capitalChartData.filter(d => d.shares > 1e-9);
+                          // Include ALL data points (including the final sale month)
+                          // so that actual sale profit/loss is considered for max/min
+                          const pnlData = capitalChartData;
                           // Find the point with the highest profit
                           const maxPnLPoint = pnlData.length > 0
                             ? pnlData.reduce((best, d) => d.pnl > best.pnl ? d : best, pnlData[0])
