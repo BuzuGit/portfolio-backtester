@@ -56,6 +56,95 @@ const DateAxisTick = ({ x, y, payload }: { x: number; y: number; payload: { valu
 // TypeScript interfaces describe the "shape" of our data.
 // Think of them as blueprints that ensure we use data correctly.
 
+/** Props injected by Recharts into <Customized> components.
+ *  We only type the fields we actually use (yAxisMap, offset, width, height). */
+type RechartsCustomizedProps = {
+  yAxisMap?: Record<string, { scale: (v: number) => number }>;
+  offset?: { top: number; bottom: number; left: number; right: number };
+  width?: number;
+  height?: number;
+};
+
+/** Definition for a single right-edge bubble (colored label at chart's right edge). */
+interface BubbleDef {
+  value: number;   // numeric value (used for Y positioning via yAxis.scale)
+  color: string;   // background color of the bubble rectangle
+  label: string;   // formatted text to display inside the bubble
+}
+
+// Shared constants for all right-edge bubbles across charts
+const BUBBLE_W = 62;   // width of the bubble rectangle in pixels
+const BUBBLE_H = 20;   // height of the bubble rectangle
+const BUBBLE_GAP = 2;  // minimum pixel gap between adjacent bubbles
+const BUBBLE_RX = 4;   // border-radius of rounded corners
+
+/** Renders a group of colored value bubbles at the right edge of a Recharts chart.
+ *  Used by Price History, Invested Capital, and PnL charts. Handles:
+ *  - Positioning each bubble at its correct Y value via the chart's yAxis.scale
+ *  - Sorting bubbles top-to-bottom (highest value at top)
+ *  - Preventing overlap by pushing bubbles apart
+ *  - Clamping bubbles to stay within the chart's visible area
+ *  - Skipping bubbles whose Y position is NaN (value outside axis domain) */
+function renderEdgeBubbles(
+  props: RechartsCustomizedProps,
+  defs: BubbleDef[],
+): JSX.Element | null {
+  const { yAxisMap, offset: offsetData, width: chartWidth, height: chartHeight } = props;
+  if (!yAxisMap || !offsetData || !chartWidth) return null;
+  const yAxis = Object.values(yAxisMap)[0];
+  if (!yAxis?.scale) return null;
+
+  // Position bubbles just to the right of the plot area
+  const bubbleX = chartWidth - offsetData.right + 4;
+
+  // Build positioned bubbles, filtering out any NaN positions
+  const bubbles = defs
+    .map(d => ({ ...d, yRaw: yAxis.scale(d.value) }))
+    .filter(b => !isNaN(b.yRaw));
+  if (bubbles.length === 0) return null;
+
+  // Sort: highest value at top (smallest yRaw = top of screen)
+  bubbles.sort((a, b) => a.yRaw - b.yRaw);
+
+  // Prevent overlap: walk top-to-bottom, push any bubble that's too close
+  const minDist = BUBBLE_H + BUBBLE_GAP;
+  for (let i = 1; i < bubbles.length; i++) {
+    if (bubbles[i].yRaw - bubbles[i - 1].yRaw < minDist) {
+      bubbles[i].yRaw = bubbles[i - 1].yRaw + minDist;
+    }
+  }
+
+  // Clamp bubbles to stay within the chart's visible plot area
+  if (chartHeight) {
+    const yMin = offsetData.top + BUBBLE_H / 2;
+    const yMax = chartHeight - offsetData.bottom - BUBBLE_H / 2;
+    for (const b of bubbles) {
+      b.yRaw = Math.max(yMin, Math.min(yMax, b.yRaw));
+    }
+  }
+
+  return (
+    <g>
+      {bubbles.map((b, i) => (
+        <g key={i}>
+          <rect
+            x={bubbleX} y={b.yRaw - BUBBLE_H / 2}
+            width={BUBBLE_W} height={BUBBLE_H}
+            rx={BUBBLE_RX} ry={BUBBLE_RX} fill={b.color}
+          />
+          <text
+            x={bubbleX + BUBBLE_W / 2} y={b.yRaw}
+            textAnchor="middle" dominantBaseline="central"
+            fill="#ffffff" fontSize={11} fontWeight={600}
+          >
+            {b.label}
+          </text>
+        </g>
+      ))}
+    </g>
+  );
+}
+
 // A single asset in a portfolio (e.g., "SPY at 60% weight")
 interface PortfolioAsset {
   asset: string;   // Asset name (e.g., "SPY", "BND")
@@ -6771,90 +6860,21 @@ const PortfolioBacktester = () => {
                             if (lastPrice !== null && lastAvgBuyPrice !== null && lastCompPrice !== null) break;
                           }
 
-                          /* Custom SVG renderer that draws the price/avg-buy-price bubbles at the right edge.
-                             Recharts passes chart internals (xAxisMap, yAxisMap, offset, etc.) as props
-                             to the Customized component — we use the Y-axis scale to position bubbles.
-                             NOTE: This component is intentionally defined inside the IIFE so it can
-                             close over lastPrice/lastAvgBuyPrice. Recharts' Customized doesn't support
-                             passing custom props, so closure is the cleanest approach. The function
-                             reference changes each render, but that only matters when data changes. */
-                          const RightEdgeBubbles = (props: {
-                            yAxisMap?: Record<string, { scale: (v: number) => number }>;
-                            offset?: { top: number; bottom: number; left: number; right: number };
-                            width?: number;
-                          }) => {
-                            const { yAxisMap, offset: offsetData, width: chartWidth } = props;
-                            if (!yAxisMap || !offsetData || !chartWidth) return null;
-                            const yAxis = Object.values(yAxisMap)[0];
-                            if (!yAxis?.scale) return null;
-
-                            const bubbleW = 54; // width of the bubble rectangle
-                            const bubbleH = 20; // height of the bubble rectangle
-                            const gap = 2;       // minimum pixel gap between bubbles
-                            // Position bubbles just to the right of the plot area
-                            const bubbleX = chartWidth - offsetData.right + 4;
-
-                            // Build list of bubbles to draw (one per visible line)
-                            const bubbles: { value: number; color: string; yRaw: number; fmt?: string }[] = [];
-                            if (lastPrice != null) {
-                              bubbles.push({ value: lastPrice, color: '#4F46E5', yRaw: yAxis.scale(lastPrice) });
-                            }
-                            if (lastCompPrice != null) {
-                              bubbles.push({ value: lastCompPrice, color: '#F59E0B', yRaw: yAxis.scale(lastCompPrice) });
-                            }
-                            if (lastAvgBuyPrice != null) {
-                              bubbles.push({ value: lastAvgBuyPrice, color: '#000000', yRaw: yAxis.scale(lastAvgBuyPrice) });
-                            }
-                            if (bubbles.length === 0) return null;
-
-                            // Sort so the highest value sits at the top (smallest Y pixel = top of screen)
-                            bubbles.sort((a, b) => a.yRaw - b.yRaw);
-
-                            // Prevent overlap: walk top-to-bottom pushing any bubble that's too close
-                            const minDist = bubbleH + gap;
-                            for (let i = 1; i < bubbles.length; i++) {
-                              const diff = bubbles[i].yRaw - bubbles[i - 1].yRaw;
-                              if (diff < minDist) {
-                                bubbles[i].yRaw = bubbles[i - 1].yRaw + minDist;
-                              }
-                            }
-
-                            return (
-                              <g>
-                                {bubbles.map((b, i) => (
-                                  <g key={i}>
-                                    {/* Rounded rectangle bubble */}
-                                    <rect
-                                      x={bubbleX}
-                                      y={b.yRaw - bubbleH / 2}
-                                      width={bubbleW}
-                                      height={bubbleH}
-                                      rx={4}
-                                      ry={4}
-                                      fill={b.color}
-                                    />
-                                    {/* Value text inside the bubble */}
-                                    <text
-                                      x={bubbleX + bubbleW / 2}
-                                      y={b.yRaw}
-                                      textAnchor="middle"
-                                      dominantBaseline="central"
-                                      fill="#ffffff"
-                                      fontSize={11}
-                                      fontWeight={600}
-                                    >
-                                      {b.value.toFixed(2)}
-                                    </text>
-                                  </g>
-                                ))}
-                              </g>
-                            );
-                          };
+                          /* Bubble definitions for the Price History chart. Defined here (inside
+                             the IIFE) so we can close over the last-value variables. Recharts'
+                             Customized doesn't support custom props, so closure is the cleanest
+                             approach. All rendering is delegated to the shared renderEdgeBubbles. */
+                          const priceBubbleDefs: BubbleDef[] = [];
+                          if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#4F46E5', label: lastPrice.toFixed(2) });
+                          // Only show comparison bubble when the comparison line is actually visible
+                          if (lastCompPrice != null && closedInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: '#F59E0B', label: lastCompPrice.toFixed(2) });
+                          if (lastAvgBuyPrice != null) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#000000', label: lastAvgBuyPrice.toFixed(2) });
+                          const PriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
 
                           return (
                         <ResponsiveContainer width="100%" height={350}>
-                          {/* Right margin widened to 62 to make room for the price/avg bubbles */}
-                          <LineChart data={mergedChartData} margin={{ top: 20, right: 62, left: -5, bottom: 15 }}>
+                          {/* Right margin widened to 70 to make room for the right-edge bubbles */}
+                          <LineChart data={mergedChartData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                             <YAxis tick={{ fontSize: 9 }} width={40} domain={['auto', 'auto']} />
@@ -6865,8 +6885,8 @@ const PortfolioBacktester = () => {
                               }}
                             />
                             <Legend />
-                            {/* Bubbles at the right edge showing latest price & avg buy price */}
-                            <Customized component={RightEdgeBubbles} />
+                            {/* Bubbles at the right edge showing latest price, comparison, & avg buy price */}
+                            <Customized component={PriceBubbles} />
                             {/* Main asset price line */}
                             <Line
                               type="monotone"
@@ -7032,44 +7052,16 @@ const PortfolioBacktester = () => {
                             ? sameSharesData.reduce((worst, d) => d.marketValue < worst.marketValue ? d : worst, sameSharesData[0])
                             : null;
 
-                          // Last values for right-edge bubbles
+                          // Last values for right-edge bubbles (all rows guaranteed numeric by getClosedCapitalChartData)
                           const lastCapRow = capitalChartData.length > 0 ? capitalChartData[capitalChartData.length - 1] : null;
                           const lastMV = lastCapRow?.marketValue ?? null;
                           const lastInvested = lastCapRow?.investedCapital ?? null;
 
-                          /* Right-edge bubbles for Invested Capital chart (same pattern as Price History).
-                             Shows final Market Value (indigo) and final Invested Capital (black). */
-                          const CapitalBubbles = (props: {
-                            yAxisMap?: Record<string, { scale: (v: number) => number }>;
-                            offset?: { top: number; bottom: number; left: number; right: number };
-                            width?: number;
-                          }) => {
-                            const { yAxisMap, offset: offsetData, width: chartWidth } = props;
-                            if (!yAxisMap || !offsetData || !chartWidth) return null;
-                            const yAxis = Object.values(yAxisMap)[0];
-                            if (!yAxis?.scale) return null;
-                            const bW = 62; const bH = 20; const gap = 2;
-                            const bX = chartWidth - offsetData.right + 4;
-                            const bubbles: { value: number; color: string; yRaw: number }[] = [];
-                            if (lastMV != null) bubbles.push({ value: lastMV, color: '#4F46E5', yRaw: yAxis.scale(lastMV) });
-                            if (lastInvested != null) bubbles.push({ value: lastInvested, color: '#000000', yRaw: yAxis.scale(lastInvested) });
-                            if (bubbles.length === 0) return null;
-                            bubbles.sort((a, b) => a.yRaw - b.yRaw);
-                            const minDist = bH + gap;
-                            for (let i = 1; i < bubbles.length; i++) {
-                              if (bubbles[i].yRaw - bubbles[i - 1].yRaw < minDist) bubbles[i].yRaw = bubbles[i - 1].yRaw + minDist;
-                            }
-                            return (
-                              <g>{bubbles.map((b, i) => (
-                                <g key={i}>
-                                  <rect x={bX} y={b.yRaw - bH / 2} width={bW} height={bH} rx={4} ry={4} fill={b.color} />
-                                  <text x={bX + bW / 2} y={b.yRaw} textAnchor="middle" dominantBaseline="central" fill="#fff" fontSize={11} fontWeight={600}>
-                                    {b.value.toLocaleString()}
-                                  </text>
-                                </g>
-                              ))}</g>
-                            );
-                          };
+                          // Build bubble defs and delegate to shared renderer
+                          const capitalBubbleDefs: BubbleDef[] = [];
+                          if (lastMV != null) capitalBubbleDefs.push({ value: lastMV, color: '#4F46E5', label: lastMV.toLocaleString() });
+                          if (lastInvested != null) capitalBubbleDefs.push({ value: lastInvested, color: '#000000', label: lastInvested.toLocaleString() });
+                          const CapitalBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, capitalBubbleDefs);
 
                           return (
                         <ResponsiveContainer width="100%" height={250}>
@@ -7170,34 +7162,17 @@ const PortfolioBacktester = () => {
                             ? (minPnLPoint.pnl / minPnLPoint.investedCapital * 100)
                             : null;
 
-                          // Last PnL value for right-edge bubble
+                          // Last PnL value for right-edge bubble. Green if positive, red if negative.
                           const lastPnLRow = capitalChartData.length > 0 ? capitalChartData[capitalChartData.length - 1] : null;
                           const lastPnL = lastPnLRow?.pnl ?? null;
 
-                          /* Right-edge bubble for PnL chart. Green if positive, red if negative. */
-                          const PnLBubble = (props: {
-                            yAxisMap?: Record<string, { scale: (v: number) => number }>;
-                            offset?: { top: number; bottom: number; left: number; right: number };
-                            width?: number;
-                          }) => {
-                            const { yAxisMap, offset: offsetData, width: chartWidth } = props;
-                            if (!yAxisMap || !offsetData || !chartWidth || lastPnL == null) return null;
-                            const yAxis = Object.values(yAxisMap)[0];
-                            if (!yAxis?.scale) return null;
-                            const bW = 62; const bH = 20;
-                            const bX = chartWidth - offsetData.right + 4;
-                            const yPos = yAxis.scale(lastPnL);
+                          // Build bubble def and delegate to shared renderer
+                          const pnlBubbleDefs: BubbleDef[] = [];
+                          if (lastPnL != null) {
                             const color = lastPnL >= 0 ? '#22c55e' : '#ef4444';
-                            const label = `${lastPnL >= 0 ? '+' : ''}${lastPnL.toLocaleString()}`;
-                            return (
-                              <g>
-                                <rect x={bX} y={yPos - bH / 2} width={bW} height={bH} rx={4} ry={4} fill={color} />
-                                <text x={bX + bW / 2} y={yPos} textAnchor="middle" dominantBaseline="central" fill="#fff" fontSize={11} fontWeight={600}>
-                                  {label}
-                                </text>
-                              </g>
-                            );
-                          };
+                            pnlBubbleDefs.push({ value: lastPnL, color, label: `${lastPnL >= 0 ? '+' : ''}${lastPnL.toLocaleString()}` });
+                          }
+                          const PnLBubble = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, pnlBubbleDefs);
 
                           return (
                         <>
