@@ -6845,13 +6845,13 @@ const PortfolioBacktester = () => {
                                 setClosedInvestedFrom('');
                               }
                             }}
-                            className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[180px]"
+                            className="px-2 py-1.5 border border-gray-300 rounded text-xs max-w-[130px]"
                           >
                             <option value="">— None —</option>
                             {assetLookup
                               .filter(a => a.ticker !== closedSelectedTicker)
                               .map(a => (
-                                <option key={a.ticker} value={a.ticker}>{a.ticker} - {a.name}</option>
+                                <option key={a.ticker} value={a.ticker}>{a.ticker}</option>
                               ))}
                           </select>
                         </div>
