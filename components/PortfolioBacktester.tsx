@@ -2612,7 +2612,7 @@ const PortfolioBacktester = () => {
 
     // 2. Compute 10-month SMA and drawdown for every month (using full history)
     let ath = 0; // all-time-high running tracker
-    const fullData: { date: string; price: number; sma10: number | null; drawdown: number }[] = [];
+    const fullData: { date: string; price: number; sma10: number | null; drawdown: number; smaDistance: number | null }[] = [];
     for (let i = 0; i < allMonths.length; i++) {
       const { date, price } = allMonths[i];
 
@@ -2628,7 +2628,10 @@ const PortfolioBacktester = () => {
       if (price > ath) ath = price;
       const drawdown = ath > 0 ? ((price - ath) / ath) * 100 : 0;
 
-      fullData.push({ date, price, sma10, drawdown });
+      // SMA distance: how far (in %) the price sits above or below the 10M SMA
+      const smaDistance = sma10 !== null ? ((price - sma10) / sma10) * 100 : null;
+
+      fullData.push({ date, price, sma10, drawdown, smaDistance });
     }
 
     // 3. Apply period filter — slice the last N months for the visible window
@@ -2639,9 +2642,19 @@ const PortfolioBacktester = () => {
     const visibleData = fullData.slice(fullData.length - n);
     if (visibleData.length === 0) return null;
 
-    // 4. Separate into price and drawdown arrays for the two charts
+    // 4. Separate into price, drawdown, and SMA-distance arrays for the three charts
     const priceData = visibleData.map(d => ({ date: d.date, price: d.price, sma10: d.sma10 }));
     const drawdownData = visibleData.map(d => ({ date: d.date, drawdown: d.drawdown }));
+
+    // SMA distance chart data: only months where SMA exists, split into pos/neg for dual-color area
+    const smaDistData = visibleData
+      .filter(d => d.smaDistance !== null)
+      .map(d => ({
+        date: d.date,
+        smaDist: d.smaDistance!,                    // raw value for tooltip
+        smaDistPos: Math.max(d.smaDistance!, 0),    // green area: above SMA
+        smaDistNeg: Math.min(d.smaDistance!, 0),    // red area: below SMA
+      }));
 
     // 5. Find notable points within the visible window
     let maxPricePoint: { date: string; price: number } | null = null;
@@ -2651,6 +2664,14 @@ const PortfolioBacktester = () => {
       if (!maxPricePoint || d.price > maxPricePoint.price) maxPricePoint = { date: d.date, price: d.price };
       if (!minPricePoint || d.price < minPricePoint.price) minPricePoint = { date: d.date, price: d.price };
       if (!maxDrawdownPoint || d.drawdown < maxDrawdownPoint.drawdown) maxDrawdownPoint = { date: d.date, drawdown: d.drawdown };
+    }
+
+    // Notable points for SMA distance: furthest above SMA (green dot) and furthest below (red dot)
+    let maxSmaDistPoint: { date: string; smaDist: number } | null = null;
+    let minSmaDistPoint: { date: string; smaDist: number } | null = null;
+    for (const d of smaDistData) {
+      if (!maxSmaDistPoint || d.smaDist > maxSmaDistPoint.smaDist) maxSmaDistPoint = { date: d.date, smaDist: d.smaDist };
+      if (!minSmaDistPoint || d.smaDist < minSmaDistPoint.smaDist) minSmaDistPoint = { date: d.date, smaDist: d.smaDist };
     }
 
     // 6. Compute total return and CAGR for the visible window
@@ -2669,7 +2690,7 @@ const PortfolioBacktester = () => {
       ? (Math.pow(endPrice / startPrice, 1 / years) - 1) * 100
       : null;
 
-    return { priceData, drawdownData, maxPricePoint, minPricePoint, maxDrawdownPoint, totalReturn, cagr };
+    return { priceData, drawdownData, smaDistData, maxPricePoint, minPricePoint, maxDrawdownPoint, maxSmaDistPoint, minSmaDistPoint, totalReturn, cagr };
   };
 
   /**
@@ -5294,7 +5315,7 @@ const PortfolioBacktester = () => {
                         </div>
                       );
 
-                      const { priceData, drawdownData, maxPricePoint, minPricePoint, maxDrawdownPoint, totalReturn, cagr } = chartResult;
+                      const { priceData, drawdownData, smaDistData, maxPricePoint, minPricePoint, maxDrawdownPoint, maxSmaDistPoint, minSmaDistPoint, totalReturn, cagr } = chartResult;
 
                       // --- Right-edge bubbles for the price chart ---
                       const lastRow = priceData[priceData.length - 1];
@@ -5314,6 +5335,30 @@ const PortfolioBacktester = () => {
                         ddBubbleDefs.push({ value: lastDD.drawdown, color: '#000000', label: `${lastDD.drawdown.toFixed(1)}%` });
                       }
                       const MonthlyDDBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, ddBubbleDefs);
+
+                      // --- Right-edge bubble for the SMA distance chart ---
+                      const lastSmaDist = smaDistData[smaDistData.length - 1];
+                      const smaDistBubbleDefs: BubbleDef[] = [];
+                      if (lastSmaDist) {
+                        // Green bubble if above SMA (positive distance), red if below
+                        const bubbleColor = lastSmaDist.smaDist >= 0 ? '#16a34a' : '#ef4444';
+                        smaDistBubbleDefs.push({
+                          value: lastSmaDist.smaDist,
+                          color: bubbleColor,
+                          label: `${lastSmaDist.smaDist >= 0 ? '+' : ''}${lastSmaDist.smaDist.toFixed(1)}%`,
+                        });
+                      }
+                      const MonthlySmaDistBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, smaDistBubbleDefs);
+
+                      // Gradient offset: where 0% falls in the Y range, so the line/fill
+                      // is green above 0 and red below 0 with a single continuous path.
+                      // Gradient runs top-to-bottom: 0% offset = Y max, 100% offset = Y min.
+                      const smaDistValues = smaDistData.map(d => d.smaDist);
+                      const smaDistMax = Math.max(...smaDistValues, 0);   // ensure 0 is within range
+                      const smaDistMin = Math.min(...smaDistValues, 0);
+                      const smaDistGradientOffset = smaDistMax === smaDistMin
+                        ? 0.5
+                        : smaDistMax / (smaDistMax - smaDistMin);
 
                       return (
                         <div className="mt-6 border-t border-gray-200 pt-4">
@@ -5456,20 +5501,20 @@ const PortfolioBacktester = () => {
                                   fillOpacity={0.1}
                                   strokeWidth={1.5}
                                 />
-                                {/* Black dot at max drawdown in the visible period */}
+                                {/* Red dot at max drawdown in the visible period, label to the left */}
                                 {maxDrawdownPoint && (
                                   <ReferenceDot
                                     x={maxDrawdownPoint.date}
                                     y={maxDrawdownPoint.drawdown}
                                     r={6}
-                                    fill="#000000"
+                                    fill="#ef4444"
                                     stroke="#fff"
                                     strokeWidth={2}
                                     label={{
                                       value: `${maxDrawdownPoint.drawdown.toFixed(1)}%`,
-                                      position: 'bottom',
+                                      position: 'left',
                                       fontSize: 11,
-                                      fill: '#111827',
+                                      fill: '#ef4444',
                                       fontWeight: 600,
                                     }}
                                   />
@@ -5477,6 +5522,99 @@ const PortfolioBacktester = () => {
                               </AreaChart>
                             </ResponsiveContainer>
                           </div>
+
+                          {/* Chart 3: SMA Distance — how far price is from 10-month SMA (in %) */}
+                          {smaDistData.length > 0 && (
+                            <div className="mt-2">
+                              <ResponsiveContainer width="100%" height={180}>
+                                <AreaChart data={smaDistData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis
+                                    dataKey="date"
+                                    tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />}
+                                    height={35}
+                                  />
+                                  <YAxis
+                                    tick={{ fontSize: 9 }}
+                                    width={40}
+                                    tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+                                  />
+                                  <Tooltip
+                                    formatter={(value: number) => [
+                                      `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`,
+                                      'SMA Distance',
+                                    ]}
+                                  />
+                                  {/* Gradient definitions: green above 0%, red below 0% */}
+                                  <defs>
+                                    <linearGradient id="smaDistStroke" x1="0" y1="0" x2="0" y2="1">
+                                      <stop offset="0%" stopColor="#16a34a" />
+                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor="#16a34a" />
+                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor="#ef4444" />
+                                      <stop offset="100%" stopColor="#ef4444" />
+                                    </linearGradient>
+                                    <linearGradient id="smaDistFill" x1="0" y1="0" x2="0" y2="1">
+                                      <stop offset="0%" stopColor="#16a34a" />
+                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor="#16a34a" />
+                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor="#ef4444" />
+                                      <stop offset="100%" stopColor="#ef4444" />
+                                    </linearGradient>
+                                  </defs>
+                                  {/* Gray dashed baseline at 0% — price equals SMA */}
+                                  <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                                  <Customized component={MonthlySmaDistBubbles} />
+                                  {/* Single area: green above 0, red below 0, one continuous line */}
+                                  <Area
+                                    type="monotone"
+                                    dataKey="smaDist"
+                                    name="SMA Distance"
+                                    stroke="url(#smaDistStroke)"
+                                    fill="url(#smaDistFill)"
+                                    fillOpacity={0.15}
+                                    strokeWidth={1.5}
+                                    baseValue={0}
+                                    isAnimationActive={false}
+                                  />
+                                  {/* Green dot at max positive distance from SMA (furthest above) */}
+                                  {maxSmaDistPoint && maxSmaDistPoint.smaDist > 0 && (
+                                    <ReferenceDot
+                                      x={maxSmaDistPoint.date}
+                                      y={maxSmaDistPoint.smaDist}
+                                      r={6}
+                                      fill="#16a34a"
+                                      stroke="#fff"
+                                      strokeWidth={2}
+                                      label={{
+                                        value: `+${maxSmaDistPoint.smaDist.toFixed(1)}%`,
+                                        position: 'left',
+                                        fontSize: 11,
+                                        fill: '#16a34a',
+                                        fontWeight: 600,
+                                      }}
+                                    />
+                                  )}
+                                  {/* Red dot at max negative distance from SMA (furthest below) */}
+                                  {minSmaDistPoint && minSmaDistPoint.smaDist < 0 && (
+                                    <ReferenceDot
+                                      x={minSmaDistPoint.date}
+                                      y={minSmaDistPoint.smaDist}
+                                      r={6}
+                                      fill="#ef4444"
+                                      stroke="#fff"
+                                      strokeWidth={2}
+                                      label={{
+                                        value: `${minSmaDistPoint.smaDist.toFixed(1)}%`,
+                                        position: 'left',
+                                        fontSize: 11,
+                                        fill: '#ef4444',
+                                        fontWeight: 600,
+                                      }}
+                                    />
+                                  )}
+                                </AreaChart>
+                              </ResponsiveContainer>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
