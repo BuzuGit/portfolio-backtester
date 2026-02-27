@@ -6813,7 +6813,7 @@ const PortfolioBacktester = () => {
                               : 'bg-white border-gray-300 hover:bg-gray-100'
                           }`}
                         >
-                          Avg Buy Price
+                          Avg Buy
                         </button>
 
                         {/* Avg Sell Price toggle — shows/hides the red dashed avg sell line */}
@@ -6825,7 +6825,7 @@ const PortfolioBacktester = () => {
                               : 'bg-white border-gray-300 hover:bg-gray-100'
                           }`}
                         >
-                          Avg Sell Price
+                          Avg Sell
                         </button>
 
                         <div className="border-l border-gray-300 h-6 mx-1" />
