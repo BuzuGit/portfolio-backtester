@@ -6955,11 +6955,16 @@ const PortfolioBacktester = () => {
                                 {' vs '}
                                 {stats.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                 {' sold '}
-                                <span className={stats.ifNotSold - stats.totalFinalValue >= 0 ? 'text-red-500' : 'text-green-500'}>
-                                  ({stats.ifNotSold - stats.totalFinalValue >= 0 ? '+' : ''}
-                                  {(stats.ifNotSold - stats.totalFinalValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                  {' unrealized'})
-                                </span>
+                                {(() => {
+                                  const unrealized = stats.ifNotSold - stats.totalFinalValue;
+                                  return (
+                                    <span className={unrealized >= 0 ? 'text-red-500' : 'text-green-500'}>
+                                      ({unrealized >= 0 ? '+' : ''}
+                                      {unrealized.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                      {' unrealized'})
+                                    </span>
+                                  );
+                                })()}
                               </div>
                             </div>
                           )}
