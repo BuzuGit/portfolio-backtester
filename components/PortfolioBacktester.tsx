@@ -6906,6 +6906,92 @@ const PortfolioBacktester = () => {
                         </div>
                       </div>
 
+                      {/* --- Compact Summary Statistics (inline above chart) --- */}
+                      {stats && (
+                        <div className="flex flex-wrap gap-3 mb-4 px-2">
+
+                          {/* Tile 1: Holding Time + XIRR — how long and what annualized return */}
+                          <div className="flex-1 min-w-[180px] p-2 bg-gray-50 rounded-lg">
+                            <div className="text-[11px] text-gray-500 mb-0.5">Holding & Return</div>
+                            <div className="text-sm font-semibold text-gray-800">
+                              {stats.holdingYears.toFixed(1)} yrs ({stats.holdingDays.toLocaleString()} days)
+                              <span className="text-gray-300 mx-1">&middot;</span>
+                              <span className={(stats.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                {stats.xirr !== null
+                                  ? `XIRR ${stats.xirr >= 0 ? '+' : ''}${stats.xirr.toFixed(1)}%`
+                                  : 'XIRR N/A'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Tile 2: Total PnL — profit/loss with invested → sold breakdown */}
+                          <div className="flex-1 min-w-[180px] p-2 bg-gray-50 rounded-lg">
+                            <div className="text-[11px] text-gray-500 mb-0.5">Total PnL</div>
+                            <div className={`text-sm font-semibold ${stats.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {stats.totalPnL >= 0 ? '+' : ''}
+                              {stats.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                              {' '}({stats.totalPnLPct >= 0 ? '+' : ''}{stats.totalPnLPct.toFixed(1)}%)
+                            </div>
+                            <div className="text-[11px] text-gray-400">
+                              {stats.totalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                              {' → '}
+                              {stats.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                            </div>
+                          </div>
+
+                          {/* Tile 3: Current vs Sold + If Not Sold — price comparison & unrealized */}
+                          {stats.currentPrice > 0 && (
+                            <div className="flex-1 min-w-[220px] p-2 bg-gray-50 rounded-lg">
+                              <div className="text-[11px] text-gray-500 mb-0.5">Current vs Sold</div>
+                              <div className="text-sm font-semibold text-gray-800">
+                                Now {stats.currentPrice.toFixed(2)} vs avg {stats.weightedSellPrice.toFixed(2)}
+                                <span className="text-gray-300 mx-1">&middot;</span>
+                                <span className={stats.priceVsSoldPct >= 0 ? 'text-red-600' : 'text-green-600'}>
+                                  {stats.priceVsSoldPct >= 0 ? '+' : ''}{stats.priceVsSoldPct.toFixed(1)}%
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-gray-400">
+                                {stats.ifNotSold.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                {' vs '}
+                                {stats.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                {' sold '}
+                                <span className={stats.ifNotSold - stats.totalFinalValue >= 0 ? 'text-red-500' : 'text-green-500'}>
+                                  ({stats.ifNotSold - stats.totalFinalValue >= 0 ? '+' : ''}
+                                  {(stats.ifNotSold - stats.totalFinalValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                  {' unrealized'})
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Tile 4: Asset vs comparison asset (only when "Invested Into" is active) */}
+                          {closedInvestedInto && compGainBase !== null && compGainInvested !== null && (
+                            <div className="flex-1 min-w-[200px] p-2 bg-gray-50 rounded-lg">
+                              <div className="text-[11px] text-gray-500 mb-0.5">
+                                {closedSelectedTicker} vs {closedInvestedInto}
+                              </div>
+                              <div className="text-sm font-semibold text-gray-800">
+                                <span className={compGainBase >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                  {closedSelectedTicker}: {compGainBase >= 0 ? '+' : ''}{compGainBase.toFixed(1)}%
+                                </span>
+                                {' vs '}
+                                <span className={compGainInvested >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                  {closedInvestedInto}: {compGainInvested >= 0 ? '+' : ''}{compGainInvested.toFixed(1)}%
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-gray-400">
+                                {(() => {
+                                  const diff = compGainInvested - compGainBase;
+                                  if (diff > 0) return `${compAssetInfo?.name || closedInvestedInto} outperformed by ${diff.toFixed(1)}pp`;
+                                  if (diff < 0) return `${assetInfo?.name || closedSelectedTicker} would have outperformed by ${Math.abs(diff).toFixed(1)}pp`;
+                                  return 'Same performance';
+                                })()}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* The chart itself */}
                       {chartData.length > 0 ? (
                         (() => {
@@ -7377,123 +7463,6 @@ const PortfolioBacktester = () => {
                       </div>
                     )}
 
-                    {/* --- Dashboard Statistics --- */}
-                    {stats && (
-                      <div className="bg-white p-4 rounded-lg shadow">
-                        <h4 className="text-sm font-semibold text-gray-700 mb-3">Summary Statistics</h4>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                          {/* Total Holding Time */}
-                          <div className="p-3 bg-gray-50 rounded-lg">
-                            <div className="text-xs text-gray-500 mb-1">Total Holding Time</div>
-                            <div className="text-lg font-semibold text-gray-800">
-                              {stats.holdingYears.toFixed(1)} years
-                            </div>
-                            <div className="text-xs text-gray-400">{stats.holdingDays} days</div>
-                          </div>
-
-                          {/* Total PnL */}
-                          <div className="p-3 bg-gray-50 rounded-lg">
-                            <div className="text-xs text-gray-500 mb-1">Total PnL</div>
-                            <div className={`text-lg font-semibold ${stats.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {stats.totalPnL >= 0 ? '+' : ''}{stats.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ({stats.totalPnLPct >= 0 ? '+' : ''}{stats.totalPnLPct.toFixed(1)}%)
-                            </div>
-                            <div className="text-xs text-gray-400">
-                              Invested {stats.totalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} → Sold for {stats.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                            </div>
-                          </div>
-
-                          {/* XIRR (Annualized Return) */}
-                          <div className="p-3 bg-gray-50 rounded-lg">
-                            <div className="text-xs text-gray-500 mb-1">XIRR (Annualized)</div>
-                            <div className={`text-lg font-semibold ${(stats.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {stats.xirr !== null ? `${stats.xirr >= 0 ? '+' : ''}${stats.xirr.toFixed(1)}%` : 'N/A'}
-                            </div>
-                            <div className="text-xs text-gray-400">annualized rate of return</div>
-                          </div>
-
-                          {/* If Not Sold */}
-                          <div className="p-3 bg-gray-50 rounded-lg">
-                            <div className="text-xs text-gray-500 mb-1">If Not Sold (Current Value)</div>
-                            <div className="text-lg font-semibold text-gray-800">
-                              {stats.currentPrice > 0
-                                ? stats.ifNotSold.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
-                                : 'N/A'
-                              }
-                            </div>
-                            <div className="text-xs text-gray-400">
-                              {stats.currentPrice > 0
-                                ? `${stats.totalShares.toLocaleString(undefined, { maximumFractionDigits: 4 })} shares × ${stats.currentPrice.toFixed(2)}`
-                                : 'No current price data'
-                              }
-                            </div>
-                            {/* Show what was actually sold for and the unrealized difference */}
-                            {stats.currentPrice > 0 && (
-                              <div className="text-xs mt-1.5 pt-1.5 border-t border-gray-200">
-                                <span className="text-gray-400">
-                                  Sold for {stats.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                </span>
-                                <span className="text-gray-300 mx-1">·</span>
-                                <span className={stats.ifNotSold - stats.totalFinalValue >= 0 ? 'text-red-500' : 'text-green-500'}>
-                                  {stats.ifNotSold - stats.totalFinalValue >= 0 ? '+' : ''}
-                                  {(stats.ifNotSold - stats.totalFinalValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} unrealized
-                                </span>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Current Price vs Sold Price */}
-                          <div className="p-3 bg-gray-50 rounded-lg">
-                            <div className="text-xs text-gray-500 mb-1">Current vs Sold Price</div>
-                            <div className={`text-lg font-semibold ${stats.priceVsSoldPct >= 0 ? 'text-red-600' : 'text-green-600'}`}>
-                              {stats.currentPrice > 0
-                                ? `${stats.priceVsSoldPct >= 0 ? '+' : ''}${stats.priceVsSoldPct.toFixed(1)}%`
-                                : 'N/A'
-                              }
-                            </div>
-                            <div className="text-xs text-gray-400">
-                              {stats.currentPrice > 0
-                                ? (stats.priceVsSoldPct >= 0
-                                    ? 'Price went up after selling'
-                                    : 'Good timing — price dropped after selling')
-                                : ''
-                              }
-                            </div>
-                            {/* Show the actual current price and weighted average sell price */}
-                            {stats.currentPrice > 0 && (
-                              <div className="text-xs mt-1.5 pt-1.5 border-t border-gray-200 text-gray-400">
-                                Now {stats.currentPrice.toFixed(2)} vs sold avg {stats.weightedSellPrice.toFixed(2)}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Comparison with "Invested Into" (only shown when comparison is active) */}
-                          {closedInvestedInto && compGainBase !== null && compGainInvested !== null && (
-                            <div className="p-3 bg-gray-50 rounded-lg">
-                              <div className="text-xs text-gray-500 mb-1">
-                                {closedSelectedTicker} vs {closedInvestedInto} since sale
-                              </div>
-                              <div className="text-sm font-semibold text-gray-800">
-                                <span className={compGainBase >= 0 ? 'text-green-600' : 'text-red-600'}>
-                                  {closedSelectedTicker}: {compGainBase >= 0 ? '+' : ''}{compGainBase.toFixed(1)}%
-                                </span>
-                                {' vs '}
-                                <span className={compGainInvested >= 0 ? 'text-green-600' : 'text-red-600'}>
-                                  {closedInvestedInto}: {compGainInvested >= 0 ? '+' : ''}{compGainInvested.toFixed(1)}%
-                                </span>
-                              </div>
-                              <div className="text-xs text-gray-400 mt-0.5">
-                                {(() => {
-                                  const diff = compGainInvested - compGainBase;
-                                  if (diff > 0) return `${compAssetInfo?.name || closedInvestedInto} outperformed by ${diff.toFixed(1)}pp`;
-                                  if (diff < 0) return `${assetInfo?.name || closedSelectedTicker} would have outperformed by ${Math.abs(diff).toFixed(1)}pp`;
-                                  return 'Same performance';
-                                })()}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 );
               })()}
