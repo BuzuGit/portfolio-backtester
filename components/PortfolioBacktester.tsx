@@ -106,7 +106,7 @@ function renderEdgeBubbles(
   // Sort: highest value at top (smallest yRaw = top of screen)
   bubbles.sort((a, b) => a.yRaw - b.yRaw);
 
-  // Prevent overlap: walk top-to-bottom, push any bubble that's too close
+  // Prevent overlap: walk top-to-bottom, push any bubble that's too close downward
   const minDist = BUBBLE_H + BUBBLE_GAP;
   for (let i = 1; i < bubbles.length; i++) {
     if (bubbles[i].yRaw - bubbles[i - 1].yRaw < minDist) {
@@ -120,6 +120,14 @@ function renderEdgeBubbles(
     const yMax = chartHeight - offsetData.bottom - BUBBLE_H / 2;
     for (const b of bubbles) {
       b.yRaw = Math.max(yMin, Math.min(yMax, b.yRaw));
+    }
+  }
+
+  // Reverse pass: if bottom-clamping pulled a pushed bubble back up causing
+  // overlap again, push upper bubbles upward to restore the gap
+  for (let i = bubbles.length - 2; i >= 0; i--) {
+    if (bubbles[i + 1].yRaw - bubbles[i].yRaw < minDist) {
+      bubbles[i].yRaw = bubbles[i + 1].yRaw - minDist;
     }
   }
 
@@ -2454,6 +2462,7 @@ const PortfolioBacktester = () => {
       sma10: number | null;       // 10-month SMA (average of last 10 months including current)
       signal: 'BUY' | 'SELL' | null;  // BUY if price > SMA, SELL if price < SMA
       signals: ('BUY' | 'SELL' | null)[];  // Signal at each of 13 months (for historical view)
+      dd12m: number | null;       // 12-month drawdown: how far current price is below the 12-month high (%)
     }>;
   } => {
     if (!assetData || assetData.length === 0) {
@@ -2545,13 +2554,25 @@ const PortfolioBacktester = () => {
         return price > smaAtMonth ? 'BUY' : 'SELL';
       });
 
+      // 12-month drawdown: how far the current price sits below the highest price
+      // across the displayed 13 months (current + 12 prior). Always <= 0 when below max.
+      let dd12m: number | null = null;
+      if (currentPrice !== null) {
+        const validDisplayPrices = prices.filter((p): p is number => p !== null);
+        if (validDisplayPrices.length > 0) {
+          const max12m = Math.max(...validDisplayPrices);
+          dd12m = max12m > 0 ? ((currentPrice - max12m) / max12m) * 100 : 0;
+        }
+      }
+
       return {
         ticker: asset.ticker,
         name: asset.name,
         prices,
         sma10,
         signal,
-        signals
+        signals,
+        dd12m
       };
     });
 
@@ -2632,7 +2653,23 @@ const PortfolioBacktester = () => {
       if (!maxDrawdownPoint || d.drawdown < maxDrawdownPoint.drawdown) maxDrawdownPoint = { date: d.date, drawdown: d.drawdown };
     }
 
-    return { priceData, drawdownData, maxPricePoint, minPricePoint, maxDrawdownPoint };
+    // 6. Compute total return and CAGR for the visible window
+    //    Total Return = ((endPrice - startPrice) / startPrice) * 100
+    //    CAGR = ((endPrice / startPrice) ^ (1 / years) - 1) * 100
+    const startPrice = visibleData[0].price;
+    const endPrice = visibleData[visibleData.length - 1].price;
+    const totalReturn = ((endPrice - startPrice) / startPrice) * 100;
+
+    // Years between first and last data point (using actual dates for accuracy)
+    const startDate = new Date(visibleData[0].date);
+    const endDate = new Date(visibleData[visibleData.length - 1].date);
+    const years = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    // CAGR only makes sense over a period > 0 years; for very short spans just show total return
+    const cagr = years >= 1
+      ? (Math.pow(endPrice / startPrice, 1 / years) - 1) * 100
+      : null;
+
+    return { priceData, drawdownData, maxPricePoint, minPricePoint, maxDrawdownPoint, totalReturn, cagr };
   };
 
   /**
@@ -5133,6 +5170,10 @@ const PortfolioBacktester = () => {
                             <th className="text-left py-1 px-1 bg-gray-100 border-l border-gray-200">
                               Ticker
                             </th>
+                            {/* 12-month drawdown column */}
+                            <th className="text-right py-1 px-1 bg-gray-100 border-l border-gray-200 whitespace-nowrap">
+                              12M DD
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -5191,6 +5232,16 @@ const PortfolioBacktester = () => {
                                 <td className="text-left py-0.5 px-1 bg-gray-50 text-gray-500 border-l border-gray-200">
                                   {asset.ticker}
                                 </td>
+                                {/* 12-month drawdown: shows how far current price is below the 12M high */}
+                                <td className={`text-right py-0.5 px-1 font-mono border-l border-gray-200 ${
+                                  asset.dd12m === null ? 'text-gray-400'
+                                    : asset.dd12m === 0 ? 'bg-green-50 text-green-700 font-medium'
+                                    : asset.dd12m > -5 ? 'text-gray-600'
+                                    : asset.dd12m > -15 ? 'text-orange-600'
+                                    : 'text-red-600 font-medium'
+                                }`}>
+                                  {asset.dd12m !== null ? `${asset.dd12m.toFixed(1)}%` : '-'}
+                                </td>
                               </tr>
                             );
                           })}
@@ -5243,7 +5294,7 @@ const PortfolioBacktester = () => {
                         </div>
                       );
 
-                      const { priceData, drawdownData, maxPricePoint, minPricePoint, maxDrawdownPoint } = chartResult;
+                      const { priceData, drawdownData, maxPricePoint, minPricePoint, maxDrawdownPoint, totalReturn, cagr } = chartResult;
 
                       // --- Right-edge bubbles for the price chart ---
                       const lastRow = priceData[priceData.length - 1];
@@ -5270,6 +5321,16 @@ const PortfolioBacktester = () => {
                           <div className="flex items-center justify-between mb-3 px-2">
                             <h3 className="text-sm font-semibold text-gray-700">
                               {monthlySelectedTicker} — {assetName}
+                              {/* Total return for the visible period, colored green/red */}
+                              <span className={`ml-2 ${totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(1)}%
+                              </span>
+                              {/* CAGR shown when period is >= 1 year */}
+                              {cagr !== null && (
+                                <span className="ml-1 text-xs font-normal text-gray-500">
+                                  (CAGR {cagr >= 0 ? '+' : ''}{cagr.toFixed(1)}%)
+                                </span>
+                              )}
                             </h3>
                             <div className="flex gap-1">
                               {(['1Y', '2Y', '3Y', '4Y', '5Y', '6Y', 'max'] as const).map(p => (
