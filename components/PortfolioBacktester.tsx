@@ -448,6 +448,12 @@ const PortfolioBacktester = () => {
   // Ref for click-outside detection on the Closed tab filter dropdowns
   const closedFilterRef = useRef<HTMLDivElement>(null);
 
+  // ---- Monthly Prices chart state ----
+  // Which asset's row is currently selected for chart display (empty = no chart)
+  const [monthlySelectedTicker, setMonthlySelectedTicker] = useState<string>('');
+  // How many years of data to show in the monthly charts (default: show everything)
+  const [monthlyChartPeriod, setMonthlyChartPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max'>('max');
+
   // Close Years dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -2550,6 +2556,83 @@ const PortfolioBacktester = () => {
     });
 
     return { months, assets };
+  };
+
+  /**
+   * Builds chart-ready data for the Monthly Prices interactive charts.
+   * Given a ticker and a period (1Y–6Y or max), produces:
+   *  - priceData: monthly prices + 10-month SMA
+   *  - drawdownData: how far below the all-time-high at each month
+   *  - Notable points (max price, min price, max drawdown) in the visible window
+   *
+   * SMA and ATH are computed over the FULL history so they remain correct even when
+   * the visible window is shortened (e.g. 1Y still gets SMA from 10 months before).
+   */
+  const getMonthlyChartData = (
+    ticker: string,
+    period: '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max'
+  ) => {
+    if (!assetData || assetData.length === 0) return null;
+
+    // 1. Extract monthly prices: group by YYYY-MM, take the last valid price per month
+    const monthlyMap = new Map<string, { date: string; price: number }>();
+    for (const row of assetData) {
+      const p = Number(row[ticker]);
+      if (!p || p <= 0) continue;
+      const d = new Date(row.date);
+      if (isNaN(d.getTime())) continue;
+      const ym = toYM(d);
+      // Overwrite with the latest row for this month (data is chronological)
+      monthlyMap.set(ym, { date: row.date, price: p });
+    }
+    // Sort by date to get a chronological array
+    const allMonths = Array.from(monthlyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+    if (allMonths.length === 0) return null;
+
+    // 2. Compute 10-month SMA and drawdown for every month (using full history)
+    let ath = 0; // all-time-high running tracker
+    const fullData: { date: string; price: number; sma10: number | null; drawdown: number }[] = [];
+    for (let i = 0; i < allMonths.length; i++) {
+      const { date, price } = allMonths[i];
+
+      // 10M SMA: average of current + 9 prior months (need at least 10 data points)
+      let sma10: number | null = null;
+      if (i >= 9) {
+        let sum = 0;
+        for (let j = i - 9; j <= i; j++) sum += allMonths[j].price;
+        sma10 = sum / 10;
+      }
+
+      // Drawdown from ATH: track running maximum, compute % below it
+      if (price > ath) ath = price;
+      const drawdown = ath > 0 ? ((price - ath) / ath) * 100 : 0;
+
+      fullData.push({ date, price, sma10, drawdown });
+    }
+
+    // 3. Apply period filter — slice the last N months for the visible window
+    const periodMonths: Record<string, number> = {
+      '1Y': 12, '2Y': 24, '3Y': 36, '4Y': 48, '5Y': 60, '6Y': 72
+    };
+    const n = period === 'max' ? fullData.length : Math.min(periodMonths[period] || fullData.length, fullData.length);
+    const visibleData = fullData.slice(fullData.length - n);
+    if (visibleData.length === 0) return null;
+
+    // 4. Separate into price and drawdown arrays for the two charts
+    const priceData = visibleData.map(d => ({ date: d.date, price: d.price, sma10: d.sma10 }));
+    const drawdownData = visibleData.map(d => ({ date: d.date, drawdown: d.drawdown }));
+
+    // 5. Find notable points within the visible window
+    let maxPricePoint: { date: string; price: number } | null = null;
+    let minPricePoint: { date: string; price: number } | null = null;
+    let maxDrawdownPoint: { date: string; drawdown: number } | null = null;
+    for (const d of visibleData) {
+      if (!maxPricePoint || d.price > maxPricePoint.price) maxPricePoint = { date: d.date, price: d.price };
+      if (!minPricePoint || d.price < minPricePoint.price) minPricePoint = { date: d.date, price: d.price };
+      if (!maxDrawdownPoint || d.drawdown < maxDrawdownPoint.drawdown) maxDrawdownPoint = { date: d.date, drawdown: d.drawdown };
+    }
+
+    return { priceData, drawdownData, maxPricePoint, minPricePoint, maxDrawdownPoint };
   };
 
   /**
@@ -5007,6 +5090,11 @@ const PortfolioBacktester = () => {
               {(() => {
                 const { months, assets } = getMonthlyPricesData();
 
+                // If the selected ticker was filtered out, deselect it
+                if (monthlySelectedTicker && !assets.find(a => a.ticker === monthlySelectedTicker)) {
+                  setMonthlySelectedTicker('');
+                }
+
                 // If no lookup table or no data, show a message
                 if (assetLookup.length === 0 || months.length === 0) {
                   return (
@@ -5055,9 +5143,21 @@ const PortfolioBacktester = () => {
                             const maxPrice = validPrices.length > 0 ? Math.max(...validPrices) : 0;
 
                             return (
-                              <tr key={asset.ticker} className={`border-b border-gray-50 ${rowIdx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                              <tr
+                                key={asset.ticker}
+                                onClick={() => setMonthlySelectedTicker(prev => prev === asset.ticker ? '' : asset.ticker)}
+                                className={`border-b border-gray-50 cursor-pointer transition-colors ${
+                                  monthlySelectedTicker === asset.ticker
+                                    ? 'bg-blue-50 hover:bg-blue-100'
+                                    : rowIdx % 2 === 0
+                                      ? 'hover:bg-gray-50'
+                                      : 'bg-gray-25 hover:bg-gray-100'
+                                }`}
+                              >
                                 {/* Asset Name - sticky left column */}
-                                <td className="sticky left-0 z-10 text-left py-0.5 px-1 bg-white border-r border-gray-200 font-medium text-gray-700">
+                                <td className={`sticky left-0 z-10 text-left py-0.5 px-1 border-r border-gray-200 font-medium text-gray-700 ${
+                                  monthlySelectedTicker === asset.ticker ? 'bg-blue-50' : 'bg-white'
+                                }`}>
                                   {asset.name}
                                 </td>
                                 {/* Price cells with heatmap coloring */}
@@ -5130,6 +5230,195 @@ const PortfolioBacktester = () => {
                         No assets match the current filters. Try adjusting your selection.
                       </div>
                     )}
+
+                    {/* --- Interactive Price & Drawdown charts for the selected asset --- */}
+                    {monthlySelectedTicker && (() => {
+                      const assetInfo = assetLookup.find(l => l.ticker === monthlySelectedTicker);
+                      const assetName = assetInfo ? assetInfo.name : monthlySelectedTicker;
+                      const chartResult = getMonthlyChartData(monthlySelectedTicker, monthlyChartPeriod);
+
+                      if (!chartResult) return (
+                        <div className="text-center py-4 text-gray-500 mt-4">
+                          No price data available for {monthlySelectedTicker}.
+                        </div>
+                      );
+
+                      const { priceData, drawdownData, maxPricePoint, minPricePoint, maxDrawdownPoint } = chartResult;
+
+                      // --- Right-edge bubbles for the price chart ---
+                      const lastRow = priceData[priceData.length - 1];
+                      const priceBubbleDefs: BubbleDef[] = [];
+                      if (lastRow) {
+                        priceBubbleDefs.push({ value: lastRow.price, color: '#000000', label: formatPrice(lastRow.price) });
+                        if (lastRow.sma10 != null) {
+                          priceBubbleDefs.push({ value: lastRow.sma10, color: '#ef4444', label: formatPrice(lastRow.sma10) });
+                        }
+                      }
+                      const MonthlyPriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
+
+                      // --- Right-edge bubble for the drawdown chart ---
+                      const lastDD = drawdownData[drawdownData.length - 1];
+                      const ddBubbleDefs: BubbleDef[] = [];
+                      if (lastDD) {
+                        ddBubbleDefs.push({ value: lastDD.drawdown, color: '#000000', label: `${lastDD.drawdown.toFixed(1)}%` });
+                      }
+                      const MonthlyDDBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, ddBubbleDefs);
+
+                      return (
+                        <div className="mt-6 border-t border-gray-200 pt-4">
+                          {/* Title + Period buttons */}
+                          <div className="flex items-center justify-between mb-3 px-2">
+                            <h3 className="text-sm font-semibold text-gray-700">
+                              {monthlySelectedTicker} — {assetName}
+                            </h3>
+                            <div className="flex gap-1">
+                              {(['1Y', '2Y', '3Y', '4Y', '5Y', '6Y', 'max'] as const).map(p => (
+                                <button
+                                  key={p}
+                                  onClick={() => setMonthlyChartPeriod(p)}
+                                  className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                    monthlyChartPeriod === p
+                                      ? 'bg-blue-500 text-white border-blue-500'
+                                      : 'bg-white border-gray-300 hover:bg-gray-100'
+                                  }`}
+                                >
+                                  {p === 'max' ? 'Max' : p}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Chart 1: Price + 10M SMA */}
+                          <ResponsiveContainer width="100%" height={350}>
+                            <LineChart data={priceData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis
+                                dataKey="date"
+                                tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />}
+                                height={35}
+                              />
+                              <YAxis tick={{ fontSize: 9 }} width={40} domain={['auto', 'auto']} />
+                              <Tooltip
+                                formatter={(value: number, name: string) => {
+                                  if (value == null) return ['-', name];
+                                  return [formatPrice(value), name];
+                                }}
+                              />
+                              <Legend />
+                              <Customized component={MonthlyPriceBubbles} />
+                              {/* Black price line */}
+                              <Line
+                                type="monotone"
+                                dataKey="price"
+                                name={monthlySelectedTicker}
+                                stroke="#000000"
+                                strokeWidth={2}
+                                dot={false}
+                                connectNulls
+                              />
+                              {/* Red 10-month SMA line */}
+                              <Line
+                                type="monotone"
+                                dataKey="sma10"
+                                name="10M SMA"
+                                stroke="#ef4444"
+                                strokeWidth={1.5}
+                                dot={false}
+                                connectNulls
+                              />
+                              {/* Green dot at highest price in the visible period */}
+                              {maxPricePoint && (
+                                <ReferenceDot
+                                  x={maxPricePoint.date}
+                                  y={maxPricePoint.price}
+                                  r={6}
+                                  fill="#22c55e"
+                                  stroke="#fff"
+                                  strokeWidth={2}
+                                  label={{
+                                    value: formatPrice(maxPricePoint.price),
+                                    position: 'top',
+                                    fontSize: 11,
+                                    fill: '#111827',
+                                    fontWeight: 600,
+                                  }}
+                                />
+                              )}
+                              {/* Red dot at lowest price in the visible period */}
+                              {minPricePoint && (
+                                <ReferenceDot
+                                  x={minPricePoint.date}
+                                  y={minPricePoint.price}
+                                  r={6}
+                                  fill="#ef4444"
+                                  stroke="#fff"
+                                  strokeWidth={2}
+                                  label={{
+                                    value: formatPrice(minPricePoint.price),
+                                    position: 'bottom',
+                                    fontSize: 11,
+                                    fill: '#111827',
+                                    fontWeight: 600,
+                                  }}
+                                />
+                              )}
+                            </LineChart>
+                          </ResponsiveContainer>
+
+                          {/* Chart 2: Drawdown from All-Time High */}
+                          <div className="mt-2">
+                            <ResponsiveContainer width="100%" height={180}>
+                              <AreaChart data={drawdownData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis
+                                  dataKey="date"
+                                  tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />}
+                                  height={35}
+                                />
+                                <YAxis
+                                  tick={{ fontSize: 9 }}
+                                  width={40}
+                                  domain={['auto', 0]}
+                                  tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+                                />
+                                <Tooltip
+                                  formatter={(value: number) => [`${value.toFixed(1)}%`, 'Drawdown']}
+                                />
+                                <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                                <Customized component={MonthlyDDBubbles} />
+                                <Area
+                                  type="monotone"
+                                  dataKey="drawdown"
+                                  name="Drawdown"
+                                  stroke="#000000"
+                                  fill="#000000"
+                                  fillOpacity={0.1}
+                                  strokeWidth={1.5}
+                                />
+                                {/* Black dot at max drawdown in the visible period */}
+                                {maxDrawdownPoint && (
+                                  <ReferenceDot
+                                    x={maxDrawdownPoint.date}
+                                    y={maxDrawdownPoint.drawdown}
+                                    r={6}
+                                    fill="#000000"
+                                    stroke="#fff"
+                                    strokeWidth={2}
+                                    label={{
+                                      value: `${maxDrawdownPoint.drawdown.toFixed(1)}%`,
+                                      position: 'bottom',
+                                      fontSize: 11,
+                                      fill: '#111827',
+                                      fontWeight: 600,
+                                    }}
+                                  />
+                                )}
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
