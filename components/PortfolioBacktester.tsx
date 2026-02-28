@@ -16,7 +16,7 @@
   - User interactions
 */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow } from '@/lib/fetchData';
@@ -1331,8 +1331,14 @@ const PortfolioBacktester = () => {
    * Keeps the end date unchanged and calculates the new start date.
    * Finds the closest available date in the data if exact date doesn't exist.
    */
-  const setDatePreset = (preset: 'YTD' | '1Y' | '2Y' | '3Y' | '4Y' | '5Y') => {
+  const setDatePreset = (preset: 'YTD' | '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | 'Max') => {
     if (!assetData || assetData.length === 0) return;
+
+    if (preset === 'Max') {
+      // Use the very first date in the dataset
+      setSelectedStartDate(assetData[0].date);
+      return;
+    }
 
     const endDate = new Date(selectedDateRange.end);
     let targetStartDate: Date;
@@ -3566,6 +3572,115 @@ const PortfolioBacktester = () => {
   };
 
   // ----------------------------------------
+  // BACKTEST X-AXIS CONFIGURATION
+  // ----------------------------------------
+  // Dynamically adjusts X-axis ticks and label format based on the selected period length:
+  //   > 9 years  → one tick per year,  label = "YYYY"
+  //   3–9 years  → two ticks per year, label = "YYYY" + "MMM" (two lines)
+  //   1–3 years  → four ticks per year, label = "YYYY" + "MMM" (two lines)
+  //   ≤ 1 year   → every month,        label = "MmmYY"
+
+  const backtestXAxisConfig = useMemo(() => {
+    if (!backtestResults || backtestResults.length === 0) return { ticks: undefined as string[] | undefined, periodYears: 0 };
+
+    // Grab dates from the first portfolio's returns (all portfolios share the same date range)
+    const dates = backtestResults[0].returns.map(r => r.date);
+    if (dates.length < 2) return { ticks: undefined as string[] | undefined, periodYears: 0 };
+
+    const startDate = new Date(dates[0]);
+    const endDate = new Date(dates[dates.length - 1]);
+    const periodYears = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+
+    // Pick which dates to show as tick marks
+    const tickDates: string[] = [];
+
+    if (periodYears > 9) {
+      // One tick per year — pick the first available date in each calendar year
+      const seenYears = new Set<number>();
+      for (const d of dates) {
+        const year = new Date(d).getUTCFullYear();
+        if (!seenYears.has(year)) {
+          seenYears.add(year);
+          tickDates.push(d);
+        }
+      }
+    } else if (periodYears > 3) {
+      // Two ticks per year — first available date in each half-year (Jan–Jun, Jul–Dec)
+      const seen = new Set<string>();
+      for (const d of dates) {
+        const dt = new Date(d);
+        const half = dt.getUTCMonth() < 6 ? 'H1' : 'H2';
+        const key = `${dt.getUTCFullYear()}-${half}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          tickDates.push(d);
+        }
+      }
+    } else if (periodYears > 1) {
+      // Four ticks per year — first available date in each quarter
+      const seen = new Set<string>();
+      for (const d of dates) {
+        const dt = new Date(d);
+        const quarter = Math.floor(dt.getUTCMonth() / 3);
+        const key = `${dt.getUTCFullYear()}-Q${quarter}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          tickDates.push(d);
+        }
+      }
+    } else {
+      // Every month
+      const seen = new Set<string>();
+      for (const d of dates) {
+        const dt = new Date(d);
+        const key = `${dt.getUTCFullYear()}-${dt.getUTCMonth()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          tickDates.push(d);
+        }
+      }
+    }
+
+    return { ticks: tickDates, periodYears };
+  }, [backtestResults]);
+
+  // Custom tick renderer for the three backtest line charts.
+  // Format changes based on the period length computed above.
+  const BacktestDateTick = useMemo(() => {
+    const py = backtestXAxisConfig.periodYears;
+    return ({ x, y, payload }: { x: number; y: number; payload: { value: string } }) => {
+      const d = new Date(payload.value);
+      if (isNaN(d.getTime())) {
+        return <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
+      }
+      if (py > 9) {
+        // Long period — just the four-digit year
+        return (
+          <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">
+            <tspan x={x} dy="0.8em">{d.getUTCFullYear()}</tspan>
+          </text>
+        );
+      }
+      if (py <= 1) {
+        // Short period — compact "Jan26" format
+        const yy = String(d.getUTCFullYear()).slice(-2);
+        return (
+          <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">
+            <tspan x={x} dy="0.8em">{MONTH_ABBR[d.getUTCMonth()]}{yy}</tspan>
+          </text>
+        );
+      }
+      // Medium period (1–9 years) — year on top, month abbreviation below
+      return (
+        <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">
+          <tspan x={x} dy="0.5em">{d.getUTCFullYear()}</tspan>
+          <tspan x={x} dy="1.2em">{MONTH_ABBR[d.getUTCMonth()]}</tspan>
+        </text>
+      );
+    };
+  }, [backtestXAxisConfig.periodYears]);
+
+  // ----------------------------------------
   // ASSET FILTER CONTROLS COMPONENT
   // ----------------------------------------
   // This is a reusable component that renders three compact collapsible filter dropdowns
@@ -3887,7 +4002,7 @@ const PortfolioBacktester = () => {
                   <h2 className="text-lg font-semibold text-gray-700">Parameters</h2>
                   {/* Quick date range presets */}
                   <div className="flex gap-1">
-                    {(['YTD', '1Y', '2Y', '3Y', '4Y', '5Y'] as const).map(preset => (
+                    {(['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', 'Max'] as const).map(preset => (
                       <button
                         key={preset}
                         onClick={() => setDatePreset(preset)}
@@ -4113,9 +4228,9 @@ const PortfolioBacktester = () => {
               <div className="bg-white p-2 sm:p-4 rounded-lg shadow mb-4">
                 <h3 className="text-md font-semibold text-gray-700 mb-2 text-center">Portfolio Value</h3>
                 <ResponsiveContainer width="100%" height={300}>
-                  <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                  <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 15 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 9 }} />
+                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} ticks={backtestXAxisConfig.ticks} tick={BacktestDateTick} />
                     <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} />
                     <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
                     <Legend />
@@ -4139,9 +4254,9 @@ const PortfolioBacktester = () => {
               <div className="bg-white p-2 sm:p-4 rounded-lg shadow mb-4">
                 <h3 className="text-md font-semibold text-gray-700 mb-2 text-center">Drawdown</h3>
                 <ResponsiveContainer width="100%" height={200}>
-                  <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                  <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 15 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 9 }} />
+                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} ticks={backtestXAxisConfig.ticks} tick={BacktestDateTick} />
                     <YAxis tick={{ fontSize: 9 }} width={55} />
                     <Tooltip formatter={(value: number) => `${value.toFixed(2)}%`} />
                     <Legend />
@@ -4168,9 +4283,9 @@ const PortfolioBacktester = () => {
                   Portfolio Value after {parseFloat(withdrawalRate).toFixed(1)}% Withdrawals ({inflationRate}% Inflation)
                 </h3>
                 <ResponsiveContainer width="100%" height={300}>
-                  <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                  <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 15 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 9 }} />
+                    <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} ticks={backtestXAxisConfig.ticks} tick={BacktestDateTick} />
                     <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} />
                     <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
                     <Legend />
