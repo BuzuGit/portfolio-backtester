@@ -461,6 +461,8 @@ const PortfolioBacktester = () => {
   const [monthlySelectedTicker, setMonthlySelectedTicker] = useState<string>('');
   // How many years of data to show in the monthly charts (default: show everything)
   const [monthlyChartPeriod, setMonthlyChartPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max'>('max');
+  // Which return period to show in the periodic returns bar chart (Monthly/Quarterly/Annual)
+  const [returnsChartPeriod, setReturnsChartPeriod] = useState<'monthly' | 'quarterly' | 'annual'>('quarterly');
 
   // Close Years dropdown when clicking outside
   useEffect(() => {
@@ -2646,14 +2648,12 @@ const PortfolioBacktester = () => {
     const priceData = visibleData.map(d => ({ date: d.date, price: d.price, sma10: d.sma10 }));
     const drawdownData = visibleData.map(d => ({ date: d.date, drawdown: d.drawdown }));
 
-    // SMA distance chart data: only months where SMA exists, split into pos/neg for dual-color area
+    // SMA distance chart data: only months where SMA exists
     const smaDistData = visibleData
       .filter(d => d.smaDistance !== null)
       .map(d => ({
         date: d.date,
-        smaDist: d.smaDistance!,                    // raw value for tooltip
-        smaDistPos: Math.max(d.smaDistance!, 0),    // green area: above SMA
-        smaDistNeg: Math.min(d.smaDistance!, 0),    // red area: below SMA
+        smaDist: d.smaDistance!,                    // distance from SMA in %
       }));
 
     // 5. Find notable points within the visible window
@@ -5360,6 +5360,61 @@ const PortfolioBacktester = () => {
                         ? 0.5
                         : smaDistMax / (smaDistMax - smaDistMin);
 
+                      // --- Compute periodic returns (monthly / quarterly / annual) ---
+                      // (uses module-level MONTH_ABBR constant declared at top of file)
+                      const computeReturnsData = (): { label: string; return: number }[] => {
+                        if (priceData.length < 2) return [];
+
+                        if (returnsChartPeriod === 'monthly') {
+                          // Monthly: % change from one month to the next
+                          const results: { label: string; return: number }[] = [];
+                          for (let i = 1; i < priceData.length; i++) {
+                            const ret = ((priceData[i].price - priceData[i - 1].price) / priceData[i - 1].price) * 100;
+                            const d = new Date(priceData[i].date);
+                            const label = `${MONTH_ABBR[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
+                            results.push({ label, return: parseFloat(ret.toFixed(1)) });
+                          }
+                          return results;
+                        }
+
+                        if (returnsChartPeriod === 'quarterly') {
+                          // Group by calendar quarter, take last price per quarter
+                          const quarterMap = new Map<string, number>();
+                          for (const p of priceData) {
+                            const d = new Date(p.date);
+                            const q = Math.floor(d.getMonth() / 3) + 1;
+                            const key = `${d.getFullYear()}-Q${q}`;
+                            quarterMap.set(key, p.price);
+                          }
+                          const quarters = Array.from(quarterMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                          const results: { label: string; return: number }[] = [];
+                          for (let i = 1; i < quarters.length; i++) {
+                            const ret = ((quarters[i][1] - quarters[i - 1][1]) / quarters[i - 1][1]) * 100;
+                            const [yr, qPart] = quarters[i][0].split('-');
+                            const qNum = qPart.replace('Q', '');
+                            results.push({ label: `${qNum}Q\n${yr}`, return: parseFloat(ret.toFixed(1)) });
+                          }
+                          return results;
+                        }
+
+                        // Annual: group by year, take last price per year
+                        const yearMap = new Map<string, number>();
+                        for (const p of priceData) {
+                          const d = new Date(p.date);
+                          yearMap.set(String(d.getFullYear()), p.price);
+                        }
+                        const years = Array.from(yearMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                        const results: { label: string; return: number }[] = [];
+                        for (let i = 1; i < years.length; i++) {
+                          const ret = ((years[i][1] - years[i - 1][1]) / years[i - 1][1]) * 100;
+                          results.push({ label: years[i][0], return: parseFloat(ret.toFixed(1)) });
+                        }
+                        return results;
+                      };
+                      const returnsData = computeReturnsData();
+                      // Show bar labels unless monthly view with too many bars (≥48 = 4+ years)
+                      const showReturnLabels = returnsChartPeriod !== 'monthly' || returnsData.length < 48;
+
                       return (
                         <div className="mt-6 border-t border-gray-200 pt-4">
                           {/* Title + Period buttons */}
@@ -5612,6 +5667,92 @@ const PortfolioBacktester = () => {
                                     />
                                   )}
                                 </AreaChart>
+                              </ResponsiveContainer>
+                            </div>
+                          )}
+
+                          {/* Chart 4: Periodic Returns bar chart (Monthly / Quarterly / Annual) */}
+                          {returnsData.length > 0 && (
+                            <div className="mt-2">
+                              {/* Toggle buttons: Monthly | Quarterly | Annual */}
+                              <div className="flex items-center gap-2 mb-1 px-2">
+                                <span className="text-xs font-semibold text-gray-500">Returns:</span>
+                                {(['monthly', 'quarterly', 'annual'] as const).map(p => (
+                                  <button
+                                    key={p}
+                                    onClick={() => setReturnsChartPeriod(p)}
+                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                      returnsChartPeriod === p
+                                        ? 'bg-blue-500 text-white border-blue-500'
+                                        : 'bg-white border-gray-300 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    {p === 'monthly' ? 'Monthly' : p === 'quarterly' ? 'Quarterly' : 'Annual'}
+                                  </button>
+                                ))}
+                              </div>
+                              <ResponsiveContainer width="100%" height={200}>
+                                <BarChart data={returnsData} margin={{ top: 20, right: 10, left: -5, bottom: 15 }}>
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis
+                                    dataKey="label"
+                                    tick={(props: { x: number; y: number; payload: { value: string } }) => {
+                                      const { x, y, payload } = props;
+                                      const parts = String(payload.value).split('\n');
+                                      if (parts.length === 2) {
+                                        // Two-line label (quarterly: "2Q\n2024")
+                                        return (
+                                          <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">
+                                            <tspan x={x} dy="0.5em">{parts[0]}</tspan>
+                                            <tspan x={x} dy="1.2em">{parts[1]}</tspan>
+                                          </text>
+                                        );
+                                      }
+                                      // Single-line label (monthly: "Jan 25", annual: "2024")
+                                      return <text x={x} y={y + 10} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
+                                    }}
+                                    height={35}
+                                    interval={returnsChartPeriod === 'monthly' && returnsData.length > 24
+                                      ? Math.max(0, Math.floor(returnsData.length / 20) - 1)
+                                      : 0}
+                                  />
+                                  <YAxis
+                                    tick={{ fontSize: 9 }}
+                                    width={40}
+                                    tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+                                  />
+                                  <Tooltip
+                                    formatter={(value: number) => [
+                                      `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`,
+                                      'Return',
+                                    ]}
+                                  />
+                                  <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                                  <Bar dataKey="return" isAnimationActive={false}>
+                                    {/* Color each bar: black for positive, red for negative */}
+                                    {returnsData.map((entry, index) => (
+                                      <Cell key={index} fill={entry.return >= 0 ? '#000000' : '#ef4444'} />
+                                    ))}
+                                    {/* Labels above positive bars */}
+                                    {showReturnLabels && (
+                                      <LabelList
+                                        dataKey="return"
+                                        position="top"
+                                        formatter={(value: number) => value >= 0 ? `+${value.toFixed(1)}%` : ''}
+                                        style={{ fontSize: '9px', fill: '#666' }}
+                                      />
+                                    )}
+                                    {/* Labels below negative bars */}
+                                    {showReturnLabels && (
+                                      <LabelList
+                                        dataKey="return"
+                                        position="bottom"
+                                        formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                                        style={{ fontSize: '9px', fill: '#ef4444' }}
+                                      />
+                                    )}
+                                  </Bar>
+                                </BarChart>
                               </ResponsiveContainer>
                             </div>
                           )}
