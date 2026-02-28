@@ -368,7 +368,7 @@ const PortfolioBacktester = () => {
   // 'bestToWorst' = show assets ranked by return for a selected year
   // 'monthlyPrices' = show monthly price heatmap with SMA signals
   // 'trendFollowing' = compare Buy & Hold vs 10-month SMA trend following strategy
-  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'closed'>('backtest');
+  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'graphs' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'closed'>('backtest');
 
   // The year selected for the "Best To Worst" ranking view
   // Defaults to null, and will be set to the most recent year when data loads
@@ -463,6 +463,10 @@ const PortfolioBacktester = () => {
   const [monthlyChartPeriod, setMonthlyChartPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max'>('max');
   // Which return period to show in the periodic returns bar chart (Monthly/Quarterly/Annual)
   const [returnsChartPeriod, setReturnsChartPeriod] = useState<'monthly' | 'quarterly' | 'annual'>('quarterly');
+  // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
+  const [graphsPeriod, setGraphsPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | 'max'>('2Y');
+  // Toggle for showing 10-month SMA overlay on all Graphs tab charts
+  const [graphsShowSMA, setGraphsShowSMA] = useState(false);
 
   // Close Years dropdown when clicking outside
   useEffect(() => {
@@ -3951,6 +3955,16 @@ const PortfolioBacktester = () => {
                 Monthly Prices
               </button>
               <button
+                onClick={() => setActiveView('graphs')}
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                  activeView === 'graphs'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                Graphs
+              </button>
+              <button
                 onClick={() => setActiveView('trendFollowing')}
                 className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
                   activeView === 'trendFollowing'
@@ -5877,6 +5891,119 @@ const PortfolioBacktester = () => {
                   </div>
                 );
               })()}
+            </div>
+          )}
+
+          {/* ============================================
+              GRAPHS TAB
+              ============================================
+              A responsive grid of small line charts — one per asset.
+              Each chart shows monthly prices over a selectable period,
+              with the ticker and period return in the title. */}
+          {isConnected && assetData && activeView === 'graphs' && (
+            <div className="mt-2">
+              {/* Controls row: filters + SMA toggle on left, period buttons on right */}
+              <div className="flex justify-between items-start mb-4">
+                <AssetFilterControls>
+                  {/* SMA toggle — rendered inside the filter flex container for perfect alignment */}
+                  <button
+                    onClick={() => setGraphsShowSMA(!graphsShowSMA)}
+                    className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors whitespace-nowrap ${
+                      graphsShowSMA
+                        ? 'bg-red-500 text-white border-red-500'
+                        : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    10m SMA
+                  </button>
+                </AssetFilterControls>
+                <div className="flex gap-1">
+                  {(['1Y', '2Y', '3Y', '4Y', '5Y', 'Max'] as const).map(p => {
+                    const value = p === 'Max' ? 'max' : p;
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => setGraphsPeriod(value as typeof graphsPeriod)}
+                        className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                          graphsPeriod === value
+                            ? 'bg-blue-500 text-white border-blue-500'
+                            : 'bg-white border-gray-300 hover:bg-gray-100'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Responsive grid of mini charts: 3 columns on desktop, 2 on tablet, 1 on mobile */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {getFilteredAssetLookup().map(asset => {
+                  // Reuse getMonthlyChartData to get monthly prices and return for this asset
+                  const chartData = getMonthlyChartData(asset.ticker, graphsPeriod);
+                  if (!chartData) return null;
+                  const { priceData, totalReturn } = chartData;
+                  if (priceData.length === 0) return null;
+
+                  // Current price = last data point; format decimals based on magnitude
+                  const currentPrice = priceData[priceData.length - 1].price;
+                  const formattedPrice = currentPrice < 10
+                    ? currentPrice.toFixed(2)    // e.g. 3.45
+                    : currentPrice < 1000
+                      ? currentPrice.toFixed(1)  // e.g. 123.4
+                      : Math.round(currentPrice).toLocaleString(); // e.g. 1,234
+
+                  // Current drawdown from ATH (e.g. -12.3%)
+                  const ddData = getAssetCurrentDrawdown(asset.ticker);
+                  const currDD = ddData ? ddData.drawdown : 0;
+
+                  return (
+                    <div key={asset.ticker} className="bg-white p-3 rounded-lg shadow">
+                      {/* Title: Ticker: Price (return%) / Curr DD: (-x.x%) */}
+                      <h3 className="text-sm font-semibold text-gray-700 mb-1">
+                        {asset.ticker}: <span className="text-gray-400">{formattedPrice}</span>{' '}
+                        <span style={{ color: totalReturn >= 0 ? '#16a34a' : '#dc2626' }}>
+                          ({totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(1)}%)
+                        </span>
+                        {' / '}
+                        <span className="font-normal text-gray-500">
+                          Curr DD: (<span style={{ color: currDD === 0 ? '#16a34a' : currDD > -5 ? '#ca8a04' : currDD > -20 ? '#dc7c7c' : '#dc2626' }}>{currDD.toFixed(1)}%</span>)
+                        </span>
+                      </h3>
+
+                      {/* Small line chart — black price line, no legend, minimal chrome */}
+                      <ResponsiveContainer width="100%" height={180}>
+                        <LineChart data={priceData} margin={{ top: 5, right: 5, left: -15, bottom: 15 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} />
+                          <YAxis tick={{ fontSize: 9 }} width={45} domain={['auto', 'auto']} />
+                          <Tooltip formatter={(value: number) => formatPrice(value)} />
+                          <Line
+                            type="monotone"
+                            dataKey="price"
+                            stroke="#000000"
+                            strokeWidth={1.5}
+                            dot={false}
+                            connectNulls
+                          />
+                          {/* 10-month SMA red line — only shown when toggle is active */}
+                          {graphsShowSMA && (
+                            <Line
+                              type="monotone"
+                              dataKey="sma10"
+                              stroke="#ef4444"
+                              strokeWidth={1}
+                              dot={false}
+                              connectNulls
+                            />
+                          )}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
