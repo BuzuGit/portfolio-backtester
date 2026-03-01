@@ -5946,6 +5946,14 @@ const PortfolioBacktester = () => {
                   const { priceData, totalReturn } = chartData;
                   if (priceData.length === 0) return null;
 
+                  // Pick 5 evenly-spaced ticks so the X-axis is uniform
+                  const numTicks = 5;
+                  const graphTicks: string[] = [];
+                  for (let i = 0; i < numTicks; i++) {
+                    const idx = Math.round(i * (priceData.length - 1) / (numTicks - 1));
+                    graphTicks.push(priceData[idx].date);
+                  }
+
                   // Current price = last data point; format decimals based on magnitude
                   const currentPrice = priceData[priceData.length - 1].price;
                   const formattedPrice = currentPrice < 10
@@ -5976,7 +5984,15 @@ const PortfolioBacktester = () => {
                       <ResponsiveContainer width="100%" height={180}>
                         <LineChart data={priceData} margin={{ top: 5, right: 5, left: -15, bottom: 15 }}>
                           <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} />
+                          <XAxis
+                            dataKey="date"
+                            ticks={graphTicks}
+                            tickFormatter={(d: string) => {
+                              const dt = new Date(d);
+                              return isNaN(dt.getTime()) ? d : `${MONTH_ABBR[dt.getUTCMonth()]}${String(dt.getUTCFullYear()).slice(-2)}`;
+                            }}
+                            tick={{ fontSize: 9 }}
+                          />
                           <YAxis tick={{ fontSize: 9 }} width={45} domain={['auto', 'auto']} />
                           <Tooltip formatter={(value: number) => formatPrice(value)} />
                           <Line
