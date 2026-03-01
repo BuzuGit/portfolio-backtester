@@ -5962,9 +5962,11 @@ const PortfolioBacktester = () => {
                       ? currentPrice.toFixed(1)  // e.g. 123.4
                       : Math.round(currentPrice).toLocaleString(); // e.g. 1,234
 
-                  // Current drawdown from ATH (e.g. -12.3%)
-                  const ddData = getAssetCurrentDrawdown(asset.ticker);
-                  const currDD = ddData ? ddData.drawdown : 0;
+                  // Current drawdown from the peak within the selected period (not all-time ATH)
+                  const maxPriceInPeriod = Math.max(...priceData.map(d => d.price));
+                  const currDD = maxPriceInPeriod > 0
+                    ? ((currentPrice - maxPriceInPeriod) / maxPriceInPeriod) * 100
+                    : 0;
 
                   return (
                     <div key={asset.ticker} className="bg-white p-3 rounded-lg shadow">
