@@ -465,6 +465,8 @@ const PortfolioBacktester = () => {
   const [returnsChartPeriod, setReturnsChartPeriod] = useState<'monthly' | 'quarterly' | 'annual'>('quarterly');
   // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
   const [graphsPeriod, setGraphsPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | 'max'>('2Y');
+  // End date for the Graphs tab ('' = most recent month in data)
+  const [graphsEndDate, setGraphsEndDate] = useState('');
   // Toggle for showing 10-month SMA overlay on all Graphs tab charts
   const [graphsShowSMA, setGraphsShowSMA] = useState(false);
 
@@ -2603,7 +2605,8 @@ const PortfolioBacktester = () => {
    */
   const getMonthlyChartData = (
     ticker: string,
-    period: '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max'
+    period: '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max',
+    cutoffDate?: string  // Optional: if provided, treat this as the last month (for Graphs tab "End Date" filter)
   ) => {
     if (!assetData || assetData.length === 0) return null;
 
@@ -2647,11 +2650,20 @@ const PortfolioBacktester = () => {
     }
 
     // 3. Apply period filter — slice the last N months for the visible window
+    //    If endDate is provided, first truncate to end at that date, then take last N months
     const periodMonths: Record<string, number> = {
       '1Y': 12, '2Y': 24, '3Y': 36, '4Y': 48, '5Y': 60, '6Y': 72
     };
-    const n = period === 'max' ? fullData.length : Math.min(periodMonths[period] || fullData.length, fullData.length);
-    const visibleData = fullData.slice(fullData.length - n);
+    // When cutoffDate is set, find the last entry on or before that date
+    let effectiveData = fullData;
+    if (cutoffDate) {
+      const endIdx = fullData.findLastIndex(d => d.date <= cutoffDate);
+      if (endIdx >= 0) {
+        effectiveData = fullData.slice(0, endIdx + 1);
+      }
+    }
+    const n = period === 'max' ? effectiveData.length : Math.min(periodMonths[period] || effectiveData.length, effectiveData.length);
+    const visibleData = effectiveData.slice(effectiveData.length - n);
     if (visibleData.length === 0) return null;
 
     // 4. Separate into price, drawdown, and SMA-distance arrays for the three charts
@@ -5917,31 +5929,61 @@ const PortfolioBacktester = () => {
                     10m SMA
                   </button>
                 </AssetFilterControls>
-                <div className="flex gap-1">
-                  {(['1Y', '2Y', '3Y', '4Y', '5Y', 'Max'] as const).map(p => {
-                    const value = p === 'Max' ? 'max' : p;
-                    return (
-                      <button
-                        key={p}
-                        onClick={() => setGraphsPeriod(value as typeof graphsPeriod)}
-                        className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                          graphsPeriod === value
-                            ? 'bg-blue-500 text-white border-blue-500'
-                            : 'bg-white border-gray-300 hover:bg-gray-100'
-                        }`}
-                      >
-                        {p}
-                      </button>
-                    );
-                  })}
+                <div className="flex items-center gap-3">
+                  {/* End Date selector — pick which month the charts end at */}
+                  <select
+                    value={graphsEndDate}
+                    onChange={(e) => setGraphsEndDate(e.target.value)}
+                    className="px-2 py-1 text-xs border border-gray-300 rounded bg-white"
+                  >
+                    {(() => {
+                      // Build list of unique months (last date per YYYY-MM), most recent first
+                      const monthMap = new Map<string, string>();
+                      for (const row of assetData!) {
+                        const d = new Date(row.date);
+                        if (isNaN(d.getTime())) continue;
+                        const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+                        monthMap.set(ym, row.date); // last date wins (data is chronological)
+                      }
+                      const months = Array.from(monthMap.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+                      return [
+                        <option key="" value="">Latest</option>,
+                        ...months.map(([ym, date]) => {
+                          const d = new Date(date);
+                          const label = `${MONTH_ABBR[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}`;
+                          return <option key={ym} value={date}>{label}</option>;
+                        })
+                      ];
+                    })()}
+                  </select>
+
+                  {/* Period buttons */}
+                  <div className="flex gap-1">
+                    {(['1Y', '2Y', '3Y', '4Y', '5Y', 'Max'] as const).map(p => {
+                      const value = p === 'Max' ? 'max' : p;
+                      return (
+                        <button
+                          key={p}
+                          onClick={() => setGraphsPeriod(value as typeof graphsPeriod)}
+                          className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                            graphsPeriod === value
+                              ? 'bg-blue-500 text-white border-blue-500'
+                              : 'bg-white border-gray-300 hover:bg-gray-100'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
               {/* Responsive grid of mini charts: 3 columns on desktop, 2 on tablet, 1 on mobile */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {getFilteredAssetLookup().map(asset => {
-                  // Reuse getMonthlyChartData to get monthly prices and return for this asset
-                  const chartData = getMonthlyChartData(asset.ticker, graphsPeriod);
+                  // Reuse getMonthlyChartData — pass endDate so charts end at the selected month
+                  const chartData = getMonthlyChartData(asset.ticker, graphsPeriod, graphsEndDate || undefined);
                   if (!chartData) return null;
                   const { priceData, totalReturn } = chartData;
                   if (priceData.length === 0) return null;
