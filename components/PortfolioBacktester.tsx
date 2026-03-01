@@ -6004,7 +6004,34 @@ const PortfolioBacktester = () => {
                       ? currentPrice.toFixed(1)  // e.g. 123.4
                       : Math.round(currentPrice).toLocaleString(); // e.g. 1,234
 
+                  // Compute 5 evenly-spaced Y-axis ticks with "nice" rounded values
+                  // that ALWAYS cover the full data range (min to max)
+                  const allYValues = graphsShowSMA
+                    ? priceData.flatMap(d => d.sma10 != null ? [d.price, d.sma10] : [d.price])
+                    : priceData.map(d => d.price);
+                  const rawMin = Math.min(...allYValues);
+                  const rawMax = Math.max(...allYValues);
+                  const rawRange = rawMax - rawMin || 1; // avoid zero range
+                  // Try nice step sizes (1, 2, 2.5, 5, 10 × magnitude) and pick the
+                  // smallest one where floor(min) + 4 steps fully covers rawMax
+                  const roughStep = rawRange / 4;
+                  const mag = Math.pow(10, Math.floor(Math.log10(roughStep)));
+                  const candidates = [1, 2, 2.5, 5, 10].map(m => m * mag);
+                  let niceStep = candidates[candidates.length - 1]; // fallback
+                  for (const step of candidates) {
+                    const lo = Math.floor(rawMin / step) * step;
+                    if (lo + 4 * step >= rawMax - step * 0.001) {
+                      niceStep = step;
+                      break;
+                    }
+                  }
+                  const yMin = Math.floor(rawMin / niceStep) * niceStep;
+                  const yTicks = Array.from({ length: 5 }, (_, i) =>
+                    Number((yMin + i * niceStep).toPrecision(10))
+                  );
+
                   // Current drawdown from the peak within the selected period (not all-time ATH)
+                  // Use only actual prices (not SMA) so the drawdown is always price-based
                   const maxPriceInPeriod = Math.max(...priceData.map(d => d.price));
                   const currDD = maxPriceInPeriod > 0
                     ? ((currentPrice - maxPriceInPeriod) / maxPriceInPeriod) * 100
@@ -6027,7 +6054,18 @@ const PortfolioBacktester = () => {
                       {/* Small line chart — black price line, no legend, minimal chrome */}
                       <ResponsiveContainer width="100%" height={180}>
                         <LineChart data={priceData} margin={{ top: 5, right: 5, left: -15, bottom: 15 }}>
-                          <CartesianGrid strokeDasharray="3 3" />
+                          {/* Force gridlines to draw exactly at our computed tick positions */}
+                          <CartesianGrid
+                            strokeDasharray="3 3"
+                            horizontalCoordinatesGenerator={({ yAxis }: any) => {
+                              if (!yAxis?.scale) return [];
+                              return yTicks.map(tick => yAxis.scale(tick));
+                            }}
+                            verticalCoordinatesGenerator={({ xAxis }: any) => {
+                              if (!xAxis?.scale) return [];
+                              return graphTicks.map(tick => xAxis.scale(tick));
+                            }}
+                          />
                           <XAxis
                             dataKey="date"
                             ticks={graphTicks}
@@ -6037,7 +6075,14 @@ const PortfolioBacktester = () => {
                             }}
                             tick={{ fontSize: 9 }}
                           />
-                          <YAxis tick={{ fontSize: 9 }} width={45} domain={['auto', 'auto']} />
+                          <YAxis
+                            type="number"
+                            tick={{ fontSize: 9 }}
+                            width={45}
+                            domain={[yTicks[0], yTicks[yTicks.length - 1]]}
+                            ticks={yTicks}
+                            allowDataOverflow
+                          />
                           <Tooltip formatter={(value: number) => formatPrice(value)} />
                           <Line
                             type="monotone"
