@@ -5078,9 +5078,6 @@ const PortfolioBacktester = () => {
             <div className="mt-2">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Best To Worst</h2>
 
-              {/* Filter controls for Assets, Asset Class, and Currency */}
-              <AssetFilterControls />
-
               {(() => {
                 // Calculate annual returns for all assets
                 const annualReturns = calculateAssetsAnnualReturns();
@@ -5089,9 +5086,12 @@ const PortfolioBacktester = () => {
                 // If no lookup table or no data, show a message
                 if (assetLookup.length === 0 || years.length === 0) {
                   return (
-                    <div className="bg-yellow-50 p-4 rounded-lg text-yellow-800">
-                      No assets in lookup table or no annual return data available.
-                    </div>
+                    <>
+                      <AssetFilterControls />
+                      <div className="bg-yellow-50 p-4 rounded-lg text-yellow-800">
+                        No assets in lookup table or no annual return data available.
+                      </div>
+                    </>
                   );
                 }
 
@@ -5112,46 +5112,43 @@ const PortfolioBacktester = () => {
                   : `${bestToWorstMode}Y Return`;
 
                 return (
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    {/* Year Dropdown and Period Buttons */}
-                    <div className="mb-4 flex flex-wrap items-end gap-4">
-                      {/* Year Dropdown */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Select Year</label>
-                        <select
-                          value={currentYear}
-                          onChange={(e) => {
-                            setSelectedRankingYear(parseInt(e.target.value));
-                            setBestToWorstMode('year');  // Switch to year mode when selecting a year
-                          }}
-                          className={`px-3 py-2 border rounded-lg text-sm ${isYearMode ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}
-                        >
-                          {/* Most recent year first */}
-                          {years.slice().reverse().map(year => (
-                            <option key={year} value={year}>{year}</option>
-                          ))}
-                        </select>
-                      </div>
-                      {/* Period Buttons */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Or select period</label>
-                        <div className="flex gap-1">
-                          {([1, 2, 3, 4, 5] as const).map(period => (
-                            <button
-                              key={period}
-                              onClick={() => setBestToWorstMode(period)}
-                              className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
-                                bestToWorstMode === period
-                                  ? 'bg-blue-500 text-white border-blue-500'
-                                  : 'bg-white border-gray-300 hover:bg-gray-100'
-                              }`}
-                            >
-                              {period}Y
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                  <>
+                  {/* Filter controls + Year/Period selectors on one line */}
+                  <AssetFilterControls>
+                    {/* Year Dropdown */}
+                    <div className="relative">
+                      <select
+                        value={currentYear}
+                        onChange={(e) => {
+                          setSelectedRankingYear(parseInt(e.target.value));
+                          setBestToWorstMode('year');
+                        }}
+                        className={`px-3 py-1.5 text-sm border rounded-lg ${isYearMode ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+                      >
+                        {years.slice().reverse().map(year => (
+                          <option key={year} value={year}>{year}</option>
+                        ))}
+                      </select>
                     </div>
+                    {/* Period Buttons */}
+                    <div className="flex gap-1">
+                      {([1, 2, 3, 4, 5] as const).map(period => (
+                        <button
+                          key={period}
+                          onClick={() => setBestToWorstMode(period)}
+                          className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
+                            bestToWorstMode === period
+                              ? 'bg-blue-500 text-white border-blue-500'
+                              : 'bg-white border-gray-300 hover:bg-gray-100'
+                          }`}
+                        >
+                          {period}Y
+                        </button>
+                      ))}
+                    </div>
+                  </AssetFilterControls>
+
+                  <div className="bg-white p-4 rounded-lg shadow">
 
                     {/* Ranked Table - Shows Bar Chart, Return, Asset, Ticker, Currency, Return in PLN */}
                     {(() => {
@@ -5273,6 +5270,7 @@ const PortfolioBacktester = () => {
                       </div>
                     )}
                   </div>
+                  </>
                 );
               })()}
             </div>
@@ -5944,7 +5942,11 @@ const PortfolioBacktester = () => {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {Object.keys(assetMonthlyReturns).sort().reverse().map(year => (
+                                  {Object.keys(assetMonthlyReturns)
+                                    // Skip years with no monthly returns at all (e.g. only Dec data
+                                    // exists as a base for calculating the next year's Jan return)
+                                    .filter(year => assetMonthlyReturns[year].monthly.some(r => r !== null))
+                                    .sort().reverse().map(year => (
                                     <tr key={year} className="border-b border-gray-100">
                                       <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0">{year}</td>
                                       {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(month => {
@@ -7438,12 +7440,18 @@ const PortfolioBacktester = () => {
                   ]).sort((a, b) => a.date.getTime() - b.date.getTime());
                   const xirr = calculateXIRR(cashFlows);
 
+                  // Time held in years: difference between last sale and first buy
+                  const timeHeldYears = firstBuyDate && lastSaleDate
+                    ? (new Date(lastSaleDate).getTime() - new Date(firstBuyDate).getTime()) / (365.25 * 24 * 60 * 60 * 1000)
+                    : 0;
+
                   return {
                     ticker: asset.ticker,
                     name: asset.name,
                     numTransactions: transactions.length,
                     firstBuyDate,
                     lastSaleDate,
+                    timeHeldYears,
                     totalInvested: totalCost,
                     totalFinalValue,
                     totalPnL,
@@ -7463,6 +7471,7 @@ const PortfolioBacktester = () => {
                             <th className="text-right py-2 px-2 bg-gray-50"># Txns</th>
                             <th className="text-right py-2 px-2 bg-gray-50">First Buy</th>
                             <th className="text-right py-2 px-2 bg-gray-50">Last Sale</th>
+                            <th className="text-right py-2 px-2 bg-gray-50">Time Held</th>
                             <th className="text-right py-2 px-2 bg-gray-50">Total Invested</th>
                             <th className="text-right py-2 px-2 bg-gray-50">Total Final Value</th>
                             <th className="text-right py-2 px-2 bg-gray-50">Total PnL</th>
@@ -7494,6 +7503,7 @@ const PortfolioBacktester = () => {
                               <td className="text-right py-2 px-2">{row.numTransactions}</td>
                               <td className="text-right py-2 px-2 font-mono">{row.firstBuyDate}</td>
                               <td className="text-right py-2 px-2 font-mono">{row.lastSaleDate}</td>
+                              <td className="text-right py-2 px-2 font-mono">{row.timeHeldYears.toFixed(1)}y</td>
                               <td className="text-right py-2 px-2 font-mono">{row.totalInvested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                               <td className="text-right py-2 px-2 font-mono">{row.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                               <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
