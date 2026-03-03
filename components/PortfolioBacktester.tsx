@@ -5556,6 +5556,17 @@ const PortfolioBacktester = () => {
                       // Show bar labels unless monthly view with too many bars (≥48 = 4+ years)
                       const showReturnLabels = returnsChartPeriod !== 'monthly' || returnsData.length < 48;
 
+                      // Build ReturnPoint[] from raw asset prices so we can reuse
+                      // calculateMonthlyReturns() for the calendar-style returns table
+                      const assetReturnPoints: ReturnPoint[] = assetData
+                        ?.filter(row => typeof row[monthlySelectedTicker] === 'number')
+                        .map(row => ({
+                          date: row.date as string,
+                          value: row[monthlySelectedTicker] as number,
+                          drawdown: 0 // not used by calculateMonthlyReturns
+                        })) || [];
+                      const assetMonthlyReturns = calculateMonthlyReturns(assetReturnPoints);
+
                       return (
                         <div className="mt-6 border-t border-gray-200 pt-4">
                           {/* Title + Period buttons */}
@@ -5895,6 +5906,88 @@ const PortfolioBacktester = () => {
                                   </Bar>
                                 </BarChart>
                               </ResponsiveContainer>
+                            </div>
+                          )}
+
+                          {/* ================================================
+                              MONTHLY & FY RETURNS TABLE
+                              Calendar-style table: rows = years, columns = Jan–Dec + FY.
+                              Reuses calculateMonthlyReturns() — same table as in backtest tab.
+                              ================================================ */}
+                          {Object.keys(assetMonthlyReturns).length > 0 && (
+                            <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
+                              <h3 className="text-md font-semibold mb-2 text-gray-700">
+                                Returns — {monthlySelectedTicker}
+                              </h3>
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="border-b-2 border-gray-200">
+                                    <th className="text-left py-2 px-2 bg-gray-50 sticky left-0">Year</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Jan</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Feb</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Mar</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Apr</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">May</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Jun</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Jul</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Aug</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Sep</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Oct</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Nov</th>
+                                    <th className="text-right py-2 px-2 bg-gray-50">Dec</th>
+                                    <th className="text-right py-2 px-2 bg-gray-100 font-semibold">FY</th>
+                                    <th className="w-2"></th>
+                                    <th className="text-right py-2 px-2 bg-gray-100 font-semibold">1Q</th>
+                                    <th className="text-right py-2 px-2 bg-gray-100 font-semibold">2Q</th>
+                                    <th className="text-right py-2 px-2 bg-gray-100 font-semibold">3Q</th>
+                                    <th className="text-right py-2 px-2 bg-gray-100 font-semibold">4Q</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {Object.keys(assetMonthlyReturns).sort().reverse().map(year => (
+                                    <tr key={year} className="border-b border-gray-100">
+                                      <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0">{year}</td>
+                                      {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(month => {
+                                        const ret = assetMonthlyReturns[year].monthly[month];
+                                        if (ret === null) {
+                                          return <td key={month} className="text-right py-2 px-2 text-gray-300">-</td>;
+                                        }
+                                        const bgColor = ret >= 0 ? 'bg-green-50' : 'bg-red-50';
+                                        const textColor = ret >= 0 ? 'text-green-700' : 'text-red-700';
+                                        return (
+                                          <td key={month} className={`text-right py-2 px-2 ${bgColor} ${textColor}`}>
+                                            {ret.toFixed(2)}%
+                                          </td>
+                                        );
+                                      })}
+                                      <td className={`text-right py-2 px-2 font-semibold ${
+                                        assetMonthlyReturns[year].fy >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                      }`}>
+                                        {assetMonthlyReturns[year].fy.toFixed(2)}%
+                                      </td>
+                                      <td className="w-2"></td>
+                                      {/* Quarterly returns: compound the 3 monthly returns in each quarter */}
+                                      {[[0,1,2],[3,4,5],[6,7,8],[9,10,11]].map((qMonths, qi) => {
+                                        const mReturns = qMonths.map(m => assetMonthlyReturns[year].monthly[m]);
+                                        const hasAny = mReturns.some(r => r !== null);
+                                        if (!hasAny) {
+                                          return <td key={`q${qi}`} className="text-right py-2 px-2 text-gray-300">-</td>;
+                                        }
+                                        // Compound non-null monthly returns: (1+r1)*(1+r2)*(1+r3) - 1
+                                        const qReturn = mReturns.reduce<number>((acc, r) => r !== null ? acc * (1 + r / 100) : acc, 1);
+                                        const qPct = (qReturn - 1) * 100;
+                                        return (
+                                          <td key={`q${qi}`} className={`text-right py-2 px-2 font-semibold ${
+                                            qPct >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                          }`}>
+                                            {qPct.toFixed(2)}%
+                                          </td>
+                                        );
+                                      })}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
                             </div>
                           )}
                         </div>
