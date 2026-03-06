@@ -469,6 +469,10 @@ const PortfolioBacktester = () => {
   const [graphsEndDate, setGraphsEndDate] = useState('');
   // Toggle for showing 10-month SMA overlay on all Graphs tab charts
   const [graphsShowSMA, setGraphsShowSMA] = useState(false);
+  // Monthly Prices tab: toggle between price view and monthly return (%) view
+  const [monthlyViewMode, setMonthlyViewMode] = useState<'prices' | 'returns'>('prices');
+  // Monthly Prices tab: end date filter ('' = latest month in data)
+  const [monthlyEndDate, setMonthlyEndDate] = useState('');
 
   // Close Years dropdown when clicking outside
   useEffect(() => {
@@ -2473,6 +2477,7 @@ const PortfolioBacktester = () => {
       ticker: string;
       name: string;
       prices: (number | null)[];  // 13 prices, null if no data
+      returns: (number | null)[]; // 13 monthly returns (%), null if can't compute
       sma10: number | null;       // 10-month SMA (average of last 10 months including current)
       signal: 'BUY' | 'SELL' | null;  // BUY if price > SMA, SELL if price < SMA
       signals: ('BUY' | 'SELL' | null)[];  // Signal at each of 13 months (for historical view)
@@ -2483,8 +2488,8 @@ const PortfolioBacktester = () => {
       return { months: [], assets: [] };
     }
 
-    // Use selectedEndDate or the last date in data as reference
-    const endDateStr = selectedEndDate || assetData[assetData.length - 1].date;
+    // Use monthlyEndDate (tab-specific), then selectedEndDate (global), then last date in data
+    const endDateStr = monthlyEndDate || selectedEndDate || assetData[assetData.length - 1].date;
     const endDate = new Date(endDateStr);
 
     // Generate 22 months (9 extra for SMA lookback + 13 to display), oldest first
@@ -2568,6 +2573,19 @@ const PortfolioBacktester = () => {
         return price > smaAtMonth ? 'BUY' : 'SELL';
       });
 
+      // Calculate monthly returns (%) for each of 13 displayed months
+      // Return = (currentMonthPrice - previousMonthPrice) / previousMonthPrice * 100
+      // Uses allPrices so even the first displayed month can have a return (using month -1 from allPrices)
+      const returns: (number | null)[] = prices.map((price, displayIdx) => {
+        if (price === null) return null;
+        // allPrices index for this display month
+        const allIdx = displayIdx + 9;
+        // Previous month's price from allPrices
+        const prevPrice = allPrices[allIdx - 1];
+        if (prevPrice === null || prevPrice === 0) return null;
+        return ((price - prevPrice) / prevPrice) * 100;
+      });
+
       // 12-month drawdown: how far the current price sits below the highest price
       // across the displayed 13 months (current + 12 prior). Always <= 0 when below max.
       let dd12m: number | null = null;
@@ -2583,6 +2601,7 @@ const PortfolioBacktester = () => {
         ticker: asset.ticker,
         name: asset.name,
         prices,
+        returns,
         sma10,
         signal,
         signals,
@@ -5279,10 +5298,63 @@ const PortfolioBacktester = () => {
           {/* Monthly Prices Section - Shows 13 months of raw prices with heatmap and signals */}
           {isConnected && assetData && activeView === 'monthlyPrices' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Monthly Prices</h2>
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">
+                {monthlyViewMode === 'prices' ? 'Monthly Prices' : 'Monthly Returns'}
+              </h2>
 
-              {/* Filter controls for Assets, Asset Class, and Currency */}
-              <AssetFilterControls />
+              {/* Filter controls: Assets, Class, Currency + Prices/Returns toggle + End Date */}
+              <AssetFilterControls>
+                {/* Toggle buttons to switch between price view and return (%) view */}
+                <div className="flex gap-0">
+                  <button
+                    onClick={() => setMonthlyViewMode('prices')}
+                    className={`px-3 py-1.5 text-sm font-medium rounded-l-lg border transition-colors ${
+                      monthlyViewMode === 'prices'
+                        ? 'bg-blue-500 text-white border-blue-500'
+                        : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    Monthly Prices
+                  </button>
+                  <button
+                    onClick={() => setMonthlyViewMode('returns')}
+                    className={`px-3 py-1.5 text-sm font-medium rounded-r-lg border border-l-0 transition-colors ${
+                      monthlyViewMode === 'returns'
+                        ? 'bg-blue-500 text-white border-blue-500'
+                        : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    Monthly Returns
+                  </button>
+                </div>
+
+                {/* End Date selector — pick which month the table ends at */}
+                <select
+                  value={monthlyEndDate}
+                  onChange={(e) => setMonthlyEndDate(e.target.value)}
+                  className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
+                >
+                  {(() => {
+                    // Build list of unique months from data, most recent first
+                    const monthMap = new Map<string, string>();
+                    for (const row of assetData!) {
+                      const d = new Date(row.date);
+                      if (isNaN(d.getTime())) continue;
+                      const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+                      monthMap.set(ym, row.date); // last date wins (data is chronological)
+                    }
+                    const endMonths = Array.from(monthMap.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+                    return [
+                      <option key="" value="">Latest</option>,
+                      ...endMonths.map(([ym, date]) => {
+                        const d = new Date(date);
+                        const label = `${MONTH_ABBR[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}`;
+                        return <option key={ym} value={date}>{label}</option>;
+                      })
+                    ];
+                  })()}
+                </select>
+              </AssetFilterControls>
 
               {(() => {
                 const { months, assets } = getMonthlyPricesData();
@@ -5361,21 +5433,46 @@ const PortfolioBacktester = () => {
                                 }`}>
                                   {asset.name}
                                 </td>
-                                {/* Price cells with heatmap coloring */}
-                                {asset.prices.map((price, colIdx) => (
-                                  <td
-                                    key={colIdx}
-                                    className={`text-right py-0.5 px-1 font-mono ${
-                                      asset.signals[colIdx] === 'SELL' ? 'font-bold' : ''
-                                    }`}
-                                    style={{
-                                      backgroundColor: price !== null ? getHeatmapColor(price, minPrice, maxPrice) : undefined,
-                                      color: price !== null ? '#374151' : '#9ca3af'
-                                    }}
-                                  >
-                                    {price !== null ? formatPrice(price) : '-'}
-                                  </td>
-                                ))}
+                                {/* Price or Return cells depending on view mode */}
+                                {monthlyViewMode === 'prices' ? (
+                                  /* Prices view: heatmap coloring from red (low) to green (high) */
+                                  asset.prices.map((price, colIdx) => (
+                                    <td
+                                      key={colIdx}
+                                      className={`text-right py-0.5 px-1 font-mono ${
+                                        asset.signals[colIdx] === 'SELL' ? 'font-bold' : ''
+                                      }`}
+                                      style={{
+                                        backgroundColor: price !== null ? getHeatmapColor(price, minPrice, maxPrice) : undefined,
+                                        color: price !== null ? '#374151' : '#9ca3af'
+                                      }}
+                                    >
+                                      {price !== null ? formatPrice(price) : '-'}
+                                    </td>
+                                  ))
+                                ) : (
+                                  /* Returns view: green for positive, red for negative */
+                                  asset.returns.map((ret, colIdx) => (
+                                    <td
+                                      key={colIdx}
+                                      className={`text-right py-0.5 px-1 font-mono ${
+                                        asset.signals[colIdx] === 'SELL' ? 'font-bold' : ''
+                                      }`}
+                                      style={{
+                                        backgroundColor: ret !== null
+                                          ? ret >= 0
+                                            ? `hsla(120, 70%, 45%, ${Math.min(Math.abs(ret) / 15, 1) * 0.3 + 0.05})`
+                                            : `hsla(0, 70%, 45%, ${Math.min(Math.abs(ret) / 15, 1) * 0.3 + 0.05})`
+                                          : undefined,
+                                        color: ret !== null
+                                          ? ret >= 0 ? '#166534' : '#991b1b'
+                                          : '#9ca3af'
+                                      }}
+                                    >
+                                      {ret !== null ? `${ret.toFixed(1)}%` : '-'}
+                                    </td>
+                                  ))
+                                )}
                                 {/* 10m SMA column */}
                                 <td className="text-right py-0.5 px-1 bg-gray-50 font-mono border-l border-gray-200">
                                   {asset.sma10 !== null ? formatPrice(asset.sma10) : '-'}
@@ -5411,15 +5508,25 @@ const PortfolioBacktester = () => {
 
                     {/* Legend explaining the color scale and signals */}
                     <div className="mt-4 flex flex-wrap gap-4 text-xs text-gray-600">
-                      <div className="flex items-center gap-2">
-                        <span>Price heatmap (per row):</span>
-                        <div className="flex items-center">
-                          <div className="w-6 h-4 rounded-l" style={{ backgroundColor: 'hsl(0, 80%, 85%)' }}></div>
-                          <div className="w-6 h-4" style={{ backgroundColor: 'hsl(60, 80%, 85%)' }}></div>
-                          <div className="w-6 h-4 rounded-r" style={{ backgroundColor: 'hsl(120, 80%, 85%)' }}></div>
+                      {monthlyViewMode === 'prices' ? (
+                        <div className="flex items-center gap-2">
+                          <span>Price heatmap (per row):</span>
+                          <div className="flex items-center">
+                            <div className="w-6 h-4 rounded-l" style={{ backgroundColor: 'hsl(0, 80%, 85%)' }}></div>
+                            <div className="w-6 h-4" style={{ backgroundColor: 'hsl(60, 80%, 85%)' }}></div>
+                            <div className="w-6 h-4 rounded-r" style={{ backgroundColor: 'hsl(120, 80%, 85%)' }}></div>
+                          </div>
+                          <span>Low → High</span>
                         </div>
-                        <span>Low → High</span>
-                      </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span>Returns:</span>
+                          <span className="px-2 py-0.5 rounded" style={{ backgroundColor: 'hsla(120, 70%, 45%, 0.2)', color: '#166534' }}>+</span>
+                          <span>Positive</span>
+                          <span className="px-2 py-0.5 rounded" style={{ backgroundColor: 'hsla(0, 70%, 45%, 0.2)', color: '#991b1b' }}>−</span>
+                          <span>Negative</span>
+                        </div>
+                      )}
                       <div className="flex items-center gap-2">
                         <span>Signal:</span>
                         <span className="px-2 py-0.5 rounded bg-green-100 text-green-700 font-medium">BUY</span>
@@ -5430,7 +5537,7 @@ const PortfolioBacktester = () => {
                         <span>= Price &lt; 10m SMA</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold">Bold price</span>
+                        <span className="font-bold">Bold {monthlyViewMode === 'prices' ? 'price' : 'return'}</span>
                         <span>= SELL signal that month</span>
                       </div>
                     </div>
@@ -5446,7 +5553,7 @@ const PortfolioBacktester = () => {
                     {monthlySelectedTicker && (() => {
                       const assetInfo = assetLookup.find(l => l.ticker === monthlySelectedTicker);
                       const assetName = assetInfo ? assetInfo.name : monthlySelectedTicker;
-                      const chartResult = getMonthlyChartData(monthlySelectedTicker, monthlyChartPeriod);
+                      const chartResult = getMonthlyChartData(monthlySelectedTicker, monthlyChartPeriod, monthlyEndDate || undefined);
 
                       if (!chartResult) return (
                         <div className="text-center py-4 text-gray-500 mt-4">
