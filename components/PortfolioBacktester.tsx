@@ -2482,6 +2482,7 @@ const PortfolioBacktester = () => {
       signal: 'BUY' | 'SELL' | null;  // BUY if price > SMA, SELL if price < SMA
       signals: ('BUY' | 'SELL' | null)[];  // Signal at each of 13 months (for historical view)
       dd12m: number | null;       // 12-month drawdown: how far current price is below the 12-month high (%)
+      ret12m: number | null;      // 12-month return: % change from first to last of the 13 displayed months
     }>;
   } => {
     if (!assetData || assetData.length === 0) {
@@ -2597,6 +2598,14 @@ const PortfolioBacktester = () => {
         }
       }
 
+      // 12-month return: % change from first displayed month to last displayed month
+      // prices[0] = 12 months ago, prices[12] = current month
+      let ret12m: number | null = null;
+      const firstPrice = prices[0];
+      if (currentPrice !== null && firstPrice !== null && firstPrice > 0) {
+        ret12m = ((currentPrice - firstPrice) / firstPrice) * 100;
+      }
+
       return {
         ticker: asset.ticker,
         name: asset.name,
@@ -2605,7 +2614,8 @@ const PortfolioBacktester = () => {
         sma10,
         signal,
         signals,
-        dd12m
+        dd12m,
+        ret12m
       };
     });
 
@@ -5402,6 +5412,10 @@ const PortfolioBacktester = () => {
                             <th className="text-left py-1 px-1 bg-gray-100 border-l border-gray-200">
                               Ticker
                             </th>
+                            {/* 12-month return column */}
+                            <th className="text-right py-1 px-1 bg-gray-100 border-l border-gray-200 whitespace-nowrap">
+                              12M Ret
+                            </th>
                             {/* 12-month drawdown column */}
                             <th className="text-right py-1 px-1 bg-gray-100 border-l border-gray-200 whitespace-nowrap">
                               12M DD
@@ -5488,6 +5502,14 @@ const PortfolioBacktester = () => {
                                 {/* Ticker column */}
                                 <td className="text-left py-0.5 px-1 bg-gray-50 text-gray-500 border-l border-gray-200">
                                   {asset.ticker}
+                                </td>
+                                {/* 12-month return: % change over the displayed 13-month window */}
+                                <td className={`text-right py-0.5 px-1 font-mono border-l border-gray-200 ${
+                                  asset.ret12m === null ? 'text-gray-400'
+                                    : asset.ret12m >= 0 ? 'text-green-700'
+                                    : 'text-red-600'
+                                }`}>
+                                  {asset.ret12m !== null ? `${asset.ret12m >= 0 ? '+' : ''}${asset.ret12m.toFixed(1)}%` : '-'}
                                 </td>
                                 {/* 12-month drawdown: shows how far current price is below the 12M high */}
                                 <td className={`text-right py-0.5 px-1 font-mono border-l border-gray-200 ${
