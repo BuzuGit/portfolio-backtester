@@ -473,6 +473,9 @@ const PortfolioBacktester = () => {
   const [monthlyViewMode, setMonthlyViewMode] = useState<'prices' | 'returns'>('prices');
   // Monthly Prices tab: end date filter ('' = latest month in data)
   const [monthlyEndDate, setMonthlyEndDate] = useState('');
+  // Monthly Prices tab: which column is currently sorted (null = default lookup-table order)
+  // Values: 'name', 'month-0'..'month-12', 'sma10', 'signal', 'ticker', 'ret12m', 'dd12m'
+  const [monthlySortColumn, setMonthlySortColumn] = useState<string | null>(null);
 
   // Close Years dropdown when clicking outside
   useEffect(() => {
@@ -5367,10 +5370,10 @@ const PortfolioBacktester = () => {
               </AssetFilterControls>
 
               {(() => {
-                const { months, assets } = getMonthlyPricesData();
+                const { months, assets: unsortedAssets } = getMonthlyPricesData();
 
                 // If the selected ticker was filtered out, deselect it
-                if (monthlySelectedTicker && !assets.find(a => a.ticker === monthlySelectedTicker)) {
+                if (monthlySelectedTicker && !unsortedAssets.find(a => a.ticker === monthlySelectedTicker)) {
                   setMonthlySelectedTicker('');
                 }
 
@@ -5383,6 +5386,47 @@ const PortfolioBacktester = () => {
                   );
                 }
 
+                // Sort assets by selected column (null = keep default lookup-table order)
+                const assets = monthlySortColumn === null
+                  ? unsortedAssets
+                  : [...unsortedAssets].sort((a, b) => {
+                      const col = monthlySortColumn;
+
+                      // Text columns: alphabetical A→Z
+                      if (col === 'name') return a.name.localeCompare(b.name);
+                      if (col === 'ticker') return a.ticker.localeCompare(b.ticker);
+
+                      // Signal column: BUY first, then SELL, then null
+                      if (col === 'signal') {
+                        const order = { 'BUY': 0, 'SELL': 1 };
+                        const aVal = a.signal ? order[a.signal] : 2;
+                        const bVal = b.signal ? order[b.signal] : 2;
+                        return aVal - bVal;
+                      }
+
+                      // Month columns: sort by price or return depending on view mode
+                      const monthMatch = col.match(/^month-(\d+)$/);
+                      if (monthMatch) {
+                        const idx = parseInt(monthMatch[1]);
+                        if (monthlyViewMode === 'returns') {
+                          const aVal = a.returns[idx] ?? -Infinity;
+                          const bVal = b.returns[idx] ?? -Infinity;
+                          return bVal - aVal; // Descending (highest first)
+                        }
+                        const aVal = a.prices[idx] ?? -Infinity;
+                        const bVal = b.prices[idx] ?? -Infinity;
+                        return bVal - aVal;
+                      }
+
+                      // Numeric columns: descending (highest first)
+                      let aVal = -Infinity;
+                      let bVal = -Infinity;
+                      if (col === 'sma10')  { aVal = a.sma10 ?? -Infinity;  bVal = b.sma10 ?? -Infinity; }
+                      if (col === 'ret12m') { aVal = a.ret12m ?? -Infinity;  bVal = b.ret12m ?? -Infinity; }
+                      if (col === 'dd12m')  { aVal = a.dd12m ?? -Infinity;   bVal = b.dd12m ?? -Infinity; }
+                      return bVal - aVal;
+                    });
+
                 return (
                   <div className="bg-white p-4 rounded-lg shadow">
                     {/* Scrollable table container */}
@@ -5390,34 +5434,63 @@ const PortfolioBacktester = () => {
                       <table className="w-full text-xs border-collapse">
                         <thead>
                           <tr className="border-b border-gray-200">
-                            {/* Asset Name - sticky left column */}
-                            <th className="sticky left-0 z-10 text-left py-1 px-1 bg-gray-50 min-w-[160px] border-r border-gray-200">
+                            {/* Asset Name - sticky left column, sortable */}
+                            <th
+                              className="sticky left-0 z-10 text-left py-1 px-1 min-w-[160px] border-r border-gray-200 cursor-pointer select-none"
+                              style={{ backgroundColor: monthlySortColumn === 'name' ? '#bfdbfe' : '#f9fafb' }}
+                              onClick={() => setMonthlySortColumn(monthlySortColumn === 'name' ? null : 'name')}
+                            >
                               Asset
                             </th>
-                            {/* Month columns - oldest to newest (left to right) */}
+                            {/* Month columns - oldest to newest (left to right), sortable */}
                             {months.map((month, idx) => (
-                              <th key={idx} className="text-right py-1 px-1 bg-gray-50 whitespace-nowrap">
+                              <th
+                                key={idx}
+                                className="text-right py-1 px-1 whitespace-nowrap cursor-pointer select-none"
+                                style={{ backgroundColor: monthlySortColumn === `month-${idx}` ? '#bfdbfe' : '#f9fafb' }}
+                                onClick={() => setMonthlySortColumn(monthlySortColumn === `month-${idx}` ? null : `month-${idx}`)}
+                              >
                                 {month}
                               </th>
                             ))}
-                            {/* 10m SMA column */}
-                            <th className="text-right py-1 px-1 bg-gray-100 whitespace-nowrap border-l border-gray-200">
+                            {/* 10m SMA column, sortable */}
+                            <th
+                              className="text-right py-1 px-1 whitespace-nowrap border-l border-gray-200 cursor-pointer select-none"
+                              style={{ backgroundColor: monthlySortColumn === 'sma10' ? '#bfdbfe' : '#f3f4f6' }}
+                              onClick={() => setMonthlySortColumn(monthlySortColumn === 'sma10' ? null : 'sma10')}
+                            >
                               10mSMA
                             </th>
-                            {/* Signal column */}
-                            <th className="text-center py-1 px-1 bg-gray-100">
+                            {/* Signal column, sortable */}
+                            <th
+                              className="text-center py-1 px-1 cursor-pointer select-none"
+                              style={{ backgroundColor: monthlySortColumn === 'signal' ? '#bfdbfe' : '#f3f4f6' }}
+                              onClick={() => setMonthlySortColumn(monthlySortColumn === 'signal' ? null : 'signal')}
+                            >
                               Signal
                             </th>
-                            {/* Ticker column */}
-                            <th className="text-left py-1 px-1 bg-gray-100 border-l border-gray-200">
+                            {/* Ticker column, sortable */}
+                            <th
+                              className="text-left py-1 px-1 border-l border-gray-200 cursor-pointer select-none"
+                              style={{ backgroundColor: monthlySortColumn === 'ticker' ? '#bfdbfe' : '#f3f4f6' }}
+                              onClick={() => setMonthlySortColumn(monthlySortColumn === 'ticker' ? null : 'ticker')}
+                            >
                               Ticker
                             </th>
-                            {/* 12-month return column */}
-                            <th className="text-right py-1 px-1 bg-gray-100 border-l border-gray-200 whitespace-nowrap">
+                            {/* 12-month return column, sortable */}
+                            <th
+                              className="text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none"
+                              style={{ backgroundColor: monthlySortColumn === 'ret12m' ? '#bfdbfe' : '#f3f4f6' }}
+                              onClick={() => setMonthlySortColumn(monthlySortColumn === 'ret12m' ? null : 'ret12m')}
+                            >
                               12M Ret
                             </th>
-                            {/* 12-month drawdown column */}
-                            <th className="text-right py-1 px-1 bg-gray-100 border-l border-gray-200 whitespace-nowrap">
+                            {/* 12-month drawdown column, sortable */}
+                            <th
+                              className="text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none"
+                              style={{ backgroundColor: monthlySortColumn === 'dd12m' ? '#bfdbfe' : '#f3f4f6' }}
+                              onClick={() => setMonthlySortColumn(monthlySortColumn === 'dd12m' ? null : 'dd12m')}
+                            >
                               12M DD
                             </th>
                           </tr>
