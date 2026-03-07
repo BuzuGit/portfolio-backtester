@@ -410,8 +410,9 @@ const PortfolioBacktester = () => {
   const [selectedAssetTickers, setSelectedAssetTickers] = useState<string[]>([]);
   const [selectedAssetClasses, setSelectedAssetClasses] = useState<string[]>([]);
   const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
+  const [selectedAssetSubcategories, setSelectedAssetSubcategories] = useState<string[]>([]);
   // Tracks which filter dropdown is currently open (null = all closed)
-  const [openFilterDropdown, setOpenFilterDropdown] = useState<'assets' | 'assetClass' | 'currency' | null>(null);
+  const [openFilterDropdown, setOpenFilterDropdown] = useState<'assets' | 'assetClass' | 'currency' | 'assetSubcategory' | null>(null);
   // Years to display in the Annual Returns tab (null = all years shown, [] = none selected)
   const [selectedYears, setSelectedYears] = useState<number[] | null>(null);
   // Separate dropdown state for the Years filter (lives outside AssetFilterControls)
@@ -555,6 +556,7 @@ const PortfolioBacktester = () => {
       setSelectedAssetTickers(lookup.map(a => a.ticker));
       setSelectedAssetClasses(Array.from(new Set(lookup.map(a => a.assetClass).filter(Boolean))));
       setSelectedCurrencies(Array.from(new Set(lookup.map(a => a.currency).filter(Boolean))));
+      setSelectedAssetSubcategories(Array.from(new Set(lookup.map(a => a.assetSubcategory).filter(Boolean))));
 
       // Set the date range based on the data
       if (data.length > 0) {
@@ -651,15 +653,24 @@ const PortfolioBacktester = () => {
   };
 
   /**
-   * Filters assetLookup based on selected assets, asset classes, and currencies.
+   * Gets unique asset subcategories from the lookup table (sorted alphabetically).
+   * Used to populate the Subcategory filter dropdown.
+   */
+  const getUniqueAssetSubcategories = (): string[] => {
+    return Array.from(new Set(assetLookup.map(a => a.assetSubcategory).filter(Boolean))).sort();
+  };
+
+  /**
+   * Filters assetLookup based on selected assets, asset classes, currencies, and subcategories.
    * Returns only assets that match ALL selected criteria (AND logic).
-   * Empty asset class or currency fields are treated as matching any selection.
+   * Empty asset class, currency, or subcategory fields are treated as matching any selection.
    */
   const getFilteredAssetLookup = (): typeof assetLookup => {
     return assetLookup.filter(asset =>
       selectedAssetTickers.includes(asset.ticker) &&
       (asset.assetClass === '' || selectedAssetClasses.includes(asset.assetClass)) &&
-      (asset.currency === '' || selectedCurrencies.includes(asset.currency))
+      (asset.currency === '' || selectedCurrencies.includes(asset.currency)) &&
+      (asset.assetSubcategory === '' || selectedAssetSubcategories.includes(asset.assetSubcategory))
     );
   };
 
@@ -683,6 +694,13 @@ const PortfolioBacktester = () => {
    */
   const toggleAllCurrencies = (selectAll: boolean) => {
     setSelectedCurrencies(selectAll ? getUniqueCurrencies() : []);
+  };
+
+  /**
+   * Selects or deselects all asset subcategories at once.
+   */
+  const toggleAllAssetSubcategories = (selectAll: boolean) => {
+    setSelectedAssetSubcategories(selectAll ? getUniqueAssetSubcategories() : []);
   };
 
   // ----------------------------------------
@@ -3756,11 +3774,13 @@ const PortfolioBacktester = () => {
     // Get the unique values for each dropdown
     const assetClasses = getUniqueAssetClasses();
     const currencies = getUniqueCurrencies();
+    const assetSubcategories = getUniqueAssetSubcategories();
 
     // Check if all items are selected (to show "Deselect All" vs "Select All")
     const allAssetsSelected = selectedAssetTickers.length === assetLookup.length;
     const allClassesSelected = selectedAssetClasses.length === assetClasses.length;
     const allCurrenciesSelected = selectedCurrencies.length === currencies.length;
+    const allSubcategoriesSelected = selectedAssetSubcategories.length === assetSubcategories.length;
 
     // Helper to get display text for the dropdown button
     const getSelectionText = (selected: number, total: number, label: string) => {
@@ -3911,7 +3931,56 @@ const PortfolioBacktester = () => {
             </div>
           )}
         </div>
-        {/* Extra controls passed in as children (e.g., Years filter) — rendered after Currency */}
+        {/* Asset Subcategory Dropdown */}
+        {assetSubcategories.length > 0 && (
+          <div className="relative">
+            <button
+              onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetSubcategory' ? null : 'assetSubcategory')}
+              className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+                openFilterDropdown === 'assetSubcategory' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+              }`}
+            >
+              <span className="font-medium">Subcategory:</span>
+              <span className="text-gray-600">{getSelectionText(selectedAssetSubcategories.length, assetSubcategories.length, 'subcategories')}</span>
+              <svg className={`w-4 h-4 transition-transform ${openFilterDropdown === 'assetSubcategory' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {openFilterDropdown === 'assetSubcategory' && (
+              <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[220px]">
+                <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+                  <span className="text-sm font-medium text-gray-700">Select Subcategories</span>
+                  <button
+                    onClick={() => toggleAllAssetSubcategories(!allSubcategoriesSelected)}
+                    className="text-xs text-blue-600 hover:underline"
+                  >
+                    {allSubcategoriesSelected ? 'Deselect All' : 'Select All'}
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-y-auto p-2">
+                  {assetSubcategories.map(subcategory => (
+                    <label key={subcategory} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
+                      <input
+                        type="checkbox"
+                        checked={selectedAssetSubcategories.includes(subcategory)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedAssetSubcategories([...selectedAssetSubcategories, subcategory]);
+                          } else {
+                            setSelectedAssetSubcategories(selectedAssetSubcategories.filter(s => s !== subcategory));
+                          }
+                        }}
+                      />
+                      <span>{subcategory}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Extra controls passed in as children (e.g., Years filter) — rendered after Subcategory */}
         {children}
       </div>
     );

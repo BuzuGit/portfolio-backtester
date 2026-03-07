@@ -34,11 +34,12 @@ export interface AssetRow {
 
 // Lookup table entry - maps ticker symbol to friendly name plus currency info
 export interface AssetLookup {
-  ticker: string;     // e.g., "SPY"
-  name: string;       // e.g., "S&P 500 ETF"
-  currency: string;   // e.g., "USD", "SGD", "PLN"
-  fx: string;         // e.g., "USDPLN", "SGDPLN", "" for PLN assets
-  assetClass: string; // e.g., "Equities", "Fixed Income", "Alternatives"
+  ticker: string;           // e.g., "SPY"
+  name: string;             // e.g., "S&P 500 ETF"
+  currency: string;         // e.g., "USD", "SGD", "PLN"
+  fx: string;               // e.g., "USDPLN", "SGDPLN", "" for PLN assets
+  assetClass: string;       // e.g., "Equities", "Fixed Income", "Alternatives"
+  assetSubcategory: string; // e.g., "US Stocks", "Emerging Markets", "Gold" — finer grouping within asset class
 }
 
 // Annual portfolio summary data from the "Years" sheet
@@ -181,17 +182,18 @@ export async function fetchSheetData(): Promise<ParsedData> {
 }
 
 /**
- * Parses the lookup table CSV (ticker -> asset name, currency, FX ticker, asset class).
- * Expects five columns: Ticker, Asset Name, Currency, FX, Asset Class
+ * Parses the lookup table CSV (ticker -> asset name, currency, FX ticker, asset class, subcategory).
+ * Expects six columns: Ticker, Asset Name, Currency, FX, Asset Class, Asset Subcategory
  *
  * Column 1: Ticker (e.g., "SPY")
  * Column 2: Asset Name (e.g., "S&P 500 ETF")
  * Column 3: Currency (e.g., "USD", "SGD", "PLN")
  * Column 4: FX (e.g., "USDPLN", "SGDPLN", or empty for PLN assets)
  * Column 5: Asset Class (e.g., "Equities", "Fixed Income", "Alternatives")
+ * Column 6: Asset Subcategory (e.g., "US Stocks", "Emerging Markets", "Gold")
  *
  * @param csvText - The raw CSV file content
- * @returns Array of ticker-to-name-currency-fx-assetClass mappings
+ * @returns Array of ticker-to-name-currency-fx-assetClass-assetSubcategory mappings
  */
 function parseLookupTable(csvText: string): AssetLookup[] {
   const lines = csvText.trim().split('\n');
@@ -222,9 +224,11 @@ function parseLookupTable(csvText: string): AssetLookup[] {
     const fx = values.length > 3 ? values[3].trim() : '';
     // Asset class defaults to empty string if not specified (column 5)
     const assetClass = values.length > 4 ? values[4].trim() : '';
+    // Asset subcategory defaults to empty string if not specified (column 6)
+    const assetSubcategory = values.length > 5 ? values[5].trim() : '';
 
     if (ticker && name) {
-      lookup.push({ ticker, name, currency, fx, assetClass });
+      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory });
     }
   }
 
