@@ -3784,7 +3784,7 @@ const PortfolioBacktester = () => {
 
     // Helper to get display text for the dropdown button
     const getSelectionText = (selected: number, total: number, label: string) => {
-      if (selected === total) return `All ${label}`;
+      if (selected === total) return 'All';
       if (selected === 0) return `No ${label}`;
       return `${selected} of ${total}`;
     };
