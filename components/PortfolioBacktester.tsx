@@ -6370,26 +6370,37 @@ const PortfolioBacktester = () => {
                       ? currentPrice.toFixed(1)  // e.g. 123.4
                       : Math.round(currentPrice).toLocaleString(); // e.g. 1,234
 
-                  // Compute 5 evenly-spaced Y-axis ticks with "nice" rounded values
-                  // that ALWAYS cover the full data range (min to max)
+                  // Compute 5 evenly-spaced Y-axis ticks for each chart individually.
+                  // Goal: lines fill almost all the chart area with Y-axis max at most
+                  // ~10% above the highest price and Y-axis min near the lowest price.
                   const allYValues = graphsShowSMA
                     ? priceData.flatMap(d => d.sma10 != null ? [d.price, d.sma10] : [d.price])
                     : priceData.map(d => d.price);
                   const rawMin = Math.min(...allYValues);
                   const rawMax = Math.max(...allYValues);
                   const rawRange = rawMax - rawMin || 1; // avoid zero range
-                  // Try nice step sizes (1, 2, 2.5, 5, 10 × magnitude) and pick the
-                  // smallest one where floor(min) + 4 steps fully covers rawMax
+                  // Pick the smallest "nice" step where floor(min/step)*step + 4*step
+                  // covers rawMax. Try current magnitude first, then next one up to handle
+                  // edge cases where the data range doesn't fit neatly (e.g. range ~39
+                  // with mag=1 where the largest candidate 10 can't span the full range).
                   const roughStep = rawRange / 4;
                   const mag = Math.pow(10, Math.floor(Math.log10(roughStep)));
-                  const candidates = [1, 2, 2.5, 5, 10].map(m => m * mag);
-                  let niceStep = candidates[candidates.length - 1]; // fallback
-                  for (const step of candidates) {
-                    const lo = Math.floor(rawMin / step) * step;
-                    if (lo + 4 * step >= rawMax - step * 0.001) {
-                      niceStep = step;
-                      break;
+                  const multipliers = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 7.5, 8, 10];
+                  let niceStep = 0;
+                  for (const scale of [mag, mag * 10]) {
+                    for (const m of multipliers) {
+                      const step = m * scale;
+                      const lo = Math.floor(rawMin / step) * step;
+                      if (lo + 4 * step >= rawMax) {
+                        niceStep = step;
+                        break;
+                      }
                     }
+                    if (niceStep > 0) break;
+                  }
+                  // Ultimate fallback: compute exact step needed (shouldn't normally hit)
+                  if (niceStep === 0) {
+                    niceStep = Math.ceil(rawRange / 4) || 1;
                   }
                   const yMin = Math.floor(rawMin / niceStep) * niceStep;
                   const yTicks = Array.from({ length: 5 }, (_, i) =>
