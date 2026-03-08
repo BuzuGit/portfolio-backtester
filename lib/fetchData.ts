@@ -23,6 +23,8 @@ const LOOKUP_SHEET_URL = `${SHEET_BASE_URL}?gid=166035960&output=csv`;
 const YEARS_SHEET_URL = `${SHEET_BASE_URL}?gid=2044431115&output=csv`;
 // gid=2134130819 is the Closed tab (buy/sell transactions for closed positions)
 const CLOSED_SHEET_URL = `${SHEET_BASE_URL}?gid=2134130819&output=csv`;
+// gid=1857187976 is the Data tab (raw transactions: purchases, dividends, sales)
+const TRANSACTIONS_SHEET_URL = `${SHEET_BASE_URL}?gid=1760382748&output=csv`;
 
 // Type definitions - these describe the shape of our data
 // (TypeScript uses these to catch errors and provide autocomplete)
@@ -109,12 +111,28 @@ export interface ClosedPositionRow {
   cagr: number;                 // Compound annual growth rate (%)
 }
 
+// Raw transaction row from the "Data" sheet (gid=1857187976)
+// Contains every purchase, dividend, and sale for all assets
+// The same ticker can appear many times — one row per event
+export interface TransactionRow {
+  date: string;       // Transaction date (normalized to YYYY-MM-DD)
+  fx: string;         // Currency code (e.g., "SGD", "USD")
+  qty: number;        // Number of shares (fractional values supported)
+  commAbs: number;    // Commission in absolute currency (from "Comm/adj" column)
+  commBps: number;    // Commission in basis points (from "Comm (bps)" column)
+  amount: number;     // Total cost (purchases), dividend received (dividends), or sale proceeds (sales)
+  asset: string;      // Asset name (e.g., "Nikko AM-STC Asia REIT")
+  flow: string;       // "Purchase of Asset", "Dividend", or "Proceeds from Sale"
+  ticker: string;     // Ticker symbol (e.g., "CFATR")
+}
+
 export interface ParsedData {
   data: AssetRow[];           // Array of rows, each with date and asset prices
   assets: string[];           // List of asset names found in the CSV
   lookup: AssetLookup[];      // Lookup table with ticker-to-name mappings
   yearsData: YearsRow[];      // Annual portfolio summary (from Years sheet)
   closedData: ClosedPositionRow[];  // Closed position transactions (from Closed sheet)
+  transactionData: TransactionRow[];  // Raw transactions from the Data sheet (purchases, dividends, sales)
 }
 
 /**
@@ -126,12 +144,13 @@ export interface ParsedData {
  * @throws Error if fetch fails or data is invalid
  */
 export async function fetchSheetData(): Promise<ParsedData> {
-  // Fetch all four sheets in parallel for speed
-  const [dataResponse, lookupResponse, yearsResponse, closedResponse] = await Promise.all([
+  // Fetch all five sheets in parallel for speed
+  const [dataResponse, lookupResponse, yearsResponse, closedResponse, txnResponse] = await Promise.all([
     fetch(DATA_SHEET_URL, { cache: 'no-cache' }),
     fetch(LOOKUP_SHEET_URL, { cache: 'no-cache' }),
     fetch(YEARS_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Years sheet is optional — don't break the app if it fails
-    fetch(CLOSED_SHEET_URL, { cache: 'no-cache' }).catch(() => null) // Closed sheet is optional too
+    fetch(CLOSED_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Closed sheet is optional too
+    fetch(TRANSACTIONS_SHEET_URL, { cache: 'no-cache' }).catch(() => null) // Transactions sheet is optional too
   ]);
 
   // Check if core fetches were successful
@@ -176,9 +195,39 @@ export async function fetchSheetData(): Promise<ParsedData> {
     console.warn('Failed to parse Closed sheet (non-fatal):', err);
   }
 
+  // Parse Transactions (Data) sheet if it loaded successfully (same non-fatal pattern)
+  // Google Sheets sometimes returns "Loading..." instead of CSV data when too many
+  // sheets are fetched in parallel. If that happens, retry up to 3 times with a delay.
+  let transactionData: TransactionRow[] = [];
+  try {
+    let txnCsvText = '';
+    if (txnResponse && txnResponse.ok) {
+      txnCsvText = await txnResponse.text();
+    }
+    // Retry if we got "Loading..." or empty response
+    let retries = 0;
+    while ((!txnCsvText || txnCsvText.trim() === 'Loading...' || txnCsvText.trim().length < 50) && retries < 3) {
+      retries++;
+      console.log(`Transactions sheet returned "${txnCsvText.trim()}", retrying (${retries}/3)...`);
+      await new Promise(r => setTimeout(r, 1000 * retries)); // wait 1s, 2s, 3s
+      const retryResponse = await fetch(TRANSACTIONS_SHEET_URL, { cache: 'no-cache' }).catch(() => null);
+      if (retryResponse && retryResponse.ok) {
+        txnCsvText = await retryResponse.text();
+      }
+    }
+    if (txnCsvText && txnCsvText.trim() !== 'Loading...' && txnCsvText.trim().length >= 50) {
+      transactionData = parseTransactionData(txnCsvText);
+      console.log(`Transactions sheet: parsed ${transactionData.length} rows`);
+    } else {
+      console.warn(`Transactions sheet still empty after retries: "${txnCsvText.trim().substring(0, 50)}"`);
+    }
+  } catch (err) {
+    console.warn('Failed to parse Transactions sheet (non-fatal):', err);
+  }
+
   console.log(`Lookup table has ${lookup.length} assets: ${lookup.map(l => l.ticker).join(', ')}`);
 
-  return { data, assets, lookup, yearsData, closedData };
+  return { data, assets, lookup, yearsData, closedData, transactionData };
 }
 
 /**
@@ -539,6 +588,95 @@ function parseClosedData(csvText: string): ClosedPositionRow[] {
       sellPrice, sellCommission, valueAfterFee,
       cumDividend, totalTax, proceedsFromSale, finalNetValue,
       totalReturn, totalReturnPct, cagr,
+    });
+  }
+
+  return rows;
+}
+
+/**
+ * Parses the "Data" sheet CSV (gid=1857187976) into TransactionRow objects.
+ *
+ * This sheet contains every purchase, dividend payment, and sale for all assets.
+ * Each row is one event:
+ *   - "Purchase of Asset": buying shares (Qty = shares bought, Amount = total cost incl. commission)
+ *   - "Dividend": dividend/interest received (Qty = shares held at that time, Amount = cash received)
+ *   - "Proceeds from Sale": selling shares (Amount = sale proceeds)
+ *
+ * Columns: Date, FX, Qty, Price\Value, Comm/adj, Comm (bps), Amount, Asset, Flow, Ticker
+ *
+ * @param csvText - The raw CSV content from the Data sheet
+ * @returns Array of TransactionRow objects
+ */
+function parseTransactionData(csvText: string): TransactionRow[] {
+  // Use quote-aware row splitter (handles newlines inside quoted headers)
+  const lines = splitCSVRows(csvText.trim());
+
+  if (lines.length < 2) {
+    console.warn('Transactions sheet is empty or has no data rows');
+    return [];
+  }
+
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+  // Parse header and normalize: collapse any whitespace (newlines, multiple spaces) into single space
+  const headers = parseCSVLine(lines[0], delimiter).map(h => h.replace(/\s+/g, ' ').trim());
+
+  console.log('Transactions sheet headers:', headers.join(' | '));
+
+  // Build column name → index map (order-independent)
+  const colIndex: { [key: string]: number } = {};
+  headers.forEach((h, i) => { colIndex[h] = i; });
+
+  // Helper: read a numeric value by column name (handles commas, %, negatives)
+  const readNum = (values: string[], colName: string): number => {
+    const idx = colIndex[colName];
+    if (idx === undefined || idx >= values.length) return 0;
+    const raw = values[idx].trim();
+    if (!raw) return 0;
+    const clean = raw.replace(/,/g, '').replace(/%/g, '');
+    const num = parseFloat(clean);
+    return isNaN(num) ? 0 : num;
+  };
+
+  // Helper: read a string value by column name
+  const readStr = (values: string[], colName: string): string => {
+    const idx = colIndex[colName];
+    if (idx === undefined || idx >= values.length) return '';
+    return values[idx].trim();
+  };
+
+  const rows: TransactionRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    const values = parseCSVLine(line, delimiter);
+
+    const date = normalizeDate(readStr(values, 'Date'));
+    if (!date) continue;
+
+    const flow = readStr(values, 'Flow');
+    if (!flow) continue; // Skip rows without a flow type
+
+    const ticker = readStr(values, 'Ticker');
+    if (!ticker) continue; // Skip rows without a ticker
+
+    const qty = readNum(values, 'Qty');
+    const commAbs = readNum(values, 'Comm /adj');
+    const amount = readNum(values, 'Amount');
+
+    rows.push({
+      date,
+      fx: readStr(values, 'FX'),
+      qty,
+      commAbs,
+      // "Comm (bps)" column — commission in basis points
+      commBps: readNum(values, 'Comm (bps)'),
+      amount,
+      asset: readStr(values, 'Asset'),
+      flow,
+      ticker,
     });
   }
 
