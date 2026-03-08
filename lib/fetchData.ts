@@ -29,6 +29,36 @@ const TRANSACTIONS_SHEET_URL = `${SHEET_BASE_URL}?gid=1760382748&output=csv`;
 // Type definitions - these describe the shape of our data
 // (TypeScript uses these to catch errors and provide autocomplete)
 
+// ---- Shared CSV parsing helpers ----
+// These are used by all three sheet parsers (Years, Closed, Transactions)
+// to read values from CSV rows by column name.
+type ColIndex = { [key: string]: number };
+
+/** Build a column-name → index map from CSV headers */
+function buildColIndex(headers: string[]): ColIndex {
+  const idx: ColIndex = {};
+  headers.forEach((h, i) => { idx[h] = i; });
+  return idx;
+}
+
+/** Read a numeric value from a CSV row by column name (handles commas, %, negatives) */
+function csvReadNum(colIndex: ColIndex, values: string[], colName: string): number {
+  const idx = colIndex[colName];
+  if (idx === undefined || idx >= values.length) return 0;
+  const raw = values[idx].trim();
+  if (!raw) return 0;
+  const clean = raw.replace(/,/g, '').replace(/%/g, '');
+  const num = parseFloat(clean);
+  return isNaN(num) ? 0 : num;
+}
+
+/** Read a string value from a CSV row by column name */
+function csvReadStr(colIndex: ColIndex, values: string[], colName: string): string {
+  const idx = colIndex[colName];
+  if (idx === undefined || idx >= values.length) return '';
+  return values[idx].trim();
+}
+
 export interface AssetRow {
   date: string;                    // e.g., "2020-01-31"
   [assetName: string]: number | string;  // e.g., { "SPY": 320.45, "BND": 85.23 }
@@ -111,6 +141,12 @@ export interface ClosedPositionRow {
   cagr: number;                 // Compound annual growth rate (%)
 }
 
+// Flow type constants — the three kinds of transactions in the "Data" sheet
+export const FLOW_PURCHASE = 'Purchase of Asset';
+export const FLOW_SALE = 'Proceeds from Sale';
+export const FLOW_DIVIDEND = 'Dividend';
+export type FlowType = typeof FLOW_PURCHASE | typeof FLOW_SALE | typeof FLOW_DIVIDEND;
+
 // Raw transaction row from the "Data" sheet (gid=1857187976)
 // Contains every purchase, dividend, and sale for all assets
 // The same ticker can appear many times — one row per event
@@ -122,7 +158,7 @@ export interface TransactionRow {
   commBps: number;    // Commission in basis points (from "Comm (bps)" column)
   amount: number;     // Total cost (purchases), dividend received (dividends), or sale proceeds (sales)
   asset: string;      // Asset name (e.g., "Nikko AM-STC Asia REIT")
-  flow: string;       // "Purchase of Asset", "Dividend", or "Proceeds from Sale"
+  flow: FlowType;     // "Purchase of Asset", "Dividend", or "Proceeds from Sale"
   ticker: string;     // Ticker symbol (e.g., "CFATR")
 }
 
@@ -351,23 +387,8 @@ function parseYearsData(csvText: string): YearsRow[] {
   const delimiter = lines[0].includes('\t') ? '\t' : ',';
   const headers = parseCSVLine(lines[0], delimiter).map(h => h.trim());
 
-  // Build a map from column header name → column index
-  // This way we're not dependent on column order in the spreadsheet
-  const colIndex: { [key: string]: number } = {};
-  headers.forEach((h, i) => { colIndex[h] = i; });
-
-  // Helper: reads a numeric value from a row by column name
-  // Handles commas, percentage signs, and negative numbers
-  const readNum = (values: string[], colName: string): number => {
-    const idx = colIndex[colName];
-    if (idx === undefined || idx >= values.length) return 0;
-    const raw = values[idx].trim();
-    if (!raw) return 0;
-    // Remove commas and percentage signs, keep minus sign
-    const clean = raw.replace(/,/g, '').replace(/%/g, '');
-    const num = parseFloat(clean);
-    return isNaN(num) ? 0 : num;
-  };
+  const colIndex = buildColIndex(headers);
+  const readNum = (values: string[], colName: string) => csvReadNum(colIndex, values, colName);
 
   const rows: YearsRow[] = [];
 
@@ -511,27 +532,9 @@ function parseClosedData(csvText: string): ClosedPositionRow[] {
 
   console.log('Closed sheet headers:', headers.join(' | '));
 
-  // Build column name → index map (order-independent)
-  const colIndex: { [key: string]: number } = {};
-  headers.forEach((h, i) => { colIndex[h] = i; });
-
-  // Helper: read a numeric value by column name (handles commas, %, negatives)
-  const readNum = (values: string[], colName: string): number => {
-    const idx = colIndex[colName];
-    if (idx === undefined || idx >= values.length) return 0;
-    const raw = values[idx].trim();
-    if (!raw) return 0;
-    const clean = raw.replace(/,/g, '').replace(/%/g, '');
-    const num = parseFloat(clean);
-    return isNaN(num) ? 0 : num;
-  };
-
-  // Helper: read a string value by column name
-  const readStr = (values: string[], colName: string): string => {
-    const idx = colIndex[colName];
-    if (idx === undefined || idx >= values.length) return '';
-    return values[idx].trim();
-  };
+  const colIndex = buildColIndex(headers);
+  const readNum = (values: string[], colName: string) => csvReadNum(colIndex, values, colName);
+  const readStr = (values: string[], colName: string) => csvReadStr(colIndex, values, colName);
 
   const rows: ClosedPositionRow[] = [];
 
@@ -623,27 +626,9 @@ function parseTransactionData(csvText: string): TransactionRow[] {
 
   console.log('Transactions sheet headers:', headers.join(' | '));
 
-  // Build column name → index map (order-independent)
-  const colIndex: { [key: string]: number } = {};
-  headers.forEach((h, i) => { colIndex[h] = i; });
-
-  // Helper: read a numeric value by column name (handles commas, %, negatives)
-  const readNum = (values: string[], colName: string): number => {
-    const idx = colIndex[colName];
-    if (idx === undefined || idx >= values.length) return 0;
-    const raw = values[idx].trim();
-    if (!raw) return 0;
-    const clean = raw.replace(/,/g, '').replace(/%/g, '');
-    const num = parseFloat(clean);
-    return isNaN(num) ? 0 : num;
-  };
-
-  // Helper: read a string value by column name
-  const readStr = (values: string[], colName: string): string => {
-    const idx = colIndex[colName];
-    if (idx === undefined || idx >= values.length) return '';
-    return values[idx].trim();
-  };
+  const colIndex = buildColIndex(headers);
+  const readNum = (values: string[], colName: string) => csvReadNum(colIndex, values, colName);
+  const readStr = (values: string[], colName: string) => csvReadStr(colIndex, values, colName);
 
   const rows: TransactionRow[] = [];
 
@@ -656,8 +641,11 @@ function parseTransactionData(csvText: string): TransactionRow[] {
     const date = normalizeDate(readStr(values, 'Date'));
     if (!date) continue;
 
-    const flow = readStr(values, 'Flow');
-    if (!flow) continue; // Skip rows without a flow type
+    const flowRaw = readStr(values, 'Flow');
+    if (!flowRaw) continue; // Skip rows without a flow type
+    // Validate that the flow type is one we recognize (Purchase, Sale, or Dividend)
+    if (flowRaw !== FLOW_PURCHASE && flowRaw !== FLOW_SALE && flowRaw !== FLOW_DIVIDEND) continue;
+    const flow: FlowType = flowRaw;
 
     const ticker = readStr(values, 'Ticker');
     if (!ticker) continue; // Skip rows without a ticker

@@ -19,7 +19,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
-import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow } from '@/lib/fetchData';
+import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, FLOW_PURCHASE, FLOW_SALE, FLOW_DIVIDEND } from '@/lib/fetchData';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -32,6 +32,61 @@ const toYM = (d: Date): string =>
 
 /** Month abbreviations for X-axis date labels. */
 const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+/**
+ * Derive the list of "open" tickers from transaction data.
+ * A ticker is open if it has at least one purchase but NO sale entries.
+ * Pure function — takes the raw transactions array and returns ticker strings.
+ */
+const computeOpenTickers = (txns: TransactionRow[]): string[] => {
+  const purchaseTickers = new Set(
+    txns.filter(t => t.flow === FLOW_PURCHASE).map(t => t.ticker)
+  );
+  const soldTickers = new Set(
+    txns.filter(t => t.flow === FLOW_SALE).map(t => t.ticker)
+  );
+  return Array.from(purchaseTickers).filter(ticker => !soldTickers.has(ticker));
+};
+
+/**
+ * Compute the zero-crossing fraction for a PnL gradient.
+ * Returns how far down from the chart's top the y=0 line sits (0 = top, 1 = bottom).
+ * Used by both Open and Closed position PnL charts to set the green/red gradient split.
+ */
+const computePnlZeroFraction = (data: { pnl: number }[]): number => {
+  if (data.length === 0) return 0.5;
+  const maxPnl = data.reduce((max, d) => d.pnl > max ? d.pnl : max, 0);
+  const minPnl = data.reduce((min, d) => d.pnl < min ? d.pnl : min, 0);
+  const range = maxPnl - minPnl;
+  return range > 0 ? maxPnl / range : 0.5;
+};
+
+/**
+ * Merge comparison data into chart data using a Map for O(N+M) performance.
+ * For each base chart point, attaches compPrice from the comparison data if dates match.
+ * Also appends any comparison points that fall outside the base date range.
+ */
+const mergeComparisonData = <T extends { date: string }>(
+  chartData: T[],
+  comparisonData: { date: string; normalizedPrice: number }[]
+): (T & { compPrice?: number })[] => {
+  // Build a Map from date → normalizedPrice for O(1) lookups
+  const compMap = new Map(comparisonData.map(c => [c.date, c.normalizedPrice]));
+  // Attach compPrice to each base chart point
+  const merged = chartData.map(d => ({
+    ...d,
+    compPrice: compMap.get(d.date),
+  }));
+  // Add comparison-only points (dates not in the base chart)
+  const baseDates = new Set(chartData.map(d => d.date));
+  comparisonData.forEach(c => {
+    if (!baseDates.has(c.date)) {
+      merged.push({ date: c.date, price: undefined as unknown as number, compPrice: c.normalizedPrice } as any);
+    }
+  });
+  merged.sort((a, b) => a.date.localeCompare(b.date));
+  return merged;
+};
 
 /** Custom two-line X-axis tick: month abbreviation on top, full year below.
  *  e.g.  Jan
@@ -581,13 +636,7 @@ const PortfolioBacktester = () => {
       // Auto-select all position tickers (both open and closed) by default
       const closedTickers = new Set(fetchedClosedData.map((row: ClosedPositionRow) => row.ticker));
       // Open tickers: have purchases in transaction data but NO "Proceeds from Sale" entries
-      const purchaseTickers = new Set(
-        fetchedTransactionData.filter((t: TransactionRow) => t.flow === 'Purchase of Asset').map((t: TransactionRow) => t.ticker)
-      );
-      const soldTickers = new Set(
-        fetchedTransactionData.filter((t: TransactionRow) => t.flow === 'Proceeds from Sale').map((t: TransactionRow) => t.ticker)
-      );
-      const openTickers = new Set(Array.from(purchaseTickers).filter(ticker => !soldTickers.has(ticker)));
+      const openTickers = new Set(computeOpenTickers(fetchedTransactionData));
       const allPositionTickers = new Set([...Array.from(closedTickers), ...Array.from(openTickers)]);
       setClosedSelectedTickers(lookup.filter(a => allPositionTickers.has(a.ticker)).map(a => a.ticker));
       setIsConnected(true);
@@ -871,14 +920,7 @@ const PortfolioBacktester = () => {
 
     // 4. "If Not Sold" — what the shares would be worth today at current market price
     const totalShares = transactions.reduce((sum, t) => sum + t.sharesSold, 0);
-    let currentPrice = 0;
-    if (assetData && assetData.length > 0) {
-      // Walk backwards through price data to find the most recent price
-      for (let i = assetData.length - 1; i >= 0; i--) {
-        const p = Number(assetData[i][ticker]);
-        if (p && p > 0) { currentPrice = p; break; }
-      }
-    }
+    const currentPrice = getCurrentPrice(ticker);
     const ifNotSold = currentPrice * totalShares;
 
     // 5. Current Price vs Sold Price (weighted average sell price)
@@ -907,7 +949,7 @@ const PortfolioBacktester = () => {
    * - sellDots: array of {date, price} for red sell markers
    */
   const getClosedChartData = (ticker: string) => {
-    if (!assetData) return { chartData: [] as { date: string; price: number }[], buyDots: [] as { date: string; price: number }[], sellDots: [] as { date: string; price: number }[] };
+    if (!assetData) return { chartData: [] as { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number }[], buyDots: [] as { date: string; price: number }[], sellDots: [] as { date: string; price: number }[] };
 
     const transactions = getFilteredClosedTransactions(ticker);
 
@@ -1312,15 +1354,7 @@ const PortfolioBacktester = () => {
    * Returns tickers that are "open" — they have purchases in the transaction data
    * but NO "Proceeds from Sale" entries (i.e., no shares have been sold).
    */
-  const getOpenTickers = (): string[] => {
-    const purchaseTickers = new Set(
-      transactionData.filter(t => t.flow === 'Purchase of Asset').map(t => t.ticker)
-    );
-    const soldTickers = new Set(
-      transactionData.filter(t => t.flow === 'Proceeds from Sale').map(t => t.ticker)
-    );
-    return Array.from(purchaseTickers).filter(ticker => !soldTickers.has(ticker));
-  };
+  const getOpenTickers = (): string[] => computeOpenTickers(transactionData);
 
   /**
    * Returns assets that exist in BOTH the lookup table AND either closed or open positions.
@@ -1335,14 +1369,14 @@ const PortfolioBacktester = () => {
   /** Returns all purchase transaction rows for an open ticker, sorted by date. */
   const getOpenPurchases = (ticker: string): TransactionRow[] => {
     return transactionData
-      .filter(t => t.ticker === ticker && t.flow === 'Purchase of Asset')
+      .filter(t => t.ticker === ticker && t.flow === FLOW_PURCHASE)
       .sort((a, b) => a.date.localeCompare(b.date));
   };
 
   /** Returns all dividend transaction rows for a ticker, sorted by date. */
   const getOpenDividends = (ticker: string): TransactionRow[] => {
     return transactionData
-      .filter(t => t.ticker === ticker && t.flow === 'Dividend')
+      .filter(t => t.ticker === ticker && t.flow === FLOW_DIVIDEND)
       .sort((a, b) => a.date.localeCompare(b.date));
   };
 
@@ -8257,13 +8291,7 @@ const PortfolioBacktester = () => {
                 const buyDates = Array.from(new Set(filteredPurchases.map(t => t.date))).sort();
 
                 // PnL zero-crossing fraction for the gradient (same pattern as closed)
-                const pnlZeroFraction = (() => {
-                  if (capitalChartData.length === 0) return 0.5;
-                  const maxPnl = capitalChartData.reduce((max, d) => d.pnl > max ? d.pnl : max, 0);
-                  const minPnl = capitalChartData.reduce((min, d) => d.pnl < min ? d.pnl : min, 0);
-                  const range = maxPnl - minPnl;
-                  return range > 0 ? maxPnl / range : 0.5;
-                })();
+                const pnlZeroFraction = computePnlZeroFraction(capitalChartData);
 
                 // Graph Starts options: all data months up to first buy
                 const graphStartsOptions: string[] = (() => {
@@ -8312,18 +8340,8 @@ const PortfolioBacktester = () => {
                     })
                   : comparisonDataRaw;
 
-                // Merge comparison data into chart data
-                const mergedChartData: { date: string; price: number; avgBuyPrice?: number; compPrice?: number }[] = chartData.map(d => {
-                  const comp = comparisonData.find(c => c.date === d.date);
-                  return { ...d, compPrice: comp ? comp.normalizedPrice : undefined };
-                });
-                const baseDates = new Set(chartData.map(d => d.date));
-                comparisonData.forEach(c => {
-                  if (!baseDates.has(c.date)) {
-                    mergedChartData.push({ date: c.date, price: undefined as unknown as number, compPrice: c.normalizedPrice });
-                  }
-                });
-                mergedChartData.sort((a, b) => a.date.localeCompare(b.date));
+                // Merge comparison data into chart data (uses Map for O(N+M) instead of O(N*M))
+                const mergedChartData = mergeComparisonData(chartData, comparisonData);
 
                 // Comparison stats
                 let compGainBase: number | null = null;
@@ -8926,13 +8944,7 @@ const PortfolioBacktester = () => {
                 // Pre-compute the zero-crossing fraction for the PnL gradient once,
                 // rather than computing it twice inline within the SVG gradient defs.
                 // zeroFraction = how far down from the chart's top the y=0 line sits (0 = top, 1 = bottom).
-                const pnlZeroFraction = (() => {
-                  if (capitalChartData.length === 0) return 0.5;
-                  const maxPnl = capitalChartData.reduce((max, d) => d.pnl > max ? d.pnl : max, 0);
-                  const minPnl = capitalChartData.reduce((min, d) => d.pnl < min ? d.pnl : min, 0);
-                  const range = maxPnl - minPnl;
-                  return range > 0 ? maxPnl / range : 0.5;
-                })();
+                const pnlZeroFraction = computePnlZeroFraction(capitalChartData);
 
                 // Get sale dates from FILTERED transactions only (so dropdown matches checked rows)
                 const saleDates = Array.from(new Set(filteredTransactions.map(t => t.divDate))).sort();
@@ -8995,19 +9007,8 @@ const PortfolioBacktester = () => {
                     })
                   : comparisonDataRaw;
 
-                // Merge chart data with comparison data for the LineChart
-                const mergedChartData: { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number; compPrice?: number }[] = chartData.map(d => {
-                  const comp = comparisonData.find(c => c.date === d.date);
-                  return { ...d, compPrice: comp ? comp.normalizedPrice : undefined };
-                });
-                // Add any comparison data points that extend beyond the base asset
-                const baseDates = new Set(chartData.map(d => d.date));
-                comparisonData.forEach(c => {
-                  if (!baseDates.has(c.date)) {
-                    mergedChartData.push({ date: c.date, price: undefined as unknown as number, compPrice: c.normalizedPrice });
-                  }
-                });
-                mergedChartData.sort((a, b) => a.date.localeCompare(b.date));
+                // Merge chart data with comparison data for the LineChart (uses Map for O(N+M) instead of O(N*M))
+                const mergedChartData = mergeComparisonData(chartData, comparisonData);
 
                 // Compute comparison stats (how much each asset gained since the sale)
                 let compGainBase: number | null = null;
