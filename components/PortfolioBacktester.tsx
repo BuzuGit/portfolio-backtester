@@ -2666,6 +2666,75 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Calculates volatility (annualized standard deviation) and max drawdown for a single asset.
+   * Uses the same methodology as the Backtest Statistics section:
+   * - Volatility = standard deviation of monthly returns * sqrt(12) * 100 (annualized)
+   * - Max Drawdown = worst peak-to-trough decline in the price series
+   * - Longest DD Duration = consecutive months underwater (below peak)
+   *
+   * @param ticker - Asset ticker symbol
+   * @param startDate - Optional start date for filtered range (inclusive)
+   * @param endDate - Optional end date for filtered range (inclusive)
+   */
+  const calculateAssetStats = (ticker: string, startDate?: string, endDate?: string): {
+    volatility: number;
+    maxDrawdown: number;
+    longestDDMonths: number;
+  } | null => {
+    if (!assetData || assetData.length === 0) return null;
+
+    // Get monthly prices for this ticker within the date range
+    const prices: number[] = [];
+    for (const row of assetData) {
+      if (startDate && row.date < startDate) continue;
+      if (endDate && row.date > endDate) continue;
+      const price = Number(row[ticker]);
+      if (price && price > 0) {
+        prices.push(price);
+      }
+    }
+
+    // Need at least 2 data points to calculate returns
+    if (prices.length < 2) return null;
+
+    // Calculate monthly returns: (currentPrice - previousPrice) / previousPrice
+    const monthlyReturns: number[] = [];
+    for (let i = 1; i < prices.length; i++) {
+      monthlyReturns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
+    }
+
+    // Volatility: annualized standard deviation of monthly returns
+    // Same formula as Backtest Statistics: sqrt(variance) * sqrt(12) * 100
+    const mean = monthlyReturns.reduce((sum, r) => sum + r, 0) / monthlyReturns.length;
+    const variance = monthlyReturns.map(r => Math.pow(r - mean, 2)).reduce((sum, sq) => sum + sq, 0) / monthlyReturns.length;
+    const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;
+
+    // Maximum drawdown and longest drawdown duration in a single pass
+    // MaxDD: worst peak-to-trough decline (same as Backtest Statistics)
+    // Longest DD: consecutive months underwater below peak (same as Backtest Statistics)
+    let peak = prices[0];
+    let maxDrawdown = 0;
+    let longestDDMonths = 0;
+    let currentDDMonths = 0;
+    for (const price of prices) {
+      if (price >= peak) {
+        // At or above peak - update peak and check if this DD streak was longest
+        peak = price;
+        if (currentDDMonths > longestDDMonths) longestDDMonths = currentDDMonths;
+        currentDDMonths = 0;
+      } else {
+        // Below peak - track drawdown depth and count months underwater
+        const drawdown = ((price - peak) / peak) * 100;
+        if (drawdown < maxDrawdown) maxDrawdown = drawdown;
+        currentDDMonths++;
+      }
+    }
+    // Check if we ended while still underwater
+    if (currentDDMonths > longestDDMonths) longestDDMonths = currentDDMonths;
+    return { volatility, maxDrawdown, longestDDMonths };
+  };
+
+  /**
    * Calculates total return for a ticker over a specific number of years.
    * Returns: current price vs price X years ago.
    * Used for the 1Y, 2Y, 3Y, 4Y, 5Y columns in Assets Annual Returns.
@@ -5289,6 +5358,40 @@ const PortfolioBacktester = () => {
                     return calculateCAGR(priceRange.firstPrice, priceRange.lastPrice, priceRange.months);
                   }
 
+
+                  // Vol column - annualized volatility
+                  if (column === 'Vol') {
+                    const priceRange = getFilteredPriceRange(ticker);
+                    if (!priceRange) return -Infinity;
+                    const stats = calculateAssetStats(ticker, priceRange.firstDate, priceRange.lastDate);
+                    return stats ? stats.volatility : -Infinity;
+                  }
+
+                  // Sharpe column - risk-adjusted return (higher = better)
+                  if (column === 'Sharpe') {
+                    const priceRange = getFilteredPriceRange(ticker);
+                    if (!priceRange) return -Infinity;
+                    const cagr = calculateCAGR(priceRange.firstPrice, priceRange.lastPrice, priceRange.months);
+                    const stats = calculateAssetStats(ticker, priceRange.firstDate, priceRange.lastDate);
+                    if (!stats || stats.volatility <= 0) return -Infinity;
+                    return cagr / stats.volatility;
+                  }
+
+                  // MaxDD column - maximum drawdown (less negative = better)
+                  if (column === 'MaxDD') {
+                    const priceRange = getFilteredPriceRange(ticker);
+                    if (!priceRange) return -Infinity;
+                    const stats = calculateAssetStats(ticker, priceRange.firstDate, priceRange.lastDate);
+                    return stats ? stats.maxDrawdown : -Infinity;
+                  }
+
+                  // DDDur column - longest drawdown duration (shorter = better)
+                  if (column === 'DDDur') {
+                    const priceRange = getFilteredPriceRange(ticker);
+                    if (!priceRange) return -Infinity;
+                    const stats = calculateAssetStats(ticker, priceRange.firstDate, priceRange.lastDate);
+                    return stats ? -stats.longestDDMonths : -Infinity;
+                  }
                   // Current DD column (higher = better, so ATH = 0 is best)
                   if (column === 'CurrDD') {
                     const ddData = getAssetCurrentDrawdown(ticker);
@@ -5358,6 +5461,38 @@ const PortfolioBacktester = () => {
                           >
                             CAGR
                           </th>
+                          {/* Volatility column - annualized std dev of monthly returns */}
+                          <th
+                            className={getSortableHeaderClass('Vol', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[50px]')}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'Vol' ? '#bfdbfe' : '#e5e7eb' }}
+                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Vol' ? null : 'Vol')}
+                          >
+                            Vol
+                          </th>
+                          {/* Sharpe Ratio column - risk-adjusted return */}
+                          <th
+                            className={getSortableHeaderClass('Sharpe', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'Sharpe' ? '#bfdbfe' : '#e5e7eb' }}
+                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Sharpe' ? null : 'Sharpe')}
+                          >
+                            Sharpe
+                          </th>
+                          {/* Max Drawdown column - worst peak-to-trough decline */}
+                          <th
+                            className={getSortableHeaderClass('MaxDD', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'MaxDD' ? '#bfdbfe' : '#e5e7eb' }}
+                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'MaxDD' ? null : 'MaxDD')}
+                          >
+                            Max DD
+                          </th>
+                          {/* DD Duration column - longest drawdown duration */}
+                          <th
+                            className={getSortableHeaderClass('DDDur', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'DDDur' ? '#bfdbfe' : '#e5e7eb' }}
+                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'DDDur' ? null : 'DDDur')}
+                          >
+                            DD Dur
+                          </th>
                           {/* Current Drawdown column - distance from ATH */}
                           <th
                             className={getSortableHeaderClass('CurrDD', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
@@ -5418,12 +5553,16 @@ const PortfolioBacktester = () => {
                                 </td>
                               );
                             })}
-                            {/* Period and CAGR columns - uses filtered price range when years filter is active */}
+                            {/* Period, CAGR, Vol, Sharpe, MaxDD, DD Dur columns - uses filtered price range when years filter is active */}
                             {(() => {
                               const priceRange = getFilteredPriceRange(asset.ticker);
                               if (!priceRange) {
                                 return (
                                   <>
+                                    <td className="text-right py-2 px-2 text-gray-300">-</td>
+                                    <td className="text-right py-2 px-2 text-gray-300">-</td>
+                                    <td className="text-right py-2 px-2 text-gray-300">-</td>
+                                    <td className="text-right py-2 px-2 text-gray-300">-</td>
                                     <td className="text-right py-2 px-2 text-gray-300">-</td>
                                     <td className="text-right py-2 px-2 text-gray-300">-</td>
                                   </>
@@ -5437,6 +5576,12 @@ const PortfolioBacktester = () => {
                               // Tooltip for CAGR showing the calculation details
                               const cagrTooltip = `${priceRange.firstDate} ($${priceRange.firstPrice.toFixed(2)}) → ${priceRange.lastDate} ($${priceRange.lastPrice.toFixed(2)})`;
 
+                              // Calculate volatility and max drawdown (same methodology as Backtest Statistics)
+                              const stats = calculateAssetStats(asset.ticker, priceRange.firstDate, priceRange.lastDate);
+                              const volatility = stats ? stats.volatility : null;
+                              const sharpeRatio = (volatility !== null && volatility > 0) ? cagr / volatility : null;
+                              const maxDrawdown = stats ? stats.maxDrawdown : null;
+
                               return (
                                 <>
                                   <td className="text-right py-2 px-2 bg-gray-50 text-gray-600">
@@ -5447,6 +5592,22 @@ const PortfolioBacktester = () => {
                                     title={cagrTooltip}
                                   >
                                     {cagr.toFixed(1)}%
+                                  </td>
+                                  {/* Volatility cell */}
+                                  <td className="text-right py-2 px-2 bg-gray-50 text-gray-600">
+                                    {volatility !== null ? `${volatility.toFixed(1)}%` : '-'}
+                                  </td>
+                                  {/* Sharpe Ratio cell */}
+                                  <td className={`text-right py-2 px-2 ${sharpeRatio !== null && sharpeRatio >= 0.5 ? 'bg-green-50 text-green-700' : 'text-gray-600'}`}>
+                                    {sharpeRatio !== null ? sharpeRatio.toFixed(2) : '-'}
+                                  </td>
+                                  {/* Max Drawdown cell */}
+                                  <td className={`text-right py-2 px-2 ${maxDrawdown !== null ? 'bg-red-50 text-red-700' : 'text-gray-300'}`}>
+                                    {maxDrawdown !== null ? `${maxDrawdown.toFixed(1)}%` : '-'}
+                                  </td>
+                                  {/* DD Duration cell */}
+                                  <td className={`text-right py-2 px-2 ${stats && stats.longestDDMonths > 0 ? 'text-purple-700' : 'text-gray-300'}`}>
+                                    {stats ? formatPeriod(stats.longestDDMonths) : '-'}
                                   </td>
                                 </>
                               );
