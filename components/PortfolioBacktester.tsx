@@ -4438,32 +4438,26 @@ const PortfolioBacktester = () => {
       <div className="max-w-6xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-4 mb-4">
 
-          {/* Header */}
-          <h1 className="text-2xl font-bold text-gray-800 mb-4">Portfolio Backtester</h1>
-
-          {/* Data Status Section */}
-          <div className="mb-6 p-4 bg-blue-50 rounded-lg">
-            <h2 className="text-lg font-semibold text-gray-700 mb-3">Data</h2>
-            <div className="flex items-center gap-3 flex-wrap">
-              {/* Refresh Data Button */}
-              <button
-                onClick={loadDataFromSheet}
-                disabled={isLoading}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold flex items-center gap-2 disabled:opacity-50"
-              >
-                <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
-                {isLoading ? 'Loading...' : 'Refresh Data'}
-              </button>
+          {/* Data Status Section - compact single row */}
+          <div className="mb-4 px-4 py-2 bg-gray-300 rounded-lg flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold text-gray-700">Data</h2>
+              <span className={`text-sm ${
+                loadingMessage.includes('Loaded') ? 'text-green-600' :
+                loadingMessage.includes('Error') ? 'text-red-600' :
+                'text-gray-600'
+              }`}>
+                {loadingMessage || 'Ready'}
+              </span>
             </div>
-
-            {/* Status Message */}
-            <div className={`mt-3 text-sm ${
-              loadingMessage.includes('Loaded') ? 'text-green-600' :
-              loadingMessage.includes('Error') ? 'text-red-600' :
-              'text-gray-600'
-            }`}>
-              {loadingMessage || 'Ready'}
-            </div>
+            <button
+              onClick={loadDataFromSheet}
+              disabled={isLoading}
+              className="px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold flex items-center gap-2 disabled:opacity-50 text-sm"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              {isLoading ? 'Loading...' : 'Refresh Data'}
+            </button>
           </div>
 
           {/* View Toggle Buttons - Only show when data is loaded */}
@@ -5426,7 +5420,7 @@ const PortfolioBacktester = () => {
 
                 return (
                   <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="overflow-auto max-h-[65vh]">
+                    <div className="overflow-auto max-h-[95vh]">
                     <table className="w-full text-xs border-collapse">
                       <thead>
                         <tr className="border-b-2 border-gray-200">
