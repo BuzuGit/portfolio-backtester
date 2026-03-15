@@ -5425,7 +5425,7 @@ const PortfolioBacktester = () => {
                       <thead>
                         <tr className="border-b-2 border-gray-200">
                           {/* Asset Name column - sticky both top and left (corner cell, highest z-index) */}
-                          <th className="text-left py-2 px-2 sticky top-0 left-0 z-30 min-w-[150px]" style={{ backgroundColor: '#f3f4f6' }}>
+                          <th className="text-left py-2 px-2 sticky top-0 left-0 z-30 min-w-[150px]" style={{ backgroundColor: '#e5e7eb' }}>
                             Asset
                           </th>
                           {/* Year columns - oldest to newest, clickable for sorting (filtered by selected years) */}
@@ -5433,7 +5433,7 @@ const PortfolioBacktester = () => {
                             <th
                               key={year}
                               className={getSortableHeaderClass(year, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
-                              style={{ backgroundColor: annualReturnsSortColumn === year ? '#bfdbfe' : '#f3f4f6' }}
+                              style={{ backgroundColor: annualReturnsSortColumn === year ? '#bfdbfe' : '#e5e7eb' }}
                               onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === year ? null : year)}
                             >
                               {year}
@@ -5498,13 +5498,13 @@ const PortfolioBacktester = () => {
                           {/* Ticker column - placed after Curr DD */}
                           <th className="text-left py-2 px-2 sticky top-0 z-20" style={{ backgroundColor: '#e5e7eb' }}>Ticker</th>
                           {/* Empty separator column */}
-                          <th className="py-2 px-1 w-2 sticky top-0 z-20" style={{ backgroundColor: '#f3f4f6' }}></th>
+                          <th className="py-2 px-1 w-2 sticky top-0 z-20" style={{ backgroundColor: '#e5e7eb' }}></th>
                           {/* Period return columns (1Y-5Y) */}
                           {['1Y', '2Y', '3Y', '4Y', '5Y'].map(period => (
                             <th
                               key={period}
                               className={getSortableHeaderClass(period, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[50px]')}
-                              style={{ backgroundColor: annualReturnsSortColumn === period ? '#bfdbfe' : '#f3f4f6' }}
+                              style={{ backgroundColor: annualReturnsSortColumn === period ? '#bfdbfe' : '#e5e7eb' }}
                               onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === period ? null : period)}
                             >
                               {period}
@@ -5794,12 +5794,12 @@ const PortfolioBacktester = () => {
                         <table className="w-full text-xs">
                           <thead>
                             <tr className="border-b border-gray-200">
-                              <th className="py-1 px-1 bg-gray-50 w-24"></th>
-                              <th className="text-right py-1 px-2 bg-gray-50 w-16">{returnColumnHeader}</th>
-                              <th className="text-left py-1 px-2 bg-gray-50">Asset</th>
-                              <th className="text-left py-1 px-2 bg-gray-50 w-16">Ticker</th>
-                              <th className="text-center py-1 px-2 bg-gray-50 w-12">Ccy</th>
-                              <th className="text-right py-1 px-2 bg-gray-100 w-20">PLN Return</th>
+                              <th className="py-1 px-1 bg-gray-200 w-24"></th>
+                              <th className="text-right py-1 px-2 bg-gray-200 w-16">{returnColumnHeader}</th>
+                              <th className="text-left py-1 px-2 bg-gray-200">Asset</th>
+                              <th className="text-left py-1 px-2 bg-gray-200 w-16">Ticker</th>
+                              <th className="text-center py-1 px-2 bg-gray-200 w-12">Ccy</th>
+                              <th className="text-right py-1 px-2 bg-gray-200 w-20">PLN Return</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -6035,7 +6035,7 @@ const PortfolioBacktester = () => {
                             {/* Asset Name - sticky left column, sortable */}
                             <th
                               className="sticky left-0 z-10 text-left py-1 px-1 min-w-[160px] border-r border-gray-200 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'name' ? '#bfdbfe' : '#f9fafb' }}
+                              style={{ backgroundColor: monthlySortColumn === 'name' ? '#bfdbfe' : '#e5e7eb' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'name' ? null : 'name')}
                             >
                               Asset
@@ -6045,7 +6045,7 @@ const PortfolioBacktester = () => {
                               <th
                                 key={idx}
                                 className="text-right py-1 px-1 whitespace-nowrap cursor-pointer select-none"
-                                style={{ backgroundColor: monthlySortColumn === `month-${idx}` ? '#bfdbfe' : '#f9fafb' }}
+                                style={{ backgroundColor: monthlySortColumn === `month-${idx}` ? '#bfdbfe' : '#e5e7eb' }}
                                 onClick={() => setMonthlySortColumn(monthlySortColumn === `month-${idx}` ? null : `month-${idx}`)}
                               >
                                 {month}
@@ -6054,7 +6054,7 @@ const PortfolioBacktester = () => {
                             {/* 10m SMA column, sortable */}
                             <th
                               className="text-right py-1 px-1 whitespace-nowrap border-l border-gray-200 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'sma10' ? '#bfdbfe' : '#f3f4f6' }}
+                              style={{ backgroundColor: monthlySortColumn === 'sma10' ? '#bfdbfe' : '#e5e7eb' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'sma10' ? null : 'sma10')}
                             >
                               10mSMA
@@ -6062,7 +6062,7 @@ const PortfolioBacktester = () => {
                             {/* Signal column, sortable */}
                             <th
                               className="text-center py-1 px-1 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'signal' ? '#bfdbfe' : '#f3f4f6' }}
+                              style={{ backgroundColor: monthlySortColumn === 'signal' ? '#bfdbfe' : '#e5e7eb' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'signal' ? null : 'signal')}
                             >
                               Signal
@@ -6070,7 +6070,7 @@ const PortfolioBacktester = () => {
                             {/* Ticker column, sortable */}
                             <th
                               className="text-left py-1 px-1 border-l border-gray-200 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'ticker' ? '#bfdbfe' : '#f3f4f6' }}
+                              style={{ backgroundColor: monthlySortColumn === 'ticker' ? '#bfdbfe' : '#e5e7eb' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'ticker' ? null : 'ticker')}
                             >
                               Ticker
@@ -6078,7 +6078,7 @@ const PortfolioBacktester = () => {
                             {/* 12-month return column, sortable */}
                             <th
                               className="text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'ret12m' ? '#bfdbfe' : '#f3f4f6' }}
+                              style={{ backgroundColor: monthlySortColumn === 'ret12m' ? '#bfdbfe' : '#e5e7eb' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'ret12m' ? null : 'ret12m')}
                             >
                               12M Ret
@@ -6086,7 +6086,7 @@ const PortfolioBacktester = () => {
                             {/* 12-month drawdown column, sortable */}
                             <th
                               className="text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'dd12m' ? '#bfdbfe' : '#f3f4f6' }}
+                              style={{ backgroundColor: monthlySortColumn === 'dd12m' ? '#bfdbfe' : '#e5e7eb' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'dd12m' ? null : 'dd12m')}
                             >
                               12M DD
@@ -8227,10 +8227,26 @@ const PortfolioBacktester = () => {
                 // --- Build Open Positions summary data ---
                 const openTickers = getOpenTickers().filter(t => closedSelectedTickers.includes(t));
                 const today = new Date().toISOString().split('T')[0];
+                // Helper: find the FX rate for a given date by matching the closest assetData row
+                const getFxRateForDate = (fxTicker: string, dateStr: string): number => {
+                  if (!fxTicker || !assetData) return 1;
+                  // Find the last row whose date <= the transaction date (closest month-end before or on that date)
+                  let bestRow: AssetRow | null = null;
+                  for (const row of assetData) {
+                    if (row.date <= dateStr) bestRow = row;
+                    else break; // assetData is sorted by date
+                  }
+                  return bestRow ? getFxRate(bestRow, fxTicker) : 1;
+                };
+
+                // Latest FX rates from the most recent data row
+                const latestRow = assetData && assetData.length > 0 ? assetData[assetData.length - 1] : null;
+
                 const openSummaryData = openTickers.map(ticker => {
                   const purchases = getOpenPurchases(ticker);
                   const dividends = getOpenDividends(ticker);
                   const assetInfo = assetLookup.find(a => a.ticker === ticker);
+                  const fxTicker = assetInfo?.fx || '';
                   const totalShares = purchases.reduce((sum, t) => sum + t.qty, 0);
                   const totalInvested = purchases.reduce((sum, t) => sum + t.amount, 0);
                   const totalDividends = dividends.reduce((sum, t) => sum + t.amount, 0);
@@ -8246,10 +8262,22 @@ const PortfolioBacktester = () => {
                     { date: new Date(), amount: currentValue },
                   ].sort((a, b) => a.date.getTime() - b.date.getTime());
                   const xirr = calculateXIRR(cashFlows);
+
+                  // PLN conversions: convert each transaction at its month's FX rate
+                  const investedPLN = purchases.reduce((sum, t) => sum + t.amount * getFxRateForDate(fxTicker, t.date), 0);
+                  const dividendsPLN = dividends.reduce((sum, t) => sum + t.amount * getFxRateForDate(fxTicker, t.date), 0);
+                  const latestFxRate = latestRow ? getFxRate(latestRow, fxTicker) : 1;
+                  const currentValuePLN = currentValue * latestFxRate;
+                  const totalPnLPLN = currentValuePLN + dividendsPLN - investedPLN;
+
+                  const avgBuyPrice = totalShares > 0 ? (totalInvested - totalDividends) / totalShares : 0;
+
                   return {
                     ticker, name: assetInfo?.name || '', numTransactions: purchases.length,
                     firstBuyDate, lastValuation: today, timeHeldYears,
+                    avgBuyPrice, currentPrice, totalShares,
                     totalInvested, currentValue, totalPnL, totalPnLPct, xirr,
+                    investedPLN, currentValuePLN, totalPnLPLN,
                   };
                 });
 
@@ -8297,17 +8325,19 @@ const PortfolioBacktester = () => {
                           <table className="w-full text-xs border-collapse">
                             <thead>
                               <tr className="border-b border-gray-200">
-                                <th className="text-left py-2 px-2 bg-gray-50">Ticker</th>
-                                <th className="text-left py-2 px-2 bg-gray-50">Asset Name</th>
-                                <th className="text-right py-2 px-2 bg-gray-50"># Txns</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">First Buy</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Last Valuation</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Time Held</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Total Invested</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Current Value</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Total PnL</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">PnL %</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">XIRR</th>
+                                <th className="text-left py-2 px-2 bg-gray-200">Asset Name</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Time Held</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Avg Buy</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Price</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Qty</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Total Invested</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Current Value</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Total PnL</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">PnL %</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">XIRR</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Invested PLN</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Current PLN</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">PnL PLN</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -8327,12 +8357,11 @@ const PortfolioBacktester = () => {
                                     setOpenShowAvgBuy(true);
                                   }}
                                 >
-                                  <td className="py-2 px-2 font-medium text-blue-600">{row.ticker}</td>
                                   <td className="py-2 px-2 text-gray-700">{row.name}</td>
-                                  <td className="text-right py-2 px-2">{row.numTransactions}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.firstBuyDate}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.lastValuation}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.timeHeldYears.toFixed(1)}y</td>
+                                  <td className="text-right py-2 px-2 font-mono" title={`First Buy: ${row.firstBuyDate}\nLast Valuation: ${row.lastValuation}`}>{row.timeHeldYears.toFixed(1)}y</td>
+                                  <td className="text-right py-2 px-2 font-mono">{row.avgBuyPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  <td className="text-right py-2 px-2 font-mono">{row.currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  <td className="text-right py-2 px-2 font-mono">{row.totalShares.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">{row.totalInvested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">{row.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -8344,9 +8373,32 @@ const PortfolioBacktester = () => {
                                   <td className={`text-right py-2 px-2 font-mono font-medium ${(row.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.xirr !== null ? `${row.xirr >= 0 ? '+' : ''}${row.xirr.toFixed(1)}%` : 'N/A'}
                                   </td>
+                                  <td className="text-right py-2 px-2 font-mono">{row.investedPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  <td className="text-right py-2 px-2 font-mono">{row.currentValuePLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLPLN >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {row.totalPnLPLN >= 0 ? '+' : ''}{row.totalPnLPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
+                            <tfoot>
+                              {(() => {
+                                const totalInvestedPLN = openSummaryData.reduce((sum, r) => sum + r.investedPLN, 0);
+                                const totalCurrentPLN = openSummaryData.reduce((sum, r) => sum + r.currentValuePLN, 0);
+                                const totalPnLPLN = openSummaryData.reduce((sum, r) => sum + r.totalPnLPLN, 0);
+                                return (
+                                  <tr className="border-t-2 border-gray-300 font-semibold bg-gray-200">
+                                    <td className="py-2 px-2 text-gray-700 font-mono">{openSummaryData.length} Holdings</td>
+                                    <td colSpan={9}></td>
+                                    <td className="text-right py-2 px-2 font-mono">{totalInvestedPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                    <td className="text-right py-2 px-2 font-mono">{totalCurrentPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                    <td className={`text-right py-2 px-2 font-mono ${totalPnLPLN >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {totalPnLPLN >= 0 ? '+' : ''}{totalPnLPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    </td>
+                                  </tr>
+                                );
+                              })()}
+                            </tfoot>
                           </table>
                         </div>
                       </div>
@@ -8360,17 +8412,16 @@ const PortfolioBacktester = () => {
                           <table className="w-full text-xs border-collapse">
                             <thead>
                               <tr className="border-b border-gray-200">
-                                <th className="text-left py-2 px-2 bg-gray-50">Ticker</th>
-                                <th className="text-left py-2 px-2 bg-gray-50">Asset Name</th>
-                                <th className="text-right py-2 px-2 bg-gray-50"># Txns</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">First Buy</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Last Sale</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Time Held</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Total Invested</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Total Final Value</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">Total PnL</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">PnL %</th>
-                                <th className="text-right py-2 px-2 bg-gray-50">XIRR</th>
+                                <th className="text-left py-2 px-2 bg-gray-200">Asset Name</th>
+                                <th className="text-right py-2 px-2 bg-gray-200"># Txns</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">First Buy</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Last Sale</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Time Held</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Total Invested</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Total Final Value</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">Total PnL</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">PnL %</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">XIRR</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -8392,7 +8443,6 @@ const PortfolioBacktester = () => {
                                     setClosedShowAvgSell(true);
                                   }}
                                 >
-                                  <td className="py-2 px-2 font-medium text-blue-600">{row.ticker}</td>
                                   <td className="py-2 px-2 text-gray-700">{row.name}</td>
                                   <td className="text-right py-2 px-2">{row.numTransactions}</td>
                                   <td className="text-right py-2 px-2 font-mono">{row.firstBuyDate}</td>
