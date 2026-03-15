@@ -8329,11 +8329,11 @@ const PortfolioBacktester = () => {
                                 <th className="text-right py-2 px-2 bg-gray-200">Time Held</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Avg Buy</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Price</th>
+                                <th className="text-right py-2 px-2 bg-gray-200">PnL %</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Qty</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Total Invested</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Current Value</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Total PnL</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">PnL %</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">XIRR</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Invested PLN</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Current PLN</th>
@@ -8361,14 +8361,14 @@ const PortfolioBacktester = () => {
                                   <td className="text-right py-2 px-2 font-mono" title={`First Buy: ${row.firstBuyDate}\nLast Valuation: ${row.lastValuation}`}>{row.timeHeldYears.toFixed(1)}y</td>
                                   <td className="text-right py-2 px-2 font-mono">{row.avgBuyPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">{row.currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {row.totalPnLPct >= 0 ? '+' : ''}{row.totalPnLPct.toFixed(1)}%
+                                  </td>
                                   <td className="text-right py-2 px-2 font-mono">{row.totalShares.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">{row.totalInvested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">{row.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.totalPnL >= 0 ? '+' : ''}{row.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                  </td>
-                                  <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                    {row.totalPnLPct >= 0 ? '+' : ''}{row.totalPnLPct.toFixed(1)}%
                                   </td>
                                   <td className={`text-right py-2 px-2 font-mono font-medium ${(row.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.xirr !== null ? `${row.xirr >= 0 ? '+' : ''}${row.xirr.toFixed(1)}%` : 'N/A'}
