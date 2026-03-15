@@ -222,6 +222,7 @@ interface Portfolio {
   assets: PortfolioAsset[];    // List of assets and their weights
   color: string;               // Chart line color
   nameManuallyEdited: boolean; // Track if user changed the name
+  inflationAdj: string;        // CPI ticker for inflation adjustment (e.g., "CPIMPL") or empty for nominal
 }
 
 // Date range for backtesting
@@ -352,6 +353,16 @@ interface TrendMonthlyReturns {
 // e.g., "USDPLN" = multiply asset prices by USD/PLN exchange rate
 const FX_OPTIONS = ['', 'USDPLN', 'SGDPLN', 'CHFPLN', 'EURPLN'];
 
+// Available CPI tickers for inflation adjustment
+// When selected, portfolio values are divided by the CPI index (normalized to start date)
+// to show "real" purchasing power instead of nominal values
+const CPI_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: '-' },          // No inflation adjustment (nominal values)
+  { value: 'CPIMPL', label: 'PL' },   // Polish CPI
+  { value: 'CPIMUS', label: 'US' },   // US CPI
+  { value: 'CPIMSG', label: 'SG' },   // Singapore CPI
+];
+
 // Risk-free rate options for Trend Following calculations (0% to 5%, 0.5% increments)
 // Used to calculate Sharpe Ratio and cash returns when out of market
 const RISK_FREE_RATE_OPTIONS = [
@@ -402,7 +413,7 @@ const PortfolioBacktester = () => {
 
   // Portfolio configurations - start with one empty portfolio
   const [portfolios, setPortfolios] = useState<Portfolio[]>([
-    { id: 1, name: 'Portfolio 1', assets: [], color: '#000000', nameManuallyEdited: false }
+    { id: 1, name: 'Portfolio 1', assets: [], color: '#000000', nameManuallyEdited: false, inflationAdj: '' }
   ]);
 
   // Backtest parameters
@@ -1643,10 +1654,16 @@ const PortfolioBacktester = () => {
    * Generates a portfolio name from its assets.
    * e.g., [SPY 60%, BND 40%] -> "SPY60-BND40"
    */
-  const generatePortfolioName = (assets: PortfolioAsset[]): string => {
+  const generatePortfolioName = (assets: PortfolioAsset[], inflationAdj?: string): string => {
     const validAssets = assets.filter(a => a.asset && a.weight > 0);
     if (validAssets.length === 0) return 'Portfolio';
-    return validAssets.map(a => `${a.asset}${Math.round(a.weight)}`).join('-');
+    const baseName = validAssets.map(a => `${a.asset}${Math.round(a.weight)}`).join('-');
+    // Append "(Real)" suffix when inflation-adjusted to distinguish from nominal
+    if (inflationAdj) {
+      const cpiLabel = CPI_OPTIONS.find(o => o.value === inflationAdj)?.label || 'CPI';
+      return `${baseName} (Real ${cpiLabel})`;
+    }
+    return baseName;
   };
 
   /**
@@ -1671,7 +1688,8 @@ const PortfolioBacktester = () => {
       name: `Portfolio ${newId}`,
       assets: [],
       color: colors[portfolios.length % colors.length],
-      nameManuallyEdited: false
+      nameManuallyEdited: false,
+      inflationAdj: ''  // Default: no inflation adjustment (nominal values)
     }]);
   };
 
@@ -1697,7 +1715,7 @@ const PortfolioBacktester = () => {
           weight: isFirstAsset ? 100 : 0,
           fx: ''  // Default: no FX conversion
         }];
-        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets);
+        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets, p.inflationAdj);
         return { ...p, assets: newAssets, name: newName };
       }
       return p;
@@ -1736,7 +1754,7 @@ const PortfolioBacktester = () => {
    * Keeps the end date unchanged and calculates the new start date.
    * Finds the closest available date in the data if exact date doesn't exist.
    */
-  const setDatePreset = (preset: 'YTD' | '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | 'Max') => {
+  const setDatePreset = (preset: 'YTD' | '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | 'Max') => {
     if (!assetData || assetData.length === 0) return;
 
     if (preset === 'Max') {
@@ -1786,7 +1804,7 @@ const PortfolioBacktester = () => {
           newAssets = autoAdjustFirstAsset(newAssets);
         }
 
-        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets);
+        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets, p.inflationAdj);
         return { ...p, assets: newAssets, name: newName };
       }
       return p;
@@ -1806,7 +1824,7 @@ const PortfolioBacktester = () => {
           newAssets = autoAdjustFirstAsset(newAssets);
         }
 
-        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets);
+        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets, p.inflationAdj);
         return { ...p, assets: newAssets, name: newName };
       }
       return p;
@@ -1846,6 +1864,21 @@ const PortfolioBacktester = () => {
       row.date >= selectedDateRange.start && row.date <= selectedDateRange.end
     );
     if (filteredData.length < 2) return null;
+
+    // --- CPI Inflation Adjustment Setup ---
+    // When inflationAdj is set (e.g., "CPIMPL"), we divide portfolio values by the
+    // CPI index normalized to the start date. This converts nominal values to "real"
+    // (purchasing-power-adjusted) values.
+    // Example: if CPI went from 100 to 120 (+20% inflation), a $1M portfolio is really
+    // worth $1M / 1.20 = $833K in today's purchasing power.
+    const cpiTicker = portfolio.inflationAdj;
+    let baseCpi = 1;  // CPI at start date (used to normalize the index to 1.0)
+    if (cpiTicker) {
+      const startCpi = Number(filteredData[0][cpiTicker]);
+      if (startCpi && startCpi > 0) {
+        baseCpi = startCpi;
+      }
+    }
 
     // Target weights as decimals (e.g., 60% -> 0.6)
     const targetWeights: { [asset: string]: number } = {};
@@ -1894,33 +1927,44 @@ const PortfolioBacktester = () => {
         }
       }
 
-      // Calculate current portfolio value
+      // Calculate current portfolio value (nominal — before inflation adjustment)
       // Each asset's value = shares × price × FX rate (if applicable)
-      let portfolioValue = 0;
+      let nominalValue = 0;
       portfolio.assets.forEach(({ asset, fx }) => {
         const currentPrice = Number(row[asset]);
         const fxRate = getFxRate(row, fx);  // Get FX rate for this date
         const adjustedPrice = currentPrice * fxRate;  // Convert to PLN
         if (adjustedPrice && adjustedPrice > 0 && assetShares[asset]) {
-          portfolioValue += assetShares[asset] * adjustedPrice;
+          nominalValue += assetShares[asset] * adjustedPrice;
         }
       });
 
-      // Rebalance: adjust shares to restore target weights
-      if (shouldRebalance && portfolioValue > 0) {
+      // Rebalance uses NOMINAL value (we rebalance real shares, not inflation-adjusted ones)
+      if (shouldRebalance && nominalValue > 0) {
         portfolio.assets.forEach(({ asset, weight, fx }) => {
           const currentPrice = Number(row[asset]);
           const fxRate = getFxRate(row, fx);  // Get FX rate for rebalancing
           const adjustedPrice = currentPrice * fxRate;  // Convert to PLN
           if (adjustedPrice && adjustedPrice > 0) {
-            const targetAllocation = portfolioValue * (weight / 100);
+            const targetAllocation = nominalValue * (weight / 100);
             assetShares[asset] = targetAllocation / adjustedPrice;
           }
         });
         lastRebalanceDate = currentDate;
       }
 
-      // Track running maximum for drawdown calculation
+      // Apply CPI inflation adjustment if selected
+      // Divides nominal value by the CPI ratio (current CPI / start CPI)
+      // so the output shows purchasing power in "start-date dollars/PLN"
+      let portfolioValue = nominalValue;
+      if (cpiTicker) {
+        const currentCpi = Number(row[cpiTicker]);
+        if (currentCpi && currentCpi > 0) {
+          portfolioValue = nominalValue / (currentCpi / baseCpi);
+        }
+      }
+
+      // Track running maximum for drawdown calculation (uses adjusted value)
       if (portfolioValue > runningMax) {
         runningMax = portfolioValue;
       }
@@ -4561,12 +4605,12 @@ const PortfolioBacktester = () => {
           {isConnected && assetData && activeView === 'backtest' && (
             <>
               {/* Parameters Section */}
-              <div className="mb-6 p-4 bg-gray-50 rounded-lg">
-                <div className="flex justify-between items-center mb-3">
-                  <h2 className="text-lg font-semibold text-gray-700">Parameters</h2>
+              <div className="mb-6 p-3 bg-gray-50 rounded-lg">
+                <div className="flex justify-between items-center mb-2">
+                  <h2 className="text-sm font-semibold text-gray-700">Parameters</h2>
                   {/* Quick date range presets */}
                   <div className="flex gap-1">
-                    {(['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', 'Max'] as const).map(preset => (
+                    {(['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'] as const).map(preset => (
                       <button
                         key={preset}
                         onClick={() => setDatePreset(preset)}
@@ -4577,10 +4621,10 @@ const PortfolioBacktester = () => {
                     ))}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
                   {/* Start Date */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
                     <select
                       value={selectedDateRange.start}
                       onChange={(e) => setSelectedStartDate(e.target.value)}
@@ -4594,7 +4638,7 @@ const PortfolioBacktester = () => {
 
                   {/* End Date */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
                     <select
                       value={selectedDateRange.end}
                       onChange={(e) => setSelectedEndDate(e.target.value)}
@@ -4608,7 +4652,7 @@ const PortfolioBacktester = () => {
 
                   {/* Starting Capital */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Starting Capital ($)</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Capital ($)</label>
                     <input
                       type="number"
                       value={startingCapital}
@@ -4619,7 +4663,7 @@ const PortfolioBacktester = () => {
 
                   {/* Rebalance Frequency */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Rebalance</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Rebalance</label>
                     <select
                       value={rebalanceFreq}
                       onChange={(e) => setRebalanceFreq(e.target.value)}
@@ -4633,7 +4677,7 @@ const PortfolioBacktester = () => {
 
                   {/* Withdrawal Rate - annual % withdrawn from portfolio (e.g., for retirement spending) */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Withdrawal Rate (%)</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Withdrawal (%)</label>
                     <select
                       value={withdrawalRate}
                       onChange={(e) => setWithdrawalRate(e.target.value)}
@@ -4651,7 +4695,7 @@ const PortfolioBacktester = () => {
 
                   {/* Inflation Rate - compounds the withdrawal upward each year to maintain purchasing power */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Inflation (%)</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Inflation (%)</label>
                     <select
                       value={inflationRate}
                       onChange={(e) => setInflationRate(e.target.value)}
@@ -4763,9 +4807,35 @@ const PortfolioBacktester = () => {
                           + Add Asset
                         </button>
 
-                        {/* Weight Validation */}
-                        <div className={`mt-2 text-xs font-medium ${isValid ? 'text-green-600' : 'text-red-600'}`}>
-                          Total: {totalWeight.toFixed(0)}% {isValid ? '✓' : '(need 100%)'}
+                        {/* Weight Validation + Inflation Adjustment */}
+                        <div className="mt-2 flex items-center justify-between">
+                          <div className={`text-xs font-medium ${isValid ? 'text-green-600' : 'text-red-600'}`}>
+                            Total: {totalWeight.toFixed(0)}% {isValid ? '✓' : '(need 100%)'}
+                          </div>
+                          {/* CPI Inflation Adjustment selector — divides portfolio value by CPI index
+                              to show real purchasing power instead of nominal values */}
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500" title="Adjust portfolio values for inflation using CPI data">Infl Adj:</span>
+                            <select
+                              value={portfolio.inflationAdj}
+                              onChange={(e) => {
+                                const newInflAdj = e.target.value;
+                                setPortfolios(portfolios.map(p => {
+                                  if (p.id === portfolio.id) {
+                                    const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(p.assets, newInflAdj);
+                                    return { ...p, inflationAdj: newInflAdj, name: newName };
+                                  }
+                                  return p;
+                                }));
+                              }}
+                              className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                              title="Inflation adjustment: divides portfolio values by CPI to show real purchasing power"
+                            >
+                              {CPI_OPTIONS.map(opt => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
                       </div>
                     );
