@@ -212,7 +212,6 @@ function renderEdgeBubbles(
 interface PortfolioAsset {
   asset: string;   // Asset name (e.g., "SPY", "BND")
   weight: number;  // Percentage weight (e.g., 60 for 60%)
-  fx: string;      // FX ticker (e.g., "USDPLN") or empty for no conversion
 }
 
 // A complete portfolio configuration
@@ -223,6 +222,7 @@ interface Portfolio {
   color: string;               // Chart line color
   nameManuallyEdited: boolean; // Track if user changed the name
   inflationAdj: string;        // CPI ticker for inflation adjustment (e.g., "CPIMPL") or empty for nominal
+  baseCurrency: string;        // Target currency for all values ('' = no conversion, 'PLN', 'USD', 'SGD')
 }
 
 // Date range for backtesting
@@ -348,10 +348,26 @@ interface TrendMonthlyReturns {
 // MAIN COMPONENT
 // ============================================
 
-// Available FX conversion options for foreign currency assets
-// Empty string = no conversion (prices used as-is)
-// e.g., "USDPLN" = multiply asset prices by USD/PLN exchange rate
-const FX_OPTIONS = ['', 'USDPLN', 'SGDPLN', 'CHFPLN', 'EURPLN'];
+// Maps 3-letter currency code to the xxxPLN FX ticker in our data
+// PLN is the "hub" currency — all FX data is in xxxPLN format
+// To convert between any two currencies, we route through PLN
+const FX_TICKER_MAP: { [key: string]: string } = {
+  USD: 'USDPLN', SGD: 'SGDPLN', EUR: 'EURPLN', CHF: 'CHFPLN', PLN: ''
+};
+
+// Currency symbols for display formatting
+const CURRENCY_SYMBOLS: { [key: string]: string } = {
+  PLN: 'zl', USD: '$', SGD: 'S$', EUR: '€', CHF: 'CHF', '': '$'
+};
+
+// Portfolio base currency options
+// Empty = no conversion (assets stay in their native currencies)
+const CURRENCY_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: '-' },
+  { value: 'PLN', label: 'PLN' },
+  { value: 'USD', label: 'USD' },
+  { value: 'SGD', label: 'SGD' },
+];
 
 // Available CPI tickers for inflation adjustment
 // When selected, portfolio values are divided by the CPI index (normalized to start date)
@@ -413,14 +429,14 @@ const PortfolioBacktester = () => {
 
   // Portfolio configurations - start with one empty portfolio
   const [portfolios, setPortfolios] = useState<Portfolio[]>([
-    { id: 1, name: 'Portfolio 1', assets: [], color: '#000000', nameManuallyEdited: false, inflationAdj: '' }
+    { id: 1, name: 'Portfolio 1', assets: [], color: '#000000', nameManuallyEdited: false, inflationAdj: '', baseCurrency: '' }
   ]);
 
   // Backtest parameters
   const [startingCapital, setStartingCapital] = useState(1000000);      // How much $ to start with
   const [rebalanceFreq, setRebalanceFreq] = useState('yearly');         // How often to rebalance
   const [withdrawalRate, setWithdrawalRate] = useState('4');             // Annual withdrawal rate %
-  const [inflationRate, setInflationRate] = useState('2');               // Annual inflation rate % (compounds withdrawal upward each year)
+  const [inflationRate, setInflationRate] = useState('0');               // Annual inflation rate % (compounds withdrawal upward each year)
   const [dateRange, setDateRange] = useState<DateRange>({ start: '', end: '' });  // Full data range
   const [selectedStartDate, setSelectedStartDate] = useState('');       // User-selected start
   const [selectedEndDate, setSelectedEndDate] = useState('');           // User-selected end
@@ -522,6 +538,10 @@ const PortfolioBacktester = () => {
   const closedSelectAllRef = useRef<HTMLInputElement>(null);
   // Ref for click-outside detection on the Closed tab filter dropdowns
   const closedFilterRef = useRef<HTMLDivElement>(null);
+
+  // ---- Positions currency conversion ----
+  // Currency to convert all position values into (PLN default, '' = no conversion)
+  const [positionsCurrency, setPositionsCurrency] = useState<string>('PLN');
 
   // ---- Open Positions state ----
   // Raw transaction data from the "Data" sheet (purchases, dividends, sales for all assets)
@@ -1654,15 +1674,18 @@ const PortfolioBacktester = () => {
    * Generates a portfolio name from its assets.
    * e.g., [SPY 60%, BND 40%] -> "SPY60-BND40"
    */
-  const generatePortfolioName = (assets: PortfolioAsset[], inflationAdj?: string): string => {
+  const generatePortfolioName = (assets: PortfolioAsset[], inflationAdj?: string, baseCurrency?: string): string => {
     const validAssets = assets.filter(a => a.asset && a.weight > 0);
     if (validAssets.length === 0) return 'Portfolio';
     const baseName = validAssets.map(a => `${a.asset}${Math.round(a.weight)}`).join('-');
-    // Append "(Real)" suffix when inflation-adjusted to distinguish from nominal
+    // Build suffixes: currency (if set) and inflation adjustment (if set)
+    const suffixes: string[] = [];
+    if (baseCurrency) suffixes.push(baseCurrency);
     if (inflationAdj) {
       const cpiLabel = CPI_OPTIONS.find(o => o.value === inflationAdj)?.label || 'CPI';
-      return `${baseName} (Real ${cpiLabel})`;
+      suffixes.push(`Real ${cpiLabel}`);
     }
+    if (suffixes.length > 0) return `${baseName} (${suffixes.join(', ')})`;
     return baseName;
   };
 
@@ -1689,7 +1712,8 @@ const PortfolioBacktester = () => {
       assets: [],
       color: colors[portfolios.length % colors.length],
       nameManuallyEdited: false,
-      inflationAdj: ''  // Default: no inflation adjustment (nominal values)
+      inflationAdj: '',  // Default: no inflation adjustment (nominal values)
+      baseCurrency: ''   // Default: no currency conversion (assets stay in native currencies)
     }]);
   };
 
@@ -1713,9 +1737,8 @@ const PortfolioBacktester = () => {
         const newAssets = [...p.assets, {
           asset: firstAvailableAsset,
           weight: isFirstAsset ? 100 : 0,
-          fx: ''  // Default: no FX conversion
         }];
-        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets, p.inflationAdj);
+        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets, p.inflationAdj, p.baseCurrency);
         return { ...p, assets: newAssets, name: newName };
       }
       return p;
@@ -1747,6 +1770,43 @@ const PortfolioBacktester = () => {
     if (!fxTicker) return 1;  // No FX conversion needed
     const rate = Number(row[fxTicker]);
     return (rate && rate > 0) ? rate : 1;  // Default to 1 if rate not available
+  };
+
+  /**
+   * Looks up an asset's native currency from the lookup table.
+   * e.g., "CSPX" → "USD", "WIG20" → "PLN", "ES3" → "SGD"
+   */
+  const getAssetCurrency = (assetTicker: string): string => {
+    const entry = assetLookup.find(a => a.ticker === assetTicker);
+    return entry?.currency || 'PLN';  // Default to PLN if not found
+  };
+
+  /**
+   * Converts a value from one currency to another using PLN as the hub.
+   * All our FX data is in xxxPLN format (e.g., USDPLN = 4.0 means 1 USD = 4 PLN).
+   *
+   * To convert from Currency A to Currency B:
+   *   Step 1: value_PLN = value_A × A_PLN_rate (e.g., $100 × 4.0 = 400 PLN)
+   *   Step 2: value_B = value_PLN / B_PLN_rate (e.g., 400 PLN / 3.0 = 133 SGD)
+   *
+   * If toCurrency is empty (no conversion selected), returns 1 (no conversion).
+   */
+  const getConversionRate = (row: AssetRow, fromCurrency: string, toCurrency: string): number => {
+    // No conversion if target is empty or same as source
+    if (!toCurrency || fromCurrency === toCurrency) return 1;
+
+    // Step 1: rate from source currency to PLN (1 if already PLN)
+    const fromTicker = FX_TICKER_MAP[fromCurrency] || '';
+    const fromToPLN = fromCurrency === 'PLN' ? 1 : getFxRate(row, fromTicker);
+
+    // Step 2: rate from PLN to target currency (divide by target's xxxPLN rate)
+    const toTicker = FX_TICKER_MAP[toCurrency] || '';
+    const toPLN = toCurrency === 'PLN' ? 1 : getFxRate(row, toTicker);
+
+    // Guard against division by zero (missing FX data)
+    if (toPLN === 0) return fromToPLN;
+
+    return fromToPLN / toPLN;
   };
 
   /**
@@ -1793,7 +1853,7 @@ const PortfolioBacktester = () => {
   /**
    * Updates a specific field of an asset in a portfolio
    */
-  const updateAsset = (portfolioId: number, assetIndex: number, field: 'asset' | 'weight' | 'fx', value: string | number) => {
+  const updateAsset = (portfolioId: number, assetIndex: number, field: 'asset' | 'weight', value: string | number) => {
     setPortfolios(portfolios.map(p => {
       if (p.id === portfolioId) {
         let newAssets = [...p.assets];
@@ -1804,7 +1864,7 @@ const PortfolioBacktester = () => {
           newAssets = autoAdjustFirstAsset(newAssets);
         }
 
-        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets, p.inflationAdj);
+        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets, p.inflationAdj, p.baseCurrency);
         return { ...p, assets: newAssets, name: newName };
       }
       return p;
@@ -1824,7 +1884,7 @@ const PortfolioBacktester = () => {
           newAssets = autoAdjustFirstAsset(newAssets);
         }
 
-        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets, p.inflationAdj);
+        const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(newAssets, p.inflationAdj, p.baseCurrency);
         return { ...p, assets: newAssets, name: newName };
       }
       return p;
@@ -1888,12 +1948,13 @@ const PortfolioBacktester = () => {
 
     // Calculate initial shares for each asset
     // Shares = how many units of each asset we own
-    // When FX is selected, we convert the asset price to PLN using the FX rate
+    // Each asset's price is converted to the portfolio's base currency using cross-rate via PLN
     const assetShares: { [asset: string]: number } = {};
-    portfolio.assets.forEach(({ asset, weight, fx }) => {
+    portfolio.assets.forEach(({ asset, weight }) => {
       const initialPrice = Number(filteredData[0][asset]);
-      const fxRate = getFxRate(filteredData[0], fx);  // Get FX rate (1 if no FX)
-      const adjustedPrice = initialPrice * fxRate;    // Convert to PLN
+      const assetCcy = getAssetCurrency(asset);
+      const convRate = getConversionRate(filteredData[0], assetCcy, portfolio.baseCurrency);
+      const adjustedPrice = initialPrice * convRate;  // Convert to base currency
       if (adjustedPrice && adjustedPrice > 0) {
         const initialAllocation = startingCapital * (weight / 100);
         assetShares[asset] = initialAllocation / adjustedPrice;
@@ -1928,12 +1989,13 @@ const PortfolioBacktester = () => {
       }
 
       // Calculate current portfolio value (nominal — before inflation adjustment)
-      // Each asset's value = shares × price × FX rate (if applicable)
+      // Each asset's value = shares × price, converted to base currency
       let nominalValue = 0;
-      portfolio.assets.forEach(({ asset, fx }) => {
+      portfolio.assets.forEach(({ asset }) => {
         const currentPrice = Number(row[asset]);
-        const fxRate = getFxRate(row, fx);  // Get FX rate for this date
-        const adjustedPrice = currentPrice * fxRate;  // Convert to PLN
+        const assetCcy = getAssetCurrency(asset);
+        const convRate = getConversionRate(row, assetCcy, portfolio.baseCurrency);
+        const adjustedPrice = currentPrice * convRate;  // Convert to base currency
         if (adjustedPrice && adjustedPrice > 0 && assetShares[asset]) {
           nominalValue += assetShares[asset] * adjustedPrice;
         }
@@ -1941,10 +2003,11 @@ const PortfolioBacktester = () => {
 
       // Rebalance uses NOMINAL value (we rebalance real shares, not inflation-adjusted ones)
       if (shouldRebalance && nominalValue > 0) {
-        portfolio.assets.forEach(({ asset, weight, fx }) => {
+        portfolio.assets.forEach(({ asset, weight }) => {
           const currentPrice = Number(row[asset]);
-          const fxRate = getFxRate(row, fx);  // Get FX rate for rebalancing
-          const adjustedPrice = currentPrice * fxRate;  // Convert to PLN
+          const assetCcy = getAssetCurrency(asset);
+          const convRate = getConversionRate(row, assetCcy, portfolio.baseCurrency);
+          const adjustedPrice = currentPrice * convRate;  // Convert to base currency
           if (adjustedPrice && adjustedPrice > 0) {
             const targetAllocation = nominalValue * (weight / 100);
             assetShares[asset] = targetAllocation / adjustedPrice;
@@ -2128,10 +2191,11 @@ const PortfolioBacktester = () => {
 
     // Initial share allocation — identical logic to calculatePortfolioReturns
     const assetShares: { [asset: string]: number } = {};
-    portfolio.assets.forEach(({ asset, weight, fx }) => {
+    portfolio.assets.forEach(({ asset, weight }) => {
       const initialPrice = Number(filteredData[0][asset]);
-      const fxRate = getFxRate(filteredData[0], fx);
-      const adjustedPrice = initialPrice * fxRate;
+      const assetCcy = getAssetCurrency(asset);
+      const convRate = getConversionRate(filteredData[0], assetCcy, portfolio.baseCurrency);
+      const adjustedPrice = initialPrice * convRate;
       if (adjustedPrice && adjustedPrice > 0) {
         assetShares[asset] = (startingCapital * (weight / 100)) / adjustedPrice;
       } else {
@@ -2158,13 +2222,14 @@ const PortfolioBacktester = () => {
         else if (rebalanceFreq === 'yearly' && monthsSince >= 12) shouldRebalance = true;
       }
 
-      // Compute FX-adjusted prices and total portfolio value
+      // Compute currency-adjusted prices and total portfolio value
       const assetPrices: { [asset: string]: number } = {};
       let portfolioValue = 0;
-      portfolio.assets.forEach(({ asset, fx }) => {
+      portfolio.assets.forEach(({ asset }) => {
         const price = Number(row[asset]);
-        const fxRate = getFxRate(row, fx);
-        const adjustedPrice = price * fxRate;
+        const assetCcy = getAssetCurrency(asset);
+        const convRate = getConversionRate(row, assetCcy, portfolio.baseCurrency);
+        const adjustedPrice = price * convRate;
         assetPrices[asset] = adjustedPrice;
         if (adjustedPrice > 0 && assetShares[asset]) {
           portfolioValue += assetShares[asset] * adjustedPrice;
@@ -3402,10 +3467,7 @@ const PortfolioBacktester = () => {
   // PORTFOLIO TAB HELPER FUNCTIONS
   // ============================================
 
-  // Currency symbols for display (e.g., "3.96M zl" or "$1.2M")
-  const CURRENCY_SYMBOLS: { [key: string]: string } = {
-    PLN: 'zl', USD: '$', EUR: '€', CHF: 'CHF', SGD: 'S$'
-  };
+  // Use the module-level CURRENCY_SYMBOLS constant for display (e.g., "3.96M zl" or "$1.2M")
 
   /**
    * Converts a YearsRow's monetary values from PLN to the selected currency.
@@ -4497,7 +4559,7 @@ const PortfolioBacktester = () => {
             <button
               onClick={loadDataFromSheet}
               disabled={isLoading}
-              className="px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold flex items-center gap-2 disabled:opacity-50 text-sm"
+              className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold flex items-center gap-2 disabled:opacity-50 text-sm"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
               {isLoading ? 'Loading...' : 'Refresh Data'}
@@ -4767,19 +4829,6 @@ const PortfolioBacktester = () => {
                                   <option key={a} value={a}>{getAssetDisplayName(a)}</option>
                                 ))}
                               </select>
-                              {/* FX Selector - converts asset prices to PLN */}
-                              <select
-                                value={asset.fx}
-                                onChange={(e) => updateAsset(portfolio.id, idx, 'fx', e.target.value)}
-                                className="w-14 px-1 py-1 text-xs border border-gray-300 rounded shrink-0"
-                                title="Currency conversion to PLN"
-                              >
-                                <option value="">-</option>
-                                <option value="USDPLN">USD</option>
-                                <option value="SGDPLN">SGD</option>
-                                <option value="CHFPLN">CHF</option>
-                                <option value="EURPLN">EUR</option>
-                              </select>
                               {/* Weight Input */}
                               <input
                                 type="number"
@@ -4807,34 +4856,58 @@ const PortfolioBacktester = () => {
                           + Add Asset
                         </button>
 
-                        {/* Weight Validation + Inflation Adjustment */}
+                        {/* Weight Validation + Currency + Inflation Adjustment */}
                         <div className="mt-2 flex items-center justify-between">
                           <div className={`text-xs font-medium ${isValid ? 'text-green-600' : 'text-red-600'}`}>
                             Total: {totalWeight.toFixed(0)}% {isValid ? '✓' : '(need 100%)'}
                           </div>
-                          {/* CPI Inflation Adjustment selector — divides portfolio value by CPI index
-                              to show real purchasing power instead of nominal values */}
-                          <div className="flex items-center gap-1">
-                            <span className="text-xs text-gray-500" title="Adjust portfolio values for inflation using CPI data">Infl Adj:</span>
-                            <select
-                              value={portfolio.inflationAdj}
-                              onChange={(e) => {
-                                const newInflAdj = e.target.value;
-                                setPortfolios(portfolios.map(p => {
-                                  if (p.id === portfolio.id) {
-                                    const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(p.assets, newInflAdj);
-                                    return { ...p, inflationAdj: newInflAdj, name: newName };
-                                  }
-                                  return p;
-                                }));
-                              }}
-                              className="px-1 py-0.5 text-xs border border-gray-300 rounded"
-                              title="Inflation adjustment: divides portfolio values by CPI to show real purchasing power"
-                            >
-                              {CPI_OPTIONS.map(opt => (
-                                <option key={opt.value} value={opt.value}>{opt.label}</option>
-                              ))}
-                            </select>
+                          <div className="flex items-center gap-2">
+                            {/* Base Currency selector — converts all assets to the chosen currency */}
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-gray-500" title="Convert all asset values to this currency">Ccy:</span>
+                              <select
+                                value={portfolio.baseCurrency}
+                                onChange={(e) => {
+                                  const newCcy = e.target.value;
+                                  setPortfolios(portfolios.map(p => {
+                                    if (p.id === portfolio.id) {
+                                      const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(p.assets, p.inflationAdj, newCcy);
+                                      return { ...p, baseCurrency: newCcy, name: newName };
+                                    }
+                                    return p;
+                                  }));
+                                }}
+                                className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                                title="Base currency: converts all asset values to this currency"
+                              >
+                                {CURRENCY_OPTIONS.map(opt => (
+                                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                            {/* CPI Inflation Adjustment selector */}
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-gray-500" title="Adjust portfolio values for inflation using CPI data">Infl:</span>
+                              <select
+                                value={portfolio.inflationAdj}
+                                onChange={(e) => {
+                                  const newInflAdj = e.target.value;
+                                  setPortfolios(portfolios.map(p => {
+                                    if (p.id === portfolio.id) {
+                                      const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(p.assets, newInflAdj, p.baseCurrency);
+                                      return { ...p, inflationAdj: newInflAdj, name: newName };
+                                    }
+                                    return p;
+                                  }));
+                                }}
+                                className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                                title="Inflation adjustment: divides portfolio values by CPI to show real purchasing power"
+                              >
+                                {CPI_OPTIONS.map(opt => (
+                                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -4956,8 +5029,8 @@ const PortfolioBacktester = () => {
                       <th className="text-right py-2 px-2">Max DD</th>
                       <th className="text-right py-2 px-2">Longest DD</th>
                       <th className="text-right py-2 px-2">Curr DD</th>
-                      <th className="text-right py-2 px-2">End $</th>
-                      <th className="text-right py-2 px-2">End $ Post W</th>
+                      <th className="text-right py-2 px-2">End Val</th>
+                      <th className="text-right py-2 px-2">End Post W</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4973,13 +5046,13 @@ const PortfolioBacktester = () => {
                         <td className="text-right py-2 px-2 text-red-600">{result.stats.maxDrawdown}%</td>
                         <td className="text-right py-2 px-2 text-purple-700">{result.stats.longestDrawdown}</td>
                         <td className="text-right py-2 px-2 text-orange-600">{result.stats.currentDrawdown}%</td>
-                        <td className="text-right py-2 px-2 font-semibold">${parseFloat(result.stats.endingValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                        <td className="text-right py-2 px-2 font-semibold">{CURRENCY_SYMBOLS[result.portfolio.baseCurrency] || '$'}{parseFloat(result.stats.endingValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                         <td className="text-right py-2 px-2 font-semibold">
                           {(() => {
                             // Calculate ending value after inflation-adjusted withdrawals
                             const wData = calculateWithdrawalReturns(result.returns, parseFloat(withdrawalRate), parseFloat(inflationRate));
                             const endVal = wData.length > 0 ? wData[wData.length - 1].value : 0;
-                            return `$${endVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+                            return `${CURRENCY_SYMBOLS[result.portfolio.baseCurrency] || '$'}${endVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
                           })()}
                         </td>
                       </tr>
@@ -5123,6 +5196,8 @@ const PortfolioBacktester = () => {
                     parseFloat(withdrawalRate),
                     parseFloat(inflationRate)
                   );
+                  // Currency symbol for the selected portfolio ($ by default when no currency set)
+                  const wSym = CURRENCY_SYMBOLS[selectedResult.portfolio.baseCurrency] || '$';
 
                   if (details.length === 0) {
                     return <div className="text-center py-4 text-gray-500">Not enough data for withdrawal detail.</div>;
@@ -5133,26 +5208,26 @@ const PortfolioBacktester = () => {
                       <thead>
                         <tr className="border-b-2 border-gray-200">
                           <th className="text-right py-2 px-2">Year</th>
-                          <th className="text-right py-2 px-2">Starting Value ($)</th>
+                          <th className="text-right py-2 px-2">Start ({wSym})</th>
                           <th className="text-right py-2 px-2">Return (%)</th>
-                          <th className="text-right py-2 px-2">Pre-Withdrawal ($)</th>
+                          <th className="text-right py-2 px-2">Pre-W ({wSym})</th>
                           <th className="text-right py-2 px-2">Eff. W Rate (%)</th>
-                          <th className="text-right py-2 px-2">Withdrawal ($)</th>
-                          <th className="text-right py-2 px-2">End Value ($)</th>
+                          <th className="text-right py-2 px-2">Withdrawal ({wSym})</th>
+                          <th className="text-right py-2 px-2">End ({wSym})</th>
                         </tr>
                       </thead>
                       <tbody>
                         {details.map((row) => (
                           <tr key={row.year} className="border-b border-gray-100">
                             <td className="text-right py-2 px-2">{row.year}</td>
-                            <td className="text-right py-2 px-2">${row.startingValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                            <td className="text-right py-2 px-2">{wSym}{row.startingValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                             <td className={`text-right py-2 px-2 ${row.returnPct >= 0 ? 'text-green-700' : 'text-red-600'}`}>
                               {row.returnPct.toFixed(2)}%
                             </td>
-                            <td className="text-right py-2 px-2">${row.preWithdrawalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                            <td className="text-right py-2 px-2">{wSym}{row.preWithdrawalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                             <td className="text-right py-2 px-2">{row.effectiveRate.toFixed(2)}%</td>
-                            <td className="text-right py-2 px-2 text-red-600">${row.withdrawalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                            <td className="text-right py-2 px-2 font-semibold">${row.endValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                            <td className="text-right py-2 px-2 text-red-600">{wSym}{row.withdrawalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                            <td className="text-right py-2 px-2 font-semibold">{wSym}{row.endValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -5160,7 +5235,7 @@ const PortfolioBacktester = () => {
                         <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
                           <td className="text-right py-2 px-2" colSpan={5}>Total Withdrawn</td>
                           <td className="text-right py-2 px-2 text-red-600">
-                            ${details.reduce((sum, row) => sum + row.withdrawalAmount, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                            {wSym}{details.reduce((sum, row) => sum + row.withdrawalAmount, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                           </td>
                           <td className="text-right py-2 px-2"></td>
                         </tr>
@@ -5191,6 +5266,8 @@ const PortfolioBacktester = () => {
                   const selectedResult = backtestResults[selectedRebalancingPortfolio] || backtestResults[0];
                   const rebalancingRows = getRebalancingDetails(selectedResult);
                   const assets = selectedResult.portfolio.assets;
+                  // Currency symbol for this portfolio's rebalancing detail
+                  const rSym = CURRENCY_SYMBOLS[selectedResult.portfolio.baseCurrency] || '$';
 
                   if (rebalancingRows.length === 0) {
                     return <div className="text-center py-4 text-gray-500">Not enough data for rebalancing detail.</div>;
@@ -5211,7 +5288,7 @@ const PortfolioBacktester = () => {
                                 <th className="text-right py-2 px-2">{asset} Wt%</th>
                               </React.Fragment>
                             ))}
-                            <th className="text-right py-2 px-2">Portfolio Value</th>
+                            <th className="text-right py-2 px-2">Value ({rSym})</th>
                             <th className="text-right py-2 px-2">MoM %</th>
                           </tr>
                         </thead>
@@ -5241,7 +5318,7 @@ const PortfolioBacktester = () => {
                                 </React.Fragment>
                               ))}
                               <td className="text-right py-1 px-2 font-semibold">
-                                ${row.portfolioValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                {rSym}{row.portfolioValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                               </td>
                               <td className={`text-right py-1 px-2 ${row.momPct === null ? '' : row.momPct >= 0 ? 'text-green-700' : 'text-red-600'}`}>
                                 {row.momPct !== null ? row.momPct.toFixed(2) + '%' : '—'}
@@ -8279,6 +8356,21 @@ const PortfolioBacktester = () => {
                     </div>
                   );
                 })()}
+
+                {/* Currency conversion dropdown — converts all position values to chosen currency */}
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-gray-500" title="Convert all position values to this currency for comparison">Ccy:</span>
+                  <select
+                    value={positionsCurrency}
+                    onChange={(e) => setPositionsCurrency(e.target.value)}
+                    className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                    title="Target currency: converts invested/value/PnL columns to this currency"
+                  >
+                    {CURRENCY_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {/* --- SUMMARY VIEW (when no specific asset is drilled into) --- */}
@@ -8309,14 +8401,41 @@ const PortfolioBacktester = () => {
                   return bestRow ? getFxRate(bestRow, fxTicker) : 1;
                 };
 
+                // Helper: convert from an asset's native currency to the target positions currency
+                // Uses PLN as a hub: nativeValue → PLN (via native FX rate) → target (÷ target FX rate)
+                const getPositionConversionForDate = (nativeCurrency: string, dateStr: string): number => {
+                  if (!positionsCurrency || nativeCurrency === positionsCurrency) return 1;
+                  const nativeFxTicker = FX_TICKER_MAP[nativeCurrency] || '';
+                  const toPLN = nativeCurrency === 'PLN' ? 1 : getFxRateForDate(nativeFxTicker, dateStr);
+                  const targetFxTicker = FX_TICKER_MAP[positionsCurrency] || '';
+                  const targetToPLN = positionsCurrency === 'PLN' ? 1 : getFxRateForDate(targetFxTicker, dateStr);
+                  if (targetToPLN === 0) return toPLN;
+                  return toPLN / targetToPLN;
+                };
+
                 // Latest FX rates from the most recent data row
                 const latestRow = assetData && assetData.length > 0 ? assetData[assetData.length - 1] : null;
+
+                // Helper: conversion rate at latest date for current values
+                const getLatestConversion = (nativeCurrency: string): number => {
+                  if (!positionsCurrency || nativeCurrency === positionsCurrency) return 1;
+                  const nativeFxTicker = FX_TICKER_MAP[nativeCurrency] || '';
+                  const toPLN = nativeCurrency === 'PLN' ? 1 : (latestRow ? getFxRate(latestRow, nativeFxTicker) : 1);
+                  const targetFxTicker = FX_TICKER_MAP[positionsCurrency] || '';
+                  const targetToPLN = positionsCurrency === 'PLN' ? 1 : (latestRow ? getFxRate(latestRow, targetFxTicker) : 1);
+                  if (targetToPLN === 0) return toPLN;
+                  return toPLN / targetToPLN;
+                };
+
+                // Currency label for converted columns (e.g., "PLN", "USD", or hidden when empty)
+                const posCcySym = CURRENCY_SYMBOLS[positionsCurrency] || '';
+                const posCcyLabel = positionsCurrency || '';
 
                 const openSummaryData = openTickers.map(ticker => {
                   const purchases = getOpenPurchases(ticker);
                   const dividends = getOpenDividends(ticker);
                   const assetInfo = assetLookup.find(a => a.ticker === ticker);
-                  const fxTicker = assetInfo?.fx || '';
+                  const nativeCurrency = assetInfo?.currency || 'PLN';
                   const totalShares = purchases.reduce((sum, t) => sum + t.qty, 0);
                   const totalInvested = purchases.reduce((sum, t) => sum + t.amount, 0);
                   const totalDividends = dividends.reduce((sum, t) => sum + t.amount, 0);
@@ -8333,12 +8452,12 @@ const PortfolioBacktester = () => {
                   ].sort((a, b) => a.date.getTime() - b.date.getTime());
                   const xirr = calculateXIRR(cashFlows);
 
-                  // PLN conversions: convert each transaction at its month's FX rate
-                  const investedPLN = purchases.reduce((sum, t) => sum + t.amount * getFxRateForDate(fxTicker, t.date), 0);
-                  const dividendsPLN = dividends.reduce((sum, t) => sum + t.amount * getFxRateForDate(fxTicker, t.date), 0);
-                  const latestFxRate = latestRow ? getFxRate(latestRow, fxTicker) : 1;
-                  const currentValuePLN = currentValue * latestFxRate;
-                  const totalPnLPLN = currentValuePLN + dividendsPLN - investedPLN;
+                  // Convert to target currency: each transaction at its historical FX rate
+                  const investedConverted = purchases.reduce((sum, t) => sum + t.amount * getPositionConversionForDate(nativeCurrency, t.date), 0);
+                  const dividendsConverted = dividends.reduce((sum, t) => sum + t.amount * getPositionConversionForDate(nativeCurrency, t.date), 0);
+                  const latestConversion = getLatestConversion(nativeCurrency);
+                  const currentValueConverted = currentValue * latestConversion;
+                  const totalPnLConverted = currentValueConverted + dividendsConverted - investedConverted;
 
                   const avgBuyPrice = totalShares > 0 ? (totalInvested - totalDividends) / totalShares : 0;
 
@@ -8347,7 +8466,7 @@ const PortfolioBacktester = () => {
                     firstBuyDate, lastValuation: today, timeHeldYears,
                     avgBuyPrice, currentPrice, totalShares,
                     totalInvested, currentValue, totalPnL, totalPnLPct, xirr,
-                    investedPLN, currentValuePLN, totalPnLPLN,
+                    investedConverted, currentValueConverted, totalPnLConverted,
                   };
                 });
 
@@ -8405,9 +8524,9 @@ const PortfolioBacktester = () => {
                                 <th className="text-right py-2 px-2 bg-gray-200">Current Value</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Total PnL</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">XIRR</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Invested PLN</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Current PLN</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">PnL PLN</th>
+                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">Invested {posCcyLabel}</th>}
+                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">Current {posCcyLabel}</th>}
+                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">PnL {posCcyLabel}</th>}
                               </tr>
                             </thead>
                             <tbody>
@@ -8443,28 +8562,28 @@ const PortfolioBacktester = () => {
                                   <td className={`text-right py-2 px-2 font-mono font-medium ${(row.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.xirr !== null ? `${row.xirr >= 0 ? '+' : ''}${row.xirr.toFixed(1)}%` : 'N/A'}
                                   </td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.investedPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.currentValuePLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                  <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLPLN >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                    {row.totalPnLPLN >= 0 ? '+' : ''}{row.totalPnLPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                  </td>
+                                  {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{row.investedConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
+                                  {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{row.currentValueConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
+                                  {positionsCurrency && <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLConverted >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {row.totalPnLConverted >= 0 ? '+' : ''}{row.totalPnLConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                  </td>}
                                 </tr>
                               ))}
                             </tbody>
                             <tfoot>
                               {(() => {
-                                const totalInvestedPLN = openSummaryData.reduce((sum, r) => sum + r.investedPLN, 0);
-                                const totalCurrentPLN = openSummaryData.reduce((sum, r) => sum + r.currentValuePLN, 0);
-                                const totalPnLPLN = openSummaryData.reduce((sum, r) => sum + r.totalPnLPLN, 0);
+                                const totalInvestedCcy = openSummaryData.reduce((sum, r) => sum + r.investedConverted, 0);
+                                const totalCurrentCcy = openSummaryData.reduce((sum, r) => sum + r.currentValueConverted, 0);
+                                const totalPnLCcy = openSummaryData.reduce((sum, r) => sum + r.totalPnLConverted, 0);
                                 return (
                                   <tr className="border-t-2 border-gray-300 font-semibold bg-gray-200">
                                     <td className="py-2 px-2 text-gray-700 font-mono">{openSummaryData.length} Holdings</td>
                                     <td colSpan={9}></td>
-                                    <td className="text-right py-2 px-2 font-mono">{totalInvestedPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                    <td className="text-right py-2 px-2 font-mono">{totalCurrentPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                    <td className={`text-right py-2 px-2 font-mono ${totalPnLPLN >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                      {totalPnLPLN >= 0 ? '+' : ''}{totalPnLPLN.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    </td>
+                                    {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{totalInvestedCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
+                                    {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{totalCurrentCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
+                                    {positionsCurrency && <td className={`text-right py-2 px-2 font-mono ${totalPnLCcy >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {totalPnLCcy >= 0 ? '+' : ''}{totalPnLCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    </td>}
                                   </tr>
                                 );
                               })()}
