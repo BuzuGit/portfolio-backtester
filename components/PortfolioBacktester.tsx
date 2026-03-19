@@ -459,6 +459,8 @@ const PortfolioBacktester = () => {
   // Sort column for Assets Annual Returns table
   // Can be a year number, 'Period', 'CAGR', 'CurrDD', '1Y', '2Y', '3Y', '4Y', '5Y', or null (default order)
   const [annualReturnsSortColumn, setAnnualReturnsSortColumn] = useState<string | number | null>(null);
+  // Toggle between showing annual returns (%) or end-of-year prices in the Annual tab
+  const [annualViewMode, setAnnualViewMode] = useState<'returns' | 'prices'>('returns');
 
   // Best To Worst view mode: 'year' for annual returns, or a number (1-5) for period returns
   // When null or 'year', the year dropdown is used. When 1-5, shows period returns.
@@ -2590,6 +2592,11 @@ const PortfolioBacktester = () => {
 
     return result;
   };
+
+  // Memoized annual returns — only recalculated when assetData or assetLookup changes,
+  // NOT when toggling between Returns/Prices view or changing other UI state
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const memoizedAnnualReturns = useMemo(() => calculateAssetsAnnualReturns(), [assetData, assetLookup]);
 
   /**
    * Generates tooltip text for a specific asset/year cell.
@@ -5338,11 +5345,13 @@ const PortfolioBacktester = () => {
           {/* This table shows yearly returns for ALL assets in the lookup table */}
           {isConnected && assetData && activeView === 'annualReturns' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Annual Returns</h2>
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">
+                {annualViewMode === 'returns' ? 'Annual Returns' : 'Annual Prices'}
+              </h2>
 
               {(() => {
-                // Calculate annual returns once — used by both the Years dropdown and the table
-                const annualReturns = calculateAssetsAnnualReturns();
+                // Use memoized annual returns — avoids recalculating when toggling view mode
+                const annualReturns = memoizedAnnualReturns;
                 const years = getYearsWithData(annualReturns);
 
                 // Years dropdown state
@@ -5355,6 +5364,29 @@ const PortfolioBacktester = () => {
                   <>
                   {/* Filter controls for Assets, Asset Class, Currency, and Years */}
                   <AssetFilterControls>
+                    {/* Toggle buttons to switch between returns view and prices view */}
+                    <div className="flex gap-0">
+                      <button
+                        onClick={() => setAnnualViewMode('returns')}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-l-lg border transition-colors ${
+                          annualViewMode === 'returns'
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
+                        }`}
+                      >
+                        Returns
+                      </button>
+                      <button
+                        onClick={() => setAnnualViewMode('prices')}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-r-lg border border-l-0 transition-colors ${
+                          annualViewMode === 'prices'
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
+                        }`}
+                      >
+                        Prices
+                      </button>
+                    </div>
                     {/* Years filter dropdown - only shown on this tab */}
                     <div className="relative" ref={yearsDropdownRef}>
                       <button
@@ -5480,10 +5512,11 @@ const PortfolioBacktester = () => {
                 const getSortValue = (ticker: string, column: string | number | null): number => {
                   if (column === null) return 0;
 
-                  // Year columns (numeric)
+                  // Year columns (numeric) — sort by return or end-of-year price depending on view mode
                   if (typeof column === 'number') {
                     const data = annualReturns[ticker]?.[column];
-                    return data ? data.return : -Infinity;
+                    if (!data) return -Infinity;
+                    return annualViewMode === 'prices' ? data.endPrice : data.return;
                   }
 
                   // Period column - uses filtered price range when years filter is active
@@ -5661,13 +5694,27 @@ const PortfolioBacktester = () => {
                       </thead>
                       <tbody>
                         {/* One row per asset in the lookup table, sorted by selected column */}
-                        {sortedAssetLookup.map((asset, idx) => (
+                        {sortedAssetLookup.map((asset, idx) => {
+                          // For prices view: calculate min/max end-of-year prices for this asset's heatmap
+                          const validEndPrices = annualViewMode === 'prices'
+                            ? displayYears.map(y => annualReturns[asset.ticker]?.[y]?.endPrice).filter((p): p is number => p != null)
+                            : [];
+                          const minPrice = validEndPrices.length > 0 ? Math.min(...validEndPrices) : 0;
+                          const maxPrice = validEndPrices.length > 0 ? Math.max(...validEndPrices) : 0;
+
+                          // Helper to format dates for tooltips (defined once per row, not per cell)
+                          const fmtDate = (dateStr: string): string => {
+                            const date = new Date(dateStr);
+                            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                          };
+
+                          return (
                           <tr key={asset.ticker} className={`border-b border-gray-100 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
                             {/* Asset name - sticky left column with solid background so data doesn't bleed through */}
                             <td className="py-2 px-2 font-medium sticky left-0 z-10" style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f9fafb' }}>
                               {asset.name}
                             </td>
-                            {/* Annual return for each year (filtered by selected years) */}
+                            {/* Annual data for each year — returns (%) or end-of-year prices depending on view mode */}
                             {displayYears.map(year => {
                               const data = annualReturns[asset.ticker]?.[year];
 
@@ -5680,7 +5727,24 @@ const PortfolioBacktester = () => {
                                 );
                               }
 
-                              // Color based on positive/negative return
+                              if (annualViewMode === 'prices') {
+                                // Prices view: show end-of-year price with heatmap coloring (red→yellow→green)
+                                return (
+                                  <td
+                                    key={year}
+                                    className="text-right py-2 px-2 font-mono cursor-help"
+                                    style={{
+                                      backgroundColor: getHeatmapColor(data.endPrice, minPrice, maxPrice),
+                                      color: '#374151'
+                                    }}
+                                    title={`${year}: $${data.endPrice.toFixed(2)} (${fmtDate(data.endDate)})`}
+                                  >
+                                    {formatPrice(data.endPrice)}
+                                  </td>
+                                );
+                              }
+
+                              // Returns view: color based on positive/negative return
                               const bgColor = data.return >= 0 ? 'bg-green-50' : 'bg-red-50';
                               const textColor = data.return >= 0 ? 'text-green-700' : 'text-red-700';
 
@@ -5819,7 +5883,8 @@ const PortfolioBacktester = () => {
                               );
                             })}
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                     </div>
@@ -5831,15 +5896,26 @@ const PortfolioBacktester = () => {
                       </div>
                     )}
 
-                    {/* Legend/explanation */}
+                    {/* Legend/explanation — adapts to current view mode */}
                     <div className="mt-4 text-xs text-gray-500">
                       <p>Hover over any cell to see calculation details (start price, end price, dates).</p>
-                      <p className="mt-1">
-                        <span className="inline-block w-3 h-3 bg-green-50 border border-green-200 mr-1"></span>
-                        Positive return
-                        <span className="inline-block w-3 h-3 bg-red-50 border border-red-200 ml-3 mr-1"></span>
-                        Negative return
-                      </p>
+                      {annualViewMode === 'returns' ? (
+                        <p className="mt-1">
+                          <span className="inline-block w-3 h-3 bg-green-50 border border-green-200 mr-1"></span>
+                          Positive return
+                          <span className="inline-block w-3 h-3 bg-red-50 border border-red-200 ml-3 mr-1"></span>
+                          Negative return
+                        </p>
+                      ) : (
+                        <p className="mt-1">
+                          <span className="inline-block w-3 h-3 border border-gray-200 mr-1" style={{ backgroundColor: 'hsl(0, 80%, 85%)' }}></span>
+                          Lowest price
+                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: 'hsl(60, 80%, 85%)' }}></span>
+                          Mid
+                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: 'hsl(120, 80%, 85%)' }}></span>
+                          Highest price
+                        </p>
+                      )}
                     </div>
                   </div>
                 );
@@ -5856,8 +5932,8 @@ const PortfolioBacktester = () => {
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Best To Worst</h2>
 
               {(() => {
-                // Calculate annual returns for all assets
-                const annualReturns = calculateAssetsAnnualReturns();
+                // Use memoized annual returns
+                const annualReturns = memoizedAnnualReturns;
                 const years = getYearsWithData(annualReturns);
 
                 // If no lookup table or no data, show a message
@@ -5915,7 +5991,7 @@ const PortfolioBacktester = () => {
                           onClick={() => setBestToWorstMode(period)}
                           className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
                             bestToWorstMode === period
-                              ? 'bg-blue-500 text-white border-blue-500'
+                              ? 'bg-indigo-600 text-white border-indigo-600'
                               : 'bg-white border-gray-300 hover:bg-gray-100'
                           }`}
                         >
@@ -6068,7 +6144,7 @@ const PortfolioBacktester = () => {
                     onClick={() => setMonthlyViewMode('prices')}
                     className={`px-3 py-1.5 text-sm font-medium rounded-l-lg border transition-colors ${
                       monthlyViewMode === 'prices'
-                        ? 'bg-blue-500 text-white border-blue-500'
+                        ? 'bg-indigo-600 text-white border-indigo-600'
                         : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
                     }`}
                   >
@@ -6078,7 +6154,7 @@ const PortfolioBacktester = () => {
                     onClick={() => setMonthlyViewMode('returns')}
                     className={`px-3 py-1.5 text-sm font-medium rounded-r-lg border border-l-0 transition-colors ${
                       monthlyViewMode === 'returns'
-                        ? 'bg-blue-500 text-white border-blue-500'
+                        ? 'bg-indigo-600 text-white border-indigo-600'
                         : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
                     }`}
                   >
@@ -7009,7 +7085,7 @@ const PortfolioBacktester = () => {
                           onClick={() => setGraphsPeriod(value as typeof graphsPeriod)}
                           className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
                             graphsPeriod === value
-                              ? 'bg-blue-500 text-white border-blue-500'
+                              ? 'bg-indigo-600 text-white border-indigo-600'
                               : 'bg-white border-gray-300 hover:bg-gray-100'
                           }`}
                         >
