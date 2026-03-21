@@ -8711,16 +8711,14 @@ const PortfolioBacktester = () => {
                 // --- Build Open Positions summary data ---
                 const openTickers = getOpenTickers().filter(t => closedSelectedTickers.includes(t));
                 const today = new Date().toISOString().split('T')[0];
-                // Helper: find the FX rate for a given date by matching the closest assetData row
+                // Helper: find the FX rate for a given date by matching the same month's data row.
+                // Data is month-end, so a mid-month transaction (e.g., Jan 15) should use
+                // that month's rate (Jan 31), not the previous month's (Dec 31).
                 const getFxRateForDate = (fxTicker: string, dateStr: string): number => {
                   if (!fxTicker || !assetData) return 1;
-                  // Find the last row whose date <= the transaction date (closest month-end before or on that date)
-                  let bestRow: AssetRow | null = null;
-                  for (const row of assetData) {
-                    if (row.date <= dateStr) bestRow = row;
-                    else break; // assetData is sorted by date
-                  }
-                  return bestRow ? getFxRate(bestRow, fxTicker) : 1;
+                  // Find the first row whose date >= the transaction date (same month's month-end)
+                  const matchRow = assetData.find(row => row.date >= dateStr);
+                  return matchRow ? getFxRate(matchRow, fxTicker) : (assetData.length > 0 ? getFxRate(assetData[assetData.length - 1], fxTicker) : 1);
                 };
 
                 // Helper: convert from an asset's native currency to the target positions currency
