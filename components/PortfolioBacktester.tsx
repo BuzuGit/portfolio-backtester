@@ -722,8 +722,9 @@ const PortfolioBacktester = () => {
    */
   const getAvailableAssetsForDateRange = (): string[] => {
     const lookupTickers = assetLookup.map(l => l.ticker);
+    // Use lookup table order (not availableAssets order) so dropdown matches the sheet
     return lookupTickers.length > 0
-      ? availableAssets.filter(asset => lookupTickers.includes(asset))
+      ? lookupTickers.filter(ticker => availableAssets.includes(ticker))
       : availableAssets;
   };
 
