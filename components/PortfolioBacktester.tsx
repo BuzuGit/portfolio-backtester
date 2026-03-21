@@ -8610,7 +8610,7 @@ const PortfolioBacktester = () => {
                                 <th className="text-right py-2 px-2 bg-gray-200">Current Value</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Total PnL</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">XIRR</th>
-                                <th className="text-right py-2 px-2 bg-gray-200" style={{ minWidth: 110 }}>Weight</th>
+                                <th className="text-right py-2 px-2 bg-gray-200" style={{ width: 70 }}>Weight</th>
                                 {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">Invested {posCcyLabel}</th>}
                                 {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">Current {posCcyLabel}</th>}
                                 {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">PnL {posCcyLabel}</th>}
