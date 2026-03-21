@@ -8538,13 +8538,20 @@ const PortfolioBacktester = () => {
                   const avgBuyPrice = totalShares > 0 ? (totalInvested - totalDividends) / totalShares : 0;
 
                   return {
-                    ticker, name: assetInfo?.name || '', numTransactions: purchases.length,
+                    ticker, name: assetInfo?.name || '', assetClass: assetInfo?.assetClass || '',
+                    numTransactions: purchases.length,
                     firstBuyDate, lastValuation: today, timeHeldYears,
                     avgBuyPrice, currentPrice, totalShares,
                     totalInvested, currentValue, totalPnL, totalPnLPct, xirr,
                     investedConverted, currentValueConverted, totalPnLConverted,
                   };
                 });
+
+                // Sort open positions by asset class: Fixed Income → Crypto → Alternatives → Equities
+                const assetClassOrder: Record<string, number> = {
+                  'Fixed Income': 0, 'Crypto': 1, 'Alternatives': 2, 'Equities': 3,
+                };
+                openSummaryData.sort((a, b) => (assetClassOrder[a.assetClass] ?? 99) - (assetClassOrder[b.assetClass] ?? 99));
 
                 // --- Compute portfolio weights for open positions ---
                 // Weight = each position's current value / total portfolio value (uses converted currency when available)
