@@ -735,6 +735,7 @@ const PortfolioBacktester = () => {
    */
   const getAssetFirstAvailableDate = (ticker: string): string | null => {
     if (!assetData || !ticker) return null;
+    // assetData is sorted chronologically, so the first match is the earliest date
     for (const row of assetData) {
       if (row[ticker] && Number(row[ticker]) > 0) return row.date;
     }
