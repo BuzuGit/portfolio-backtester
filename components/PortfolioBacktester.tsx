@@ -8257,6 +8257,171 @@ const PortfolioBacktester = () => {
                     );
                   })()}
 
+                  {/* === Portfolio Statistics Section === */}
+                  {(() => {
+                    if (!assetData || assetData.length === 0) return null;
+
+                    // Define the 3 portfolio tickers and their matching CPI tickers
+                    const portfolioStats = [
+                      { ticker: 'Prtf PLN', label: 'Portfolio PLN', cpiTicker: 'CPIMPL' },
+                      { ticker: 'Prtf USD', label: 'Portfolio USD', cpiTicker: 'CPIMUS' },
+                      { ticker: 'Prtf SGD', label: 'Portfolio SGD', cpiTicker: 'CPIMSG' },
+                    ];
+
+                    // Find the latest first-available date among the 3 portfolio tickers
+                    // so all rows use the same period and are directly comparable
+                    let latestStart = '';
+                    for (const ps of portfolioStats) {
+                      const firstDate = getAssetFirstAvailableDate(ps.ticker);
+                      if (firstDate && firstDate > latestStart) latestStart = firstDate;
+                    }
+                    if (!latestStart) return null;
+
+                    // Filter assetData to rows from the common start date onward
+                    const filteredRows = assetData.filter(row => row.date >= latestStart);
+                    if (filteredRows.length < 2) return null;
+
+                    // Calculate statistics for each portfolio ticker
+                    const statsRows = portfolioStats.map(ps => {
+                      // Build price series (only rows where this ticker has data)
+                      const prices: { date: string; value: number }[] = [];
+                      for (const row of filteredRows) {
+                        const price = Number(row[ps.ticker]);
+                        if (price && price > 0) prices.push({ date: row.date, value: price });
+                      }
+                      if (prices.length < 2) return null;
+
+                      const startValue = prices[0].value;
+                      const endValue = prices[prices.length - 1].value;
+
+                      // Total Return %
+                      const totalReturn = ((endValue - startValue) / startValue) * 100;
+
+                      // Time period in years
+                      const startDate = new Date(prices[0].date);
+                      const endDate = new Date(prices[prices.length - 1].date);
+                      const years = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+
+                      // CAGR
+                      const cagr = years > 0 ? (Math.pow(endValue / startValue, 1 / years) - 1) * 100 : 0;
+
+                      // Periodic returns for volatility (monthly)
+                      const periodicReturns: number[] = [];
+                      for (let i = 1; i < prices.length; i++) {
+                        periodicReturns.push((prices[i].value - prices[i - 1].value) / prices[i - 1].value);
+                      }
+                      const mean = periodicReturns.reduce((sum, r) => sum + r, 0) / periodicReturns.length;
+                      const variance = periodicReturns.map(r => Math.pow(r - mean, 2)).reduce((sum, sq) => sum + sq, 0) / periodicReturns.length;
+                      const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;
+
+                      // Sharpe (simplified, 0% risk-free rate)
+                      const sharpe = volatility > 0 ? cagr / volatility : 0;
+
+                      // Drawdown series
+                      let peak = prices[0].value;
+                      const drawdowns: number[] = [];
+                      for (const p of prices) {
+                        if (p.value > peak) peak = p.value;
+                        drawdowns.push(((p.value - peak) / peak) * 100);
+                      }
+                      const maxDD = Math.min(...drawdowns);
+
+                      // Longest drawdown (consecutive months underwater)
+                      let longestDDMonths = 0;
+                      let currentDDMonths = 0;
+                      for (const dd of drawdowns) {
+                        if (dd < 0) { currentDDMonths++; }
+                        else {
+                          if (currentDDMonths > longestDDMonths) longestDDMonths = currentDDMonths;
+                          currentDDMonths = 0;
+                        }
+                      }
+                      if (currentDDMonths > longestDDMonths) longestDDMonths = currentDDMonths;
+
+                      // Current drawdown
+                      const currDD = drawdowns[drawdowns.length - 1];
+
+                      // CPI Inflation: total return and CAGR over the same period
+                      let cumInflation = 0;
+                      let annInflation = 0;
+                      const startCpi = Number(filteredRows[0][ps.cpiTicker]);
+                      const endCpi = Number(filteredRows[filteredRows.length - 1][ps.cpiTicker]);
+                      if (startCpi > 0 && endCpi > 0) {
+                        cumInflation = ((endCpi - startCpi) / startCpi) * 100;
+                        annInflation = years > 0 ? (Math.pow(endCpi / startCpi, 1 / years) - 1) * 100 : 0;
+                      }
+
+                      // Real CAGR: nominal CAGR adjusted for inflation
+                      // Formula: (1 + nominalCAGR) / (1 + inflationCAGR) - 1
+                      const realCagr = annInflation !== 0
+                        ? (((1 + cagr / 100) / (1 + annInflation / 100)) - 1) * 100
+                        : cagr;
+
+                      return {
+                        label: ps.label,
+                        totalReturn: totalReturn.toFixed(2),
+                        cumInflation: cumInflation.toFixed(2),
+                        cagr: cagr.toFixed(2),
+                        annInflation: annInflation.toFixed(2),
+                        realCagr: realCagr.toFixed(2),
+                        volatility: volatility.toFixed(2),
+                        sharpe: sharpe.toFixed(2),
+                        maxDD: maxDD.toFixed(2),
+                        longestDD: formatPeriod(longestDDMonths),
+                        currDD: currDD.toFixed(2),
+                      };
+                    }).filter(Boolean);
+
+                    if (statsRows.length === 0) return null;
+
+                    // Period label for the heading
+                    const periodStart = filteredRows[0].date;
+                    const periodEnd = filteredRows[filteredRows.length - 1].date;
+
+                    return (
+                      <div className="bg-white p-4 rounded-lg shadow mb-4 overflow-x-auto">
+                        <h3 className="text-md font-semibold text-gray-700 mb-2">
+                          Statistics
+                          <span className="text-xs font-normal text-gray-400 ml-2">({periodStart} — {periodEnd})</span>
+                        </h3>
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b-2 border-gray-200">
+                              <th className="text-left py-2 px-2">Portfolio</th>
+                              <th className="text-right py-2 px-2">Return</th>
+                              <th className="text-right py-2 px-2">Cum Inflation</th>
+                              <th className="text-right py-2 px-2">CAGR</th>
+                              <th className="text-right py-2 px-2">Ann. Inflation</th>
+                              <th className="text-right py-2 px-2">Real CAGR</th>
+                              <th className="text-right py-2 px-2">Vol</th>
+                              <th className="text-right py-2 px-2">Sharpe</th>
+                              <th className="text-right py-2 px-2">Max DD</th>
+                              <th className="text-right py-2 px-2">Longest DD</th>
+                              <th className="text-right py-2 px-2">Curr DD</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {statsRows.map((row: any, idx: number) => (
+                              <tr key={idx} className="border-b border-gray-100">
+                                <td className="py-2 px-2 font-medium text-gray-700">{row.label}</td>
+                                <td className={`text-right py-2 px-2 ${Number(row.totalReturn) >= 0 ? 'text-green-600' : 'text-red-600'}`}>{row.totalReturn}%</td>
+                                <td className="text-right py-2 px-2 text-amber-600">{row.cumInflation}%</td>
+                                <td className={`text-right py-2 px-2 ${Number(row.cagr) >= 0 ? 'text-green-600' : 'text-red-600'}`}>{row.cagr}%</td>
+                                <td className="text-right py-2 px-2 text-amber-600">{row.annInflation}%</td>
+                                <td className={`text-right py-2 px-2 ${Number(row.realCagr) >= 0 ? 'text-green-600' : 'text-red-600'}`}>{row.realCagr}%</td>
+                                <td className="text-right py-2 px-2">{row.volatility}%</td>
+                                <td className="text-right py-2 px-2">{row.sharpe}</td>
+                                <td className="text-right py-2 px-2 text-red-600">{row.maxDD}%</td>
+                                <td className="text-right py-2 px-2 text-purple-700">{row.longestDD}</td>
+                                <td className="text-right py-2 px-2 text-orange-600">{row.currDD}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+
                   {/* Currency filter dropdown — controls which bars appear in Charts 3 & 4 */}
                   <div className="mb-4 relative inline-block">
                     <button
