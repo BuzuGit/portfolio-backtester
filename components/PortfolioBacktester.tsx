@@ -715,35 +715,86 @@ const PortfolioBacktester = () => {
    * 2. Have data at the selected start date
    * This prevents users from selecting assets that aren't in the lookup or didn't exist yet.
    */
+  /**
+   * Returns ALL assets from the lookup table, regardless of date range.
+   * Assets are no longer filtered by date — instead, the start date auto-adjusts
+   * to the shortest history among selected portfolio assets.
+   */
   const getAvailableAssetsForDateRange = (): string[] => {
-    // First, get the list of tickers from the lookup table
     const lookupTickers = assetLookup.map(l => l.ticker);
-
-    // If no lookup table, fall back to all assets (backwards compatibility)
-    const baseAssets = lookupTickers.length > 0
+    return lookupTickers.length > 0
       ? availableAssets.filter(asset => lookupTickers.includes(asset))
       : availableAssets;
-
-    if (!assetData || !selectedDateRange.start) return baseAssets;
-
-    // Find the index of our start date in the data
-    const startIndex = assetData.findIndex(row => row.date === selectedDateRange.start);
-    if (startIndex === -1) return baseAssets;
-
-    // Filter to assets that have data at or near the start date
-    return baseAssets.filter(asset => {
-      const hasDataAtStart = assetData[startIndex][asset] && Number(assetData[startIndex][asset]) > 0;
-      if (hasDataAtStart) return true;
-
-      // Also check a few rows before (in case data starts slightly earlier)
-      for (let i = Math.max(0, startIndex - 5); i < startIndex; i++) {
-        if (assetData[i][asset] && Number(assetData[i][asset]) > 0) return true;
-      }
-      return false;
-    });
   };
 
   const availableAssetsFiltered = getAvailableAssetsForDateRange();
+
+  /**
+   * Finds the first date where an asset has valid (non-zero) price data.
+   * Used to determine the earliest possible start date for a portfolio containing this asset.
+   */
+  const getAssetFirstAvailableDate = (ticker: string): string | null => {
+    if (!assetData || !ticker) return null;
+    for (const row of assetData) {
+      if (row[ticker] && Number(row[ticker]) > 0) return row.date;
+    }
+    return null;
+  };
+
+  /**
+   * Looks at ALL assets selected across ALL portfolios and finds the one with
+   * the shortest history (latest first-available date). Returns the limiting
+   * asset's name and its first date, so we can auto-set the start date and
+   * show which asset is the bottleneck.
+   */
+  const getLimitingAsset = (): { date: string; assetName: string } | null => {
+    if (!assetData || assetData.length === 0) return null;
+
+    let latestFirstDate = '';
+    let limitingTicker = '';
+
+    // Check every asset in every portfolio
+    for (const portfolio of portfolios) {
+      for (const pa of portfolio.assets) {
+        if (!pa.asset) continue;
+        const firstDate = getAssetFirstAvailableDate(pa.asset);
+        if (firstDate && firstDate > latestFirstDate) {
+          latestFirstDate = firstDate;
+          limitingTicker = pa.asset;
+        }
+      }
+    }
+
+    if (!limitingTicker) return null;
+
+    const assetInfo = assetLookup.find(a => a.ticker === limitingTicker);
+    return { date: latestFirstDate, assetName: assetInfo?.name || limitingTicker };
+  };
+
+  /**
+   * Auto-adjusts the start date to match the shortest history among all
+   * selected portfolio assets. Called whenever assets are added/changed/removed.
+   */
+  const autoAdjustStartDate = (updatedPortfolios: Portfolio[]) => {
+    if (!assetData || assetData.length === 0) return;
+
+    let latestFirstDate = '';
+
+    for (const portfolio of updatedPortfolios) {
+      for (const pa of portfolio.assets) {
+        if (!pa.asset) continue;
+        const firstDate = getAssetFirstAvailableDate(pa.asset);
+        if (firstDate && firstDate > latestFirstDate) {
+          latestFirstDate = firstDate;
+        }
+      }
+    }
+
+    // If we found a limiting date, update the start date
+    if (latestFirstDate) {
+      setSelectedStartDate(latestFirstDate);
+    }
+  };
 
   /**
    * Gets the friendly display name for a ticker from the lookup table.
@@ -1723,7 +1774,9 @@ const PortfolioBacktester = () => {
    * Removes a portfolio by ID
    */
   const removePortfolio = (id: number) => {
-    setPortfolios(portfolios.filter(p => p.id !== id));
+    const updatedPortfolios = portfolios.filter(p => p.id !== id);
+    setPortfolios(updatedPortfolios);
+    autoAdjustStartDate(updatedPortfolios);
   };
 
   /**
@@ -1732,7 +1785,7 @@ const PortfolioBacktester = () => {
   const addAssetToPortfolio = (portfolioId: number) => {
     const firstAvailableAsset = availableAssetsFiltered[0] || '';
 
-    setPortfolios(portfolios.map(p => {
+    const updatedPortfolios = portfolios.map(p => {
       if (p.id === portfolioId) {
         // First asset starts at 100%, subsequent assets start at 0%
         const isFirstAsset = p.assets.length === 0;
@@ -1744,7 +1797,9 @@ const PortfolioBacktester = () => {
         return { ...p, assets: newAssets, name: newName };
       }
       return p;
-    }));
+    });
+    setPortfolios(updatedPortfolios);
+    autoAdjustStartDate(updatedPortfolios);
   };
 
   /**
@@ -1820,8 +1875,9 @@ const PortfolioBacktester = () => {
     if (!assetData || assetData.length === 0) return;
 
     if (preset === 'Max') {
-      // Use the very first date in the dataset
-      setSelectedStartDate(assetData[0].date);
+      // Use the limiting asset's first date (shortest history), or the first date in the dataset
+      const limiting = getLimitingAsset();
+      setSelectedStartDate(limiting ? limiting.date : assetData[0].date);
       return;
     }
 
@@ -1839,7 +1895,13 @@ const PortfolioBacktester = () => {
     }
 
     // Find the closest available date in assetData (on or after target)
-    const targetDateStr = targetStartDate.toISOString().split('T')[0];
+    let targetDateStr = targetStartDate.toISOString().split('T')[0];
+
+    // Enforce: can't go earlier than the limiting asset's first available date
+    const limiting = getLimitingAsset();
+    if (limiting && targetDateStr < limiting.date) {
+      targetDateStr = limiting.date;
+    }
 
     // Find first date >= target date
     const closestDate = assetData.find(row => row.date >= targetDateStr);
@@ -1856,7 +1918,7 @@ const PortfolioBacktester = () => {
    * Updates a specific field of an asset in a portfolio
    */
   const updateAsset = (portfolioId: number, assetIndex: number, field: 'asset' | 'weight', value: string | number) => {
-    setPortfolios(portfolios.map(p => {
+    const updatedPortfolios = portfolios.map(p => {
       if (p.id === portfolioId) {
         let newAssets = [...p.assets];
         newAssets[assetIndex] = { ...newAssets[assetIndex], [field]: value };
@@ -1870,14 +1932,19 @@ const PortfolioBacktester = () => {
         return { ...p, assets: newAssets, name: newName };
       }
       return p;
-    }));
+    });
+    setPortfolios(updatedPortfolios);
+    // Auto-adjust start date when an asset ticker is changed (not when weight changes)
+    if (field === 'asset') {
+      autoAdjustStartDate(updatedPortfolios);
+    }
   };
 
   /**
    * Removes an asset from a portfolio
    */
   const removeAsset = (portfolioId: number, assetIndex: number) => {
-    setPortfolios(portfolios.map(p => {
+    const updatedPortfolios = portfolios.map(p => {
       if (p.id === portfolioId) {
         let newAssets = p.assets.filter((_, i) => i !== assetIndex);
 
@@ -1890,7 +1957,9 @@ const PortfolioBacktester = () => {
         return { ...p, assets: newAssets, name: newName };
       }
       return p;
-    }));
+    });
+    setPortfolios(updatedPortfolios);
+    autoAdjustStartDate(updatedPortfolios);
   };
 
   /**
@@ -4691,19 +4760,30 @@ const PortfolioBacktester = () => {
                   </div>
                 </div>
                 <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-                  {/* Start Date */}
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
-                    <select
-                      value={selectedDateRange.start}
-                      onChange={(e) => setSelectedStartDate(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
-                    >
-                      {assetData.map(row => (
-                        <option key={row.date} value={row.date}>{row.date}</option>
-                      ))}
-                    </select>
-                  </div>
+                  {/* Start Date — filtered to only dates >= limiting asset's first available date */}
+                  {(() => {
+                    const limiting = getLimitingAsset();
+                    const minDate = limiting?.date || '';
+                    return (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
+                        <select
+                          value={selectedDateRange.start}
+                          onChange={(e) => setSelectedStartDate(e.target.value)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                        >
+                          {assetData.filter(row => !minDate || row.date >= minDate).map(row => (
+                            <option key={row.date} value={row.date}>{row.date}</option>
+                          ))}
+                        </select>
+                        {limiting && (
+                          <p className="text-[10px] text-amber-600 mt-0.5" title={`${limiting.assetName} has data from ${limiting.date}`}>
+                            Limited by {limiting.assetName}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* End Date */}
                   <div>
