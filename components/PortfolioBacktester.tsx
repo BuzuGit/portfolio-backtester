@@ -7097,6 +7097,139 @@ const PortfolioBacktester = () => {
                               </table>
                             </div>
                           )}
+
+                          {/* ================================================
+                              MONTHLY PRICES TABLE
+                              Same layout as returns table above, but shows last
+                              available price for each month instead of returns.
+                              Heatmap coloring: red (lowest) → yellow → green (highest).
+                              ================================================ */}
+                          {assetReturnPoints.length > 0 && (() => {
+                            // Build monthly prices: { year: { monthly: (number|null)[], fyPrice: number|null } }
+                            // Each cell = last available price in that month
+                            const monthlyPrices: { [year: string]: { monthly: (number | null)[]; fyPrice: number | null } } = {};
+
+                            for (const pt of assetReturnPoints) {
+                              const d = new Date(pt.date);
+                              const year = d.getFullYear().toString();
+                              const month = d.getMonth(); // 0-11
+                              if (!monthlyPrices[year]) {
+                                monthlyPrices[year] = { monthly: Array(12).fill(null), fyPrice: null };
+                              }
+                              // Last price in each month (data is chronological, so later rows overwrite)
+                              monthlyPrices[year].monthly[month] = pt.value;
+                            }
+
+                            // FY price = last available price in the year (last non-null month)
+                            for (const year of Object.keys(monthlyPrices)) {
+                              const months = monthlyPrices[year].monthly;
+                              for (let i = 11; i >= 0; i--) {
+                                if (months[i] !== null) {
+                                  monthlyPrices[year].fyPrice = months[i];
+                                  break;
+                                }
+                              }
+                            }
+
+                            // Collect all non-null prices for heatmap min/max
+                            const allPrices: number[] = [];
+                            for (const year of Object.keys(monthlyPrices)) {
+                              for (const p of monthlyPrices[year].monthly) {
+                                if (p !== null) allPrices.push(p);
+                              }
+                            }
+                            const minPrice = allPrices.length > 0 ? Math.min(...allPrices) : 0;
+                            const maxPrice = allPrices.length > 0 ? Math.max(...allPrices) : 0;
+
+                            const years = Object.keys(monthlyPrices)
+                              .filter(year => monthlyPrices[year].monthly.some(p => p !== null))
+                              .sort().reverse();
+
+                            if (years.length === 0) return null;
+
+                            return (
+                              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
+                                <h3 className="text-md font-semibold mb-2 text-gray-700">
+                                  Prices — {monthlySelectedTicker}
+                                </h3>
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="border-b-2 border-gray-200">
+                                      <th className="text-left py-2 px-2 bg-gray-50 sticky left-0">Year</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Jan</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Feb</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Mar</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Apr</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">May</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Jun</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Jul</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Aug</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Sep</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Oct</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Nov</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Dec</th>
+                                      <th className="text-right py-2 px-2 bg-gray-100 font-semibold">FY</th>
+                                      <th className="w-2"></th>
+                                      <th className="text-right py-2 px-2 bg-gray-100 font-semibold">1Q</th>
+                                      <th className="text-right py-2 px-2 bg-gray-100 font-semibold">2Q</th>
+                                      <th className="text-right py-2 px-2 bg-gray-100 font-semibold">3Q</th>
+                                      <th className="text-right py-2 px-2 bg-gray-100 font-semibold">4Q</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {years.map(year => {
+                                      // Quarter price = last available price in that quarter
+                                      const qPrices = [[0,1,2],[3,4,5],[6,7,8],[9,10,11]].map(qMonths => {
+                                        for (let i = qMonths.length - 1; i >= 0; i--) {
+                                          const p = monthlyPrices[year].monthly[qMonths[i]];
+                                          if (p !== null) return p;
+                                        }
+                                        return null;
+                                      });
+
+                                      return (
+                                        <tr key={year} className="border-b border-gray-100">
+                                          <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0">{year}</td>
+                                          {[0,1,2,3,4,5,6,7,8,9,10,11].map(month => {
+                                            const price = monthlyPrices[year].monthly[month];
+                                            if (price === null) {
+                                              return <td key={month} className="text-right py-2 px-2 text-gray-300">-</td>;
+                                            }
+                                            return (
+                                              <td key={month} className="text-right py-2 px-2" style={{ backgroundColor: getHeatmapColor(price, minPrice, maxPrice) }}>
+                                                {price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                              </td>
+                                            );
+                                          })}
+                                          {/* FY = last price of the year */}
+                                          <td className="text-right py-2 px-2 font-semibold" style={
+                                            monthlyPrices[year].fyPrice !== null
+                                              ? { backgroundColor: getHeatmapColor(monthlyPrices[year].fyPrice!, minPrice, maxPrice) }
+                                              : {}
+                                          }>
+                                            {monthlyPrices[year].fyPrice !== null
+                                              ? monthlyPrices[year].fyPrice!.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                              : '-'}
+                                          </td>
+                                          <td className="w-2"></td>
+                                          {/* Quarterly prices = last available price in each quarter */}
+                                          {qPrices.map((qp, qi) => (
+                                            <td key={`q${qi}`} className="text-right py-2 px-2 font-semibold" style={
+                                              qp !== null ? { backgroundColor: getHeatmapColor(qp, minPrice, maxPrice) } : {}
+                                            }>
+                                              {qp !== null
+                                                ? qp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                                : '-'}
+                                            </td>
+                                          ))}
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })()}
