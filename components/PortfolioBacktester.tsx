@@ -8546,6 +8546,16 @@ const PortfolioBacktester = () => {
                   };
                 });
 
+                // --- Compute portfolio weights for open positions ---
+                // Weight = each position's current value / total portfolio value (uses converted currency when available)
+                const totalPortfolioValue = openSummaryData.reduce((sum, r) => sum + (positionsCurrency ? r.currentValueConverted : r.currentValue), 0);
+                const openWeights = openSummaryData.map(r => {
+                  const posValue = positionsCurrency ? r.currentValueConverted : r.currentValue;
+                  return totalPortfolioValue > 0 ? (posValue / totalPortfolioValue) * 100 : 0;
+                });
+                // Max weight is used to scale bar widths (largest weight = full bar width)
+                const maxWeight = Math.max(...openWeights, 0.01); // avoid division by zero
+
                 // --- Build Closed Positions summary data ---
                 const closedSummaryData = filteredAssets.length === 0 ? [] : filteredAssets.map(asset => {
                   const transactions = getClosedTransactions(asset.ticker);
@@ -8600,6 +8610,7 @@ const PortfolioBacktester = () => {
                                 <th className="text-right py-2 px-2 bg-gray-200">Current Value</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">Total PnL</th>
                                 <th className="text-right py-2 px-2 bg-gray-200">XIRR</th>
+                                <th className="text-right py-2 px-2 bg-gray-200" style={{ minWidth: 110 }}>Weight</th>
                                 {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">Invested {posCcyLabel}</th>}
                                 {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">Current {posCcyLabel}</th>}
                                 {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">PnL {posCcyLabel}</th>}
@@ -8638,6 +8649,19 @@ const PortfolioBacktester = () => {
                                   <td className={`text-right py-2 px-2 font-mono font-medium ${(row.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.xirr !== null ? `${row.xirr >= 0 ? '+' : ''}${row.xirr.toFixed(1)}%` : 'N/A'}
                                   </td>
+                                  {/* Weight cell with inline bar chart */}
+                                  <td className="py-2 px-2 font-mono" style={{ position: 'relative', overflow: 'hidden' }}>
+                                    {/* Gray bar scaled relative to the largest weight */}
+                                    <div style={{
+                                      position: 'absolute', left: 0, top: 0, bottom: 0,
+                                      width: `${(openWeights[idx] / maxWeight) * 100}%`,
+                                      backgroundColor: 'rgb(209, 213, 219)', /* gray-300 */
+                                      borderRadius: '0 2px 2px 0',
+                                    }} />
+                                    <span style={{ position: 'relative' }} className="text-right block">
+                                      {openWeights[idx].toFixed(1)}%
+                                    </span>
+                                  </td>
                                   {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{row.investedConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
                                   {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{row.currentValueConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
                                   {positionsCurrency && <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLConverted >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -8654,7 +8678,7 @@ const PortfolioBacktester = () => {
                                 return (
                                   <tr className="border-t-2 border-gray-300 font-semibold bg-gray-200">
                                     <td className="py-2 px-2 text-gray-700 font-mono">{openSummaryData.length} Holdings</td>
-                                    <td colSpan={9}></td>
+                                    <td colSpan={10}></td>
                                     {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{totalInvestedCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
                                     {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{totalCurrentCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
                                     {positionsCurrency && <td className={`text-right py-2 px-2 font-mono ${totalPnLCcy >= 0 ? 'text-green-600' : 'text-red-600'}`}>
