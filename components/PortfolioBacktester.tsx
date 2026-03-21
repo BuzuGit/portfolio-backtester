@@ -3421,6 +3421,33 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Price heatmap: dark red (lowest) → white (mid) → dark green (highest).
+   * Used for all price tables (Monthly prices, Annual prices, detail view prices).
+   * Text always stays dark — only the background color changes.
+   */
+  const getPriceHeatmap = (value: number, min: number, max: number): string => {
+    if (min === max) return '#ffffff';
+    const pos = (value - min) / (max - min); // 0 = min, 1 = max
+
+    let r: number, g: number, b: number;
+    if (pos < 0.5) {
+      // Bottom half: soft muted red → white
+      const t = pos / 0.5;
+      r = Math.round(205 + t * (255 - 205)); // 205 → 255
+      g = Math.round(130 + t * (255 - 130)); // 130 → 255
+      b = Math.round(130 + t * (255 - 130)); // 130 → 255
+    } else {
+      // Top half: white → soft muted green
+      const t = (pos - 0.5) / 0.5;
+      r = Math.round(255 - t * (255 - 120)); // 255 → 120
+      g = Math.round(255 - t * (255 - 190)); // 255 → 190
+      b = Math.round(255 - t * (255 - 120)); // 255 → 120
+    }
+
+    return `rgb(${r}, ${g}, ${b})`;
+  };
+
+  /**
    * Maps a correlation value (-1 to +1) to a color:
    * +1 (perfect positive correlation) → Red (assets move together, less diversification)
    *  0 (no correlation) → Yellow (assets are independent)
@@ -7102,7 +7129,7 @@ const PortfolioBacktester = () => {
                               MONTHLY PRICES TABLE
                               Same layout as returns table above, but shows last
                               available price for each month instead of returns.
-                              Heatmap coloring: red (lowest) → yellow → green (highest).
+                              Heatmap coloring: white (lowest) → dark teal (highest).
                               ================================================ */}
                           {assetReturnPoints.length > 0 && (() => {
                             // Build monthly prices: { year: { monthly: (number|null)[], fyPrice: number|null } }
@@ -7196,7 +7223,7 @@ const PortfolioBacktester = () => {
                                               return <td key={month} className="text-right py-2 px-2 text-gray-300">-</td>;
                                             }
                                             return (
-                                              <td key={month} className="text-right py-2 px-2" style={{ backgroundColor: getHeatmapColor(price, minPrice, maxPrice) }}>
+                                              <td key={month} className="text-right py-2 px-2" style={{ backgroundColor: getPriceHeatmap(price, minPrice, maxPrice) }}>
                                                 {price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                               </td>
                                             );
@@ -7204,7 +7231,7 @@ const PortfolioBacktester = () => {
                                           {/* FY = last price of the year */}
                                           <td className="text-right py-2 px-2 font-semibold" style={
                                             monthlyPrices[year].fyPrice !== null
-                                              ? { backgroundColor: getHeatmapColor(monthlyPrices[year].fyPrice!, minPrice, maxPrice) }
+                                              ? { backgroundColor: getPriceHeatmap(monthlyPrices[year].fyPrice!, minPrice, maxPrice) }
                                               : {}
                                           }>
                                             {monthlyPrices[year].fyPrice !== null
@@ -7215,7 +7242,7 @@ const PortfolioBacktester = () => {
                                           {/* Quarterly prices = last available price in each quarter */}
                                           {qPrices.map((qp, qi) => (
                                             <td key={`q${qi}`} className="text-right py-2 px-2 font-semibold" style={
-                                              qp !== null ? { backgroundColor: getHeatmapColor(qp, minPrice, maxPrice) } : {}
+                                              qp !== null ? { backgroundColor: getPriceHeatmap(qp, minPrice, maxPrice) } : {}
                                             }>
                                               {qp !== null
                                                 ? qp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
