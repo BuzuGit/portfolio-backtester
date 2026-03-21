@@ -7257,6 +7257,141 @@ const PortfolioBacktester = () => {
                               </div>
                             );
                           })()}
+
+                          {/* ================================================
+                              MONTHLY DRAWDOWNS TABLE
+                              Shows % distance from all-time high at each month-end.
+                              White = at ATH (0%), red heatmap = underwater (deeper = darker).
+                              MaxDD = worst drawdown in each year, ATHs = # of ATH months.
+                              ================================================ */}
+                          {assetReturnPoints.length > 0 && (() => {
+                            // Build monthly drawdowns from the price series
+                            // Track running ATH and compute drawdown at each month-end
+                            const monthlyDDs: { [year: string]: { monthly: (number | null)[]; maxDD: number; athCount: number } } = {};
+                            let peak = 0;
+
+                            for (const pt of assetReturnPoints) {
+                              const d = new Date(pt.date);
+                              const year = d.getFullYear().toString();
+                              const month = d.getMonth(); // 0-11
+                              if (!monthlyDDs[year]) {
+                                monthlyDDs[year] = { monthly: Array(12).fill(null), maxDD: 0, athCount: 0 };
+                              }
+                              // Update running peak
+                              if (pt.value > peak) peak = pt.value;
+                              // Drawdown = % below peak (0 = at ATH, negative = underwater)
+                              const dd = peak > 0 ? ((pt.value - peak) / peak) * 100 : 0;
+                              monthlyDDs[year].monthly[month] = dd;
+                            }
+
+                            // Calculate MaxDD and ATH count per year
+                            for (const year of Object.keys(monthlyDDs)) {
+                              const months = monthlyDDs[year].monthly;
+                              let yearMaxDD = 0;
+                              let yearATHs = 0;
+                              for (const dd of months) {
+                                if (dd === null) continue;
+                                if (dd < yearMaxDD) yearMaxDD = dd;
+                                if (dd === 0) yearATHs++;
+                              }
+                              monthlyDDs[year].maxDD = yearMaxDD;
+                              monthlyDDs[year].athCount = yearATHs;
+                            }
+
+                            // Find the worst drawdown across all data for heatmap scaling
+                            let worstDD = 0;
+                            for (const year of Object.keys(monthlyDDs)) {
+                              if (monthlyDDs[year].maxDD < worstDD) worstDD = monthlyDDs[year].maxDD;
+                            }
+
+                            // Red heatmap for drawdowns: white (0%) → muted red (worst DD)
+                            // Aligned with getPriceHeatmap red end: rgb(205, 130, 130)
+                            const getDDColor = (dd: number): string => {
+                              if (dd === 0 || worstDD === 0) return '#ffffff';
+                              const pos = dd / worstDD; // 0 = at ATH, 1 = worst drawdown
+                              const r = Math.round(255 - pos * (255 - 205));  // 255 → 205
+                              const g = Math.round(255 - pos * (255 - 130));  // 255 → 130
+                              const b = Math.round(255 - pos * (255 - 130));  // 255 → 130
+                              return `rgb(${r}, ${g}, ${b})`;
+                            };
+
+                            // Max ATH count for green heatmap scaling
+                            const maxATHs = Math.max(...Object.values(monthlyDDs).map(y => y.athCount), 1);
+
+                            // Green heatmap for ATHs: white (0) → muted green (max ATHs)
+                            // Aligned with getPriceHeatmap green end: rgb(120, 190, 120)
+                            const getATHColor = (count: number): string => {
+                              if (count === 0 || maxATHs === 0) return '#ffffff';
+                              const pos = count / maxATHs;
+                              const r = Math.round(255 - pos * (255 - 120));  // 255 → 120
+                              const g = Math.round(255 - pos * (255 - 190));  // 255 → 190
+                              const b = Math.round(255 - pos * (255 - 120));  // 255 → 120
+                              return `rgb(${r}, ${g}, ${b})`;
+                            };
+
+                            const years = Object.keys(monthlyDDs)
+                              .filter(year => monthlyDDs[year].monthly.some(d => d !== null))
+                              .sort().reverse();
+
+                            if (years.length === 0) return null;
+
+                            return (
+                              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
+                                <h3 className="text-md font-semibold mb-2 text-gray-700">
+                                  Drawdowns — {monthlySelectedTicker}
+                                </h3>
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="border-b-2 border-gray-200">
+                                      <th className="text-left py-2 px-2 bg-gray-50 sticky left-0">Year</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Jan</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Feb</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Mar</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Apr</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">May</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Jun</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Jul</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Aug</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Sep</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Oct</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Nov</th>
+                                      <th className="text-right py-2 px-2 bg-gray-50">Dec</th>
+                                      <th className="w-2"></th>
+                                      <th className="text-right py-2 px-2 bg-gray-100 font-semibold">MaxDD</th>
+                                      <th className="text-right py-2 px-2 bg-gray-100 font-semibold">ATHs</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {years.map(year => (
+                                      <tr key={year} className="border-b border-gray-100">
+                                        <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0">{year}</td>
+                                        {[0,1,2,3,4,5,6,7,8,9,10,11].map(month => {
+                                          const dd = monthlyDDs[year].monthly[month];
+                                          if (dd === null) {
+                                            return <td key={month} className="text-right py-2 px-2 text-gray-300">-</td>;
+                                          }
+                                          return (
+                                            <td key={month} className="text-right py-2 px-2" style={{ backgroundColor: getDDColor(dd) }}>
+                                              {dd === 0 ? '0.0' : dd.toFixed(1)}
+                                            </td>
+                                          );
+                                        })}
+                                        <td className="w-2"></td>
+                                        {/* MaxDD for the year */}
+                                        <td className="text-right py-2 px-2 font-semibold" style={{ backgroundColor: getDDColor(monthlyDDs[year].maxDD) }}>
+                                          {monthlyDDs[year].maxDD === 0 ? '0.0%' : `${monthlyDDs[year].maxDD.toFixed(1)}%`}
+                                        </td>
+                                        {/* ATH count for the year — green heatmap scaled to max */}
+                                        <td className="text-right py-2 px-2 font-semibold" style={{ backgroundColor: getATHColor(monthlyDDs[year].athCount) }}>
+                                          {monthlyDDs[year].athCount}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })()}
