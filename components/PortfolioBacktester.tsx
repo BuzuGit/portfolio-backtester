@@ -17,7 +17,7 @@
 */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized } from 'recharts';
+import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, FLOW_PURCHASE, FLOW_SALE, FLOW_DIVIDEND } from '@/lib/fetchData';
 
@@ -8331,6 +8331,195 @@ const PortfolioBacktester = () => {
                         <span>+1 (move together)</span>
                       </div>
                     </div>
+                  </div>
+                );
+              })()}
+
+              {/* ============================================ */}
+              {/* RISK / RETURN SCATTER PLOT                   */}
+              {/* X axis = Volatility, Y axis = CAGR           */}
+              {/* Only assets with full history for the period */}
+              {/* ============================================ */}
+              {(() => {
+                const filteredAssets = getFilteredAssetLookup();
+                const monthsNeeded = correlationPeriod * 12;
+                // Slice the last N years of data (+1 row so we can compute the first monthly return)
+                const slicedData = assetData.slice(-(monthsNeeded + 1));
+
+                // Color palette for the dots — cycles if there are more than 20 assets
+                const DOT_COLORS = [
+                  '#6366f1','#f97316','#22c55e','#3b82f6','#ec4899',
+                  '#84cc16','#14b8a6','#f59e0b','#8b5cf6','#ef4444',
+                  '#06b6d4','#d97706','#10b981','#7c3aed','#e11d48',
+                  '#0ea5e9','#65a30d','#0d9488','#dc2626','#7e22ce',
+                ];
+
+                const scatterData: { ticker: string; name: string; x: number; y: number; color: string }[] = [];
+                let colorIdx = 0;
+
+                for (const asset of filteredAssets) {
+                  const ticker = asset.ticker;
+
+                  // Require valid price at both ends of the slice — this enforces the "enough history" rule:
+                  // if the asset didn't exist N years ago its first-row price will be 0/missing and it gets skipped
+                  const firstPrice = Number(slicedData[0]?.[ticker]);
+                  const lastPrice  = Number(slicedData[slicedData.length - 1]?.[ticker]);
+                  if (!firstPrice || firstPrice <= 0 || !lastPrice || lastPrice <= 0) continue;
+
+                  // CAGR for the period: ((endPrice / startPrice) ^ (1/years) - 1) × 100
+                  const cagr = (Math.pow(lastPrice / firstPrice, 1 / correlationPeriod) - 1) * 100;
+
+                  // Annualised volatility: std dev of monthly returns × sqrt(12) × 100
+                  const monthlyReturns: number[] = [];
+                  for (let i = 1; i < slicedData.length; i++) {
+                    const p    = Number(slicedData[i][ticker]);
+                    const prev = Number(slicedData[i - 1][ticker]);
+                    if (p > 0 && prev > 0) monthlyReturns.push((p - prev) / prev);
+                  }
+                  if (monthlyReturns.length < 3) continue;
+
+                  const mean     = monthlyReturns.reduce((s, r) => s + r, 0) / monthlyReturns.length;
+                  const variance = monthlyReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / monthlyReturns.length;
+                  const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;
+
+                  scatterData.push({
+                    ticker,
+                    name: asset.name,
+                    x: parseFloat(volatility.toFixed(2)),
+                    y: parseFloat(cagr.toFixed(2)),
+                    color: DOT_COLORS[colorIdx % DOT_COLORS.length],
+                  });
+                  colorIdx++;
+                }
+
+                if (scatterData.length === 0) return null;
+
+                // Compute axis domains with padding so dots and labels have room
+                const xs = scatterData.map(d => d.x);
+                const ys = scatterData.map(d => d.y);
+                const xPad = Math.max(3, (Math.max(...xs) - Math.min(...xs)) * 0.15);
+                const yPad = Math.max(3, (Math.max(...ys) - Math.min(...ys)) * 0.15);
+                const xMin = parseFloat((Math.min(...xs) - xPad).toFixed(1));
+                const xMax = parseFloat((Math.max(...xs) + xPad).toFixed(1));
+                const yMin = parseFloat((Math.min(...ys) - yPad).toFixed(1));
+                const yMax = parseFloat((Math.max(...ys) + yPad).toFixed(1));
+
+                // Generate explicit Y ticks that always land exactly on 0.
+                // Recharts auto-ticks don't guarantee a tick at 0, which causes the
+                // zero ReferenceLine to visually mis-align with any nearby tick label.
+                const yRange = yMax - yMin;
+                const rawInterval = yRange / 5;
+                const mag = Math.pow(10, Math.floor(Math.log10(Math.abs(rawInterval) || 1)));
+                const norm = rawInterval / mag;
+                const tickInterval = norm <= 2 ? 2 * mag : norm <= 5 ? 5 * mag : 10 * mag;
+                const yTickStart = Math.ceil(yMin / tickInterval) * tickInterval;
+                const yTicks: number[] = [];
+                for (let t = yTickStart; t <= yMax + tickInterval * 0.01; t += tickInterval) {
+                  yTicks.push(Math.round(t * 1000) / 1000); // strip floating-point noise
+                }
+                // Force 0 into the tick list if it falls within the domain
+                if (yMin <= 0 && 0 <= yMax && !yTicks.some(t => t === 0)) {
+                  yTicks.push(0);
+                  yTicks.sort((a, b) => a - b);
+                }
+
+                return (
+                  <div className="bg-white p-4 rounded-lg shadow mt-4">
+                    <h3 className="text-base font-semibold text-gray-700 mb-1">
+                      Risk / Return ({correlationPeriod}Y) — Annualised Return vs. Volatility
+                    </h3>
+                    <p className="text-xs text-gray-500 mb-4">
+                      Only assets with {correlationPeriod}+ years of price history are shown.
+                    </p>
+                    <ResponsiveContainer width="100%" height={440}>
+                      <ScatterChart margin={{ top: 20, right: 100, bottom: 50, left: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis
+                          type="number"
+                          dataKey="x"
+                          name="Volatility"
+                          domain={[xMin, xMax]}
+                          tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+                          label={{
+                            value: `STANDARD DEVIATION (${correlationPeriod}Y)`,
+                            position: 'insideBottom',
+                            offset: -15,
+                            style: { fontSize: 10, fill: '#6b7280', letterSpacing: '0.05em' },
+                          }}
+                          tick={{ fontSize: 11, fill: '#6b7280' }}
+                        />
+                        <YAxis
+                          type="number"
+                          dataKey="y"
+                          name="Return"
+                          domain={[yMin, yMax]}
+                          ticks={yTicks}
+                          tickFormatter={(v: number) => `${Math.round(v)}%`}
+                          label={{
+                            value: `ANNLZD ${correlationPeriod}Y TR (M)`,
+                            angle: -90,
+                            position: 'insideLeft',
+                            offset: 15,
+                            style: { fontSize: 10, fill: '#6b7280', letterSpacing: '0.05em' },
+                          }}
+                          tick={{ fontSize: 11, fill: '#6b7280' }}
+                        />
+                        <Tooltip
+                          cursor={{ strokeDasharray: '3 3' }}
+                          content={(props: any) => {
+                            if (!props.active || !props.payload?.length) return null;
+                            const d = props.payload[0].payload;
+                            return (
+                              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px', fontSize: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.1)', maxWidth: 240 }}>
+                                <div style={{ fontWeight: 700, marginBottom: 4, color: d.color }}>{d.ticker}</div>
+                                <div style={{ color: '#374151', marginBottom: 2 }}>{d.name}</div>
+                                <div style={{ color: '#6b7280' }}>
+                                  <span>Return ({correlationPeriod}Y CAGR): </span>
+                                  <strong style={{ color: '#111827' }}>{d.y.toFixed(2)}%</strong>
+                                </div>
+                                <div style={{ color: '#6b7280' }}>
+                                  <span>Volatility ({correlationPeriod}Y): </span>
+                                  <strong style={{ color: '#111827' }}>{d.x.toFixed(2)}%</strong>
+                                </div>
+                              </div>
+                            );
+                          }}
+                        />
+                        {/* Dashed red zero line — only shown when at least one asset has negative return */}
+                        {scatterData.some(d => d.y < 0) && (
+                          <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="6 3" strokeWidth={1.5} />
+                        )}
+                        <Scatter
+                          data={scatterData}
+                          shape={(props: any) => {
+                            const { cx, cy, payload } = props;
+                            return (
+                              <g key={payload.ticker}>
+                                <circle
+                                  cx={cx}
+                                  cy={cy}
+                                  r={8}
+                                  fill={payload.color}
+                                  opacity={0.85}
+                                  stroke="white"
+                                  strokeWidth={1.5}
+                                />
+                                <text
+                                  x={cx + 12}
+                                  y={cy + 4}
+                                  fontSize={11}
+                                  fill="#374151"
+                                  fontFamily="sans-serif"
+                                  fontWeight={500}
+                                >
+                                  {payload.ticker}
+                                </text>
+                              </g>
+                            );
+                          }}
+                        />
+                      </ScatterChart>
+                    </ResponsiveContainer>
                   </div>
                 );
               })()}
