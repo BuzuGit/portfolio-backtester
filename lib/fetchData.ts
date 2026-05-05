@@ -25,6 +25,8 @@ const YEARS_SHEET_URL = `${SHEET_BASE_URL}?gid=2044431115&output=csv`;
 const CLOSED_SHEET_URL = `${SHEET_BASE_URL}?gid=2134130819&output=csv`;
 // gid=1857187976 is the Data tab (raw transactions: purchases, dividends, sales)
 const TRANSACTIONS_SHEET_URL = `${SHEET_BASE_URL}?gid=1760382748&output=csv`;
+// gid=882618775 is the Daily tab (daily portfolio NAV + inflation indices per currency)
+const DAILY_SHEET_URL = `${SHEET_BASE_URL}?gid=882618775&output=csv`;
 
 // Type definitions - these describe the shape of our data
 // (TypeScript uses these to catch errors and provide autocomplete)
@@ -162,6 +164,19 @@ export interface TransactionRow {
   ticker: string;     // Ticker symbol (e.g., "CFATR")
 }
 
+// Daily NAV row from the "Daily" sheet (gid=882618775)
+// Contains one entry per calendar day with portfolio NAV per share in three currencies
+// and a cumulative inflation index (base 100 at 2019-12-16) for each currency.
+export interface DailyNavRow {
+  date: string;     // e.g., "2019-12-16"
+  navPln: number;   // "NW Price"  — NAV per share in PLN  (starts at ~100)
+  navUsd: number;   // "Price USD" — NAV per share in USD
+  navSgd: number;   // "Price SGD" — NAV per share in SGD
+  inflPln: number;  // "InflPLN"   — cumulative inflation index, base 100
+  inflUsd: number;  // "InflUSD"   — cumulative inflation index, base 100
+  inflSgd: number;  // "InflSGD"   — cumulative inflation index, base 100
+}
+
 export interface ParsedData {
   data: AssetRow[];           // Array of rows, each with date and asset prices
   assets: string[];           // List of asset names found in the CSV
@@ -169,6 +184,7 @@ export interface ParsedData {
   yearsData: YearsRow[];      // Annual portfolio summary (from Years sheet)
   closedData: ClosedPositionRow[];  // Closed position transactions (from Closed sheet)
   transactionData: TransactionRow[];  // Raw transactions from the Data sheet (purchases, dividends, sales)
+  dailyData: DailyNavRow[];   // Daily NAV + inflation data (from Daily sheet)
 }
 
 /**
@@ -180,13 +196,14 @@ export interface ParsedData {
  * @throws Error if fetch fails or data is invalid
  */
 export async function fetchSheetData(): Promise<ParsedData> {
-  // Fetch all five sheets in parallel for speed
-  const [dataResponse, lookupResponse, yearsResponse, closedResponse, txnResponse] = await Promise.all([
+  // Fetch all six sheets in parallel for speed
+  const [dataResponse, lookupResponse, yearsResponse, closedResponse, txnResponse, dailyResponse] = await Promise.all([
     fetch(DATA_SHEET_URL, { cache: 'no-cache' }),
     fetch(LOOKUP_SHEET_URL, { cache: 'no-cache' }),
     fetch(YEARS_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Years sheet is optional — don't break the app if it fails
     fetch(CLOSED_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Closed sheet is optional too
-    fetch(TRANSACTIONS_SHEET_URL, { cache: 'no-cache' }).catch(() => null) // Transactions sheet is optional too
+    fetch(TRANSACTIONS_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Transactions sheet is optional too
+    fetch(DAILY_SHEET_URL, { cache: 'no-cache' }).catch(() => null),  // Daily NAV sheet is optional too
   ]);
 
   // Check if core fetches were successful
@@ -261,9 +278,34 @@ export async function fetchSheetData(): Promise<ParsedData> {
     console.warn('Failed to parse Transactions sheet (non-fatal):', err);
   }
 
+  // Parse Daily NAV sheet if it loaded successfully
+  let dailyData: DailyNavRow[] = [];
+  try {
+    if (!dailyResponse) {
+      console.warn('Daily sheet fetch threw (returned null) — retrying once...');
+      // Retry once since it might have been throttled during the parallel fetch
+      const retryDaily = await fetch(DAILY_SHEET_URL, { cache: 'no-cache' }).catch(() => null);
+      if (retryDaily && retryDaily.ok) {
+        const dailyCsvText = await retryDaily.text();
+        dailyData = parseDailyData(dailyCsvText);
+        console.log(`Daily sheet (retry): parsed ${dailyData.length} rows`);
+      } else {
+        console.warn('Daily sheet retry also failed:', retryDaily?.status);
+      }
+    } else if (!dailyResponse.ok) {
+      console.warn('Daily sheet non-OK status:', dailyResponse.status);
+    } else {
+      const dailyCsvText = await dailyResponse.text();
+      dailyData = parseDailyData(dailyCsvText);
+      console.log(`Daily sheet: parsed ${dailyData.length} rows`);
+    }
+  } catch (err) {
+    console.warn('Failed to parse Daily sheet (non-fatal):', err);
+  }
+
   console.log(`Lookup table has ${lookup.length} assets: ${lookup.map(l => l.ticker).join(', ')}`);
 
-  return { data, assets, lookup, yearsData, closedData, transactionData };
+  return { data, assets, lookup, yearsData, closedData, transactionData, dailyData };
 }
 
 /**
@@ -763,4 +805,70 @@ function parseSheetData(csvText: string): { data: AssetRow[]; assets: string[] }
   console.log(`Parsed ${data.length} rows of data`);
 
   return { data, assets: assetColumns };
+}
+
+/**
+ * Parses the "Daily" sheet CSV (gid=882618775) into DailyNavRow objects.
+ *
+ * This sheet has multiline column headers (e.g., "NW\nPrice"), so we use
+ * splitCSVRows() + header normalization (collapse whitespace → single space),
+ * exactly like parseClosedData and parseTransactionData.
+ *
+ * Relevant columns (after normalization):
+ *   Date       — calendar date (YYYY-MM-DD)
+ *   NW Price   — portfolio NAV per share in PLN (starts at 100.00)
+ *   Price USD  — portfolio NAV per share in USD
+ *   Price SGD  — portfolio NAV per share in SGD
+ *   InflPLN    — cumulative inflation index for PLN (base 100)
+ *   InflUSD    — cumulative inflation index for USD (base 100)
+ *   InflSGD    — cumulative inflation index for SGD (base 100)
+ *
+ * @param csvText - Raw CSV content from the Daily sheet
+ * @returns Array of DailyNavRow objects, one per calendar day
+ */
+function parseDailyData(csvText: string): DailyNavRow[] {
+  // Use quote-aware splitter because headers contain embedded newlines
+  const lines = splitCSVRows(csvText.trim());
+
+  if (lines.length < 2) {
+    console.warn('Daily sheet is empty or has no data rows');
+    return [];
+  }
+
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+  // Normalize headers: collapse any whitespace (newlines, extra spaces) to a single space
+  const headers = parseCSVLine(lines[0], delimiter).map(h => h.replace(/\s+/g, ' ').trim());
+
+  console.log('Daily sheet headers:', headers.join(' | '));
+
+  const colIndex = buildColIndex(headers);
+  const readNum = (values: string[], colName: string) => csvReadNum(colIndex, values, colName);
+  const readStr = (values: string[], colName: string) => csvReadStr(colIndex, values, colName);
+
+  const rows: DailyNavRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    const values = parseCSVLine(line, delimiter);
+
+    const date = readStr(values, 'Date');
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue; // Skip non-date rows
+
+    const navPln = readNum(values, 'NW Price');
+    if (navPln <= 0) continue; // Skip rows with no valid PLN NAV
+
+    rows.push({
+      date,
+      navPln,
+      navUsd:  readNum(values, 'Price USD'),
+      navSgd:  readNum(values, 'Price SGD'),
+      inflPln: readNum(values, 'InflPLN'),
+      inflUsd: readNum(values, 'InflUSD'),
+      inflSgd: readNum(values, 'InflSGD'),
+    });
+  }
+
+  return rows;
 }
