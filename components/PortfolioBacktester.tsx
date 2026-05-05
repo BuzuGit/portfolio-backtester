@@ -552,6 +552,10 @@ const PortfolioBacktester = () => {
   const [dailyData, setDailyData] = useState<DailyNavRow[]>([]);
   const [dailyNavCurrency, setDailyNavCurrency] = useState<'PLN' | 'USD' | 'SGD'>('PLN');
   const [dailyNavPeriod, setDailyNavPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
+  // ---- Daily NAV Drawdowns chart state ----
+  // Which currencies are shown on the drawdown chart (multi-select, all on by default)
+  const [ddSelectedCurrencies, setDdSelectedCurrencies] = useState<('PLN' | 'USD' | 'SGD')[]>(['PLN', 'USD', 'SGD']);
+  const [ddPeriod, setDdPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
   // Which open-position asset the user drilled into (empty string = showing summary list)
   const [openSelectedTicker, setOpenSelectedTicker] = useState<string>('');
   // Set of purchase transaction indices that are currently included (checked).
@@ -9125,6 +9129,178 @@ const PortfolioBacktester = () => {
                               </LineChart>
                             </ResponsiveContainer>
                           </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ── Daily NAV Drawdowns chart ── */}
+                  {(() => {
+                    // Colors matching Returns by Year: PLN=black, USD=red, SGD=yellow
+                    const DD_COLORS: Record<string, string> = { PLN: '#000000', USD: '#ef4444', SGD: '#F5A623' };
+
+                    // Re-use the same period-cutoff logic as the Daily NAV chart
+                    const today = new Date();
+                    const cutoffs: Record<string, Date> = {
+                      '1Y': new Date(new Date().setFullYear(today.getFullYear() - 1)),
+                      '3Y': new Date(new Date().setFullYear(today.getFullYear() - 3)),
+                      '5Y': new Date(new Date().setFullYear(today.getFullYear() - 5)),
+                      'Max': new Date('1900-01-01'),
+                    };
+                    const cutoff = cutoffs[ddPeriod];
+
+                    // Filter rows by the selected period
+                    const ddFiltered = dailyData.filter(r => new Date(r.date) >= cutoff);
+
+                    // Build chart data: DD columns are already in percentage form (e.g. -10.6 = -10.6%)
+                    const ddChartData = ddFiltered.map(r => ({
+                      date: r.date,
+                      PLN: ddSelectedCurrencies.includes('PLN') ? r.ddPln : undefined,
+                      USD: ddSelectedCurrencies.includes('USD') ? r.ddUsd : undefined,
+                      SGD: ddSelectedCurrencies.includes('SGD') ? r.ddSgd : undefined,
+                    }));
+
+                    // Compute max drawdown per currency over the filtered period
+                    const maxDdByCurrency: Record<string, number> = {};
+                    (['PLN', 'USD', 'SGD'] as const).forEach(c => {
+                      if (ddSelectedCurrencies.includes(c)) {
+                        const key = c === 'PLN' ? 'ddPln' : c === 'USD' ? 'ddUsd' : 'ddSgd';
+                        const vals = ddFiltered.map(r => r[key]);
+                        maxDdByCurrency[c] = vals.length > 0 ? Math.min(...vals) : 0;
+                      }
+                    });
+
+                    // Y-axis: snap the bottom to the nearest 5% below the worst drawdown
+                    // e.g. worst = -27% → yMin = -30%; worst = -11% → yMin = -15%
+                    const allVals = ddChartData.flatMap(d =>
+                      (['PLN', 'USD', 'SGD'] as const)
+                        .filter(c => ddSelectedCurrencies.includes(c))
+                        .map(c => d[c] ?? 0)
+                    );
+                    const minVal = allVals.length > 0 ? Math.min(...allVals) : -30;
+                    const step = 5;
+                    const yMin = Math.floor(minVal / step) * step; // e.g. floor(-27/5)*5 = -30
+                    // Generate explicit ticks at every 5% from yMin up to 0
+                    const yTicks: number[] = [];
+                    for (let t = yMin; t <= 0; t += step) yTicks.push(t);
+
+                    // X-axis tick interval — fewer ticks avoids crowding on small periods
+                    const tickInterval = Math.max(1, Math.floor(ddChartData.length / 8));
+
+                    if (dailyData.length === 0) return null;
+
+                    return (
+                      <div className="mb-6">
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-md font-semibold text-gray-700">Daily NAV Drawdowns</h3>
+                        </div>
+
+                        {/* Currency toggles (multi-select) + Period buttons + Max DD info */}
+                        <div className="flex items-center gap-5 mb-4 flex-wrap">
+
+                          {/* Currency mini-buttons — clicking toggles a currency on/off */}
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                            {(['PLN', 'USD', 'SGD'] as const).map(c => {
+                              const active = ddSelectedCurrencies.includes(c);
+                              return (
+                                <button
+                                  key={c}
+                                  onClick={() => {
+                                    // Toggle this currency in the selected set
+                                    setDdSelectedCurrencies(prev =>
+                                      prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]
+                                    );
+                                  }}
+                                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors border ${
+                                    active ? 'text-white border-transparent' : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                                  }`}
+                                  style={active ? { backgroundColor: DD_COLORS[c], borderColor: DD_COLORS[c] } : {}}
+                                >{c}</button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Period buttons — same style as Daily NAV */}
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500 mr-1">Period:</span>
+                            {(['1Y', '3Y', '5Y', 'Max'] as const).map(p => (
+                              <button key={p} onClick={() => setDdPeriod(p)}
+                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${ddPeriod === p ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                              >{p}</button>
+                            ))}
+                          </div>
+
+                          {/* Max DD per currency for the selected period */}
+                          {ddSelectedCurrencies.length > 0 && (
+                            <div className="flex items-center gap-2 text-xs font-medium">
+                              <span className="text-gray-400">Max DD:</span>
+                              {(['PLN', 'USD', 'SGD'] as const)
+                                .filter(c => ddSelectedCurrencies.includes(c))
+                                .map((c, i, arr) => (
+                                  <span key={c}>
+                                    <span style={{ color: DD_COLORS[c] }}>
+                                      {c}: {maxDdByCurrency[c] !== undefined ? `${maxDdByCurrency[c].toFixed(1)}%` : '—'}
+                                    </span>
+                                    {i < arr.length - 1 && <span className="text-gray-300 mx-1">|</span>}
+                                  </span>
+                                ))
+                              }
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="bg-white p-4 rounded-lg shadow">
+                          <ResponsiveContainer width="100%" height={280}>
+                            <AreaChart data={ddChartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                              <defs>
+                                {(['PLN', 'USD', 'SGD'] as const).map(c => (
+                                  <linearGradient key={c} id={`ddGrad${c}`} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor={DD_COLORS[c]} stopOpacity={0.25} />
+                                    <stop offset="95%" stopColor={DD_COLORS[c]} stopOpacity={0.03} />
+                                  </linearGradient>
+                                ))}
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis
+                                dataKey="date"
+                                tick={{ fontSize: 10, fill: '#9ca3af' }}
+                                interval={tickInterval}
+                                tickLine={false}
+                              />
+                              <YAxis
+                                domain={[yMin, 0]}
+                                ticks={yTicks}
+                                tickFormatter={v => `${v}%`}
+                                tick={{ fontSize: 10, fill: '#9ca3af' }}
+                                tickLine={false}
+                                axisLine={false}
+                                width={40}
+                              />
+                              <Tooltip
+                                formatter={(value: number, name: string) => [`${value.toFixed(2)}%`, name]}
+                                labelFormatter={label => `Date: ${label}`}
+                                contentStyle={{ fontSize: 11 }}
+                              />
+                              {/* A horizontal line at 0 to make the baseline clear */}
+                              <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
+                              {(['PLN', 'USD', 'SGD'] as const).map(c =>
+                                ddSelectedCurrencies.includes(c) ? (
+                                  <Area
+                                    key={c}
+                                    type="monotone"
+                                    dataKey={c}
+                                    name={c}
+                                    stroke={DD_COLORS[c]}
+                                    strokeWidth={1.5}
+                                    fill={`url(#ddGrad${c})`}
+                                    dot={false}
+                                    connectNulls
+                                  />
+                                ) : null
+                              )}
+                            </AreaChart>
+                          </ResponsiveContainer>
                         </div>
                       </div>
                     );
