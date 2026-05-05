@@ -175,6 +175,9 @@ export interface DailyNavRow {
   inflPln: number;  // "InflPLN"   — cumulative inflation index, base 100
   inflUsd: number;  // "InflUSD"   — cumulative inflation index, base 100
   inflSgd: number;  // "InflSGD"   — cumulative inflation index, base 100
+  ddPln: number;    // "NW DD"     — daily drawdown in PLN (0 to -100)
+  ddUsd: number;    // "DD USD"    — daily drawdown in USD (0 to -100)
+  ddSgd: number;    // "DD SGD"    — daily drawdown in SGD (0 to -100)
 }
 
 export interface ParsedData {
@@ -867,6 +870,9 @@ function parseDailyData(csvText: string): DailyNavRow[] {
       inflPln: readNum(values, 'InflPLN'),
       inflUsd: readNum(values, 'InflUSD'),
       inflSgd: readNum(values, 'InflSGD'),
+      ddPln:   readNum(values, 'NW DD'),
+      ddUsd:   readNum(values, 'DD USD'),
+      ddSgd:   readNum(values, 'DD SGD'),
     });
   }
 
