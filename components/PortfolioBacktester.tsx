@@ -9001,7 +9001,16 @@ const PortfolioBacktester = () => {
                       if (!yearTicks.includes(closest.date)) yearTicks.push(closest.date);
                     }
 
-                    // ---- 6. Edge bubbles (right-edge labels) ----
+                    // ---- 6. Y-axis ticks: dynamic range based on actual data, step of 5 ----
+                    const allYValues = chartData.flatMap(r => [r.nav, r.infl]);
+                    const yDataMin = Math.min(...allYValues);
+                    const yDataMax = Math.max(...allYValues);
+                    const yAxisMin = Math.floor(yDataMin / 5) * 5;
+                    const yAxisMax = Math.ceil(yDataMax / 5) * 5;
+                    const yAxisTicks: number[] = [];
+                    for (let t = yAxisMin; t <= yAxisMax; t += 5) yAxisTicks.push(t);
+
+                    // ---- 7. Edge bubbles (right-edge labels) ----
                     // The bubble value drives Y positioning; the label shows the raw price.
                     const navBubbleDefs: BubbleDef[] = [
                       { value: lastRow.nav,  color: '#1e40af', label: lastRow.rawNav.toFixed(2) },
@@ -9009,7 +9018,7 @@ const PortfolioBacktester = () => {
                     ];
                     const DailyNavBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, navBubbleDefs);
 
-                    // ---- 7. Render ----
+                    // ---- 8. Render ----
                     return (
                       <div className="mt-6">
                         <div className="flex items-center justify-between mb-2">
@@ -9041,9 +9050,9 @@ const PortfolioBacktester = () => {
                           {/* Wrapper gives the stats overlay something to position against */}
                           <div style={{ position: 'relative' }}>
 
-                            {/* Stats overlay — top-left corner inside the chart area */}
+                            {/* Stats overlay — top-left corner inside the plot area (past the Y axis) */}
                             <div style={{
-                              position: 'absolute', top: 24, left: 62, zIndex: 10,
+                              position: 'absolute', top: 24, left: 48, zIndex: 10,
                               background: 'rgba(255,255,255,0.92)', border: '1px solid #e5e7eb',
                               borderRadius: 5, padding: '5px 10px', fontSize: 11, pointerEvents: 'none', lineHeight: 1.75,
                             }}>
@@ -9069,7 +9078,7 @@ const PortfolioBacktester = () => {
                             </div>
 
                             <ResponsiveContainer width="100%" height={420}>
-                              <LineChart data={chartData} margin={{ top: 20, right: 80, left: 55, bottom: 35 }}>
+                              <LineChart data={chartData} margin={{ top: 20, right: 55, left: 5, bottom: 35 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                                 <XAxis
                                   dataKey="date"
@@ -9079,10 +9088,11 @@ const PortfolioBacktester = () => {
                                   height={30}
                                 />
                                 <YAxis
+                                  domain={[yAxisMin, yAxisMax]}
+                                  ticks={yAxisTicks}
                                   tickFormatter={(v: number) => v.toFixed(0)}
                                   tick={{ fontSize: 11, fill: '#6b7280' }}
-                                  width={50}
-                                  label={{ value: 'Indexed (100 = start)', angle: -90, position: 'insideLeft', offset: -5, style: { fontSize: 9, fill: '#9ca3af' } }}
+                                  width={36}
                                 />
                                 <Tooltip
                                   formatter={(value: number, name: string) => [value.toFixed(2), name]}
