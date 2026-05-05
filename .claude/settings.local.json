@@ -28,7 +28,10 @@
       "Bash(cmd /c \"npx tsc --noEmit 2>&1 | head -20\")",
       "Bash(npx kill-port 3000)",
       "Bash(npx kill-port 3000 3001)",
-      "Bash(git status -u)"
+      "Bash(git status -u)",
+      "Bash(gh pr create --title 'Add Risk/Return scatter plot to Correlations tab' --body ' *)",
+      "Bash(curl -sL \"https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM3Qq52UZwmQyRQrG_YER6-RNnagk2GG9Os65kFPtkNTpNtZywaoMEV8w_xDDuu0eRdEoPWgn/pub?gid=882618775&output=csv\")",
+      "Read(//tmp/**)"
     ]
   }
 }

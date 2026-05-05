@@ -19,7 +19,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
-import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, FLOW_PURCHASE, FLOW_SALE, FLOW_DIVIDEND } from '@/lib/fetchData';
+import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_SALE, FLOW_DIVIDEND } from '@/lib/fetchData';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -548,6 +548,10 @@ const PortfolioBacktester = () => {
   // ---- Open Positions state ----
   // Raw transaction data from the "Data" sheet (purchases, dividends, sales for all assets)
   const [transactionData, setTransactionData] = useState<TransactionRow[]>([]);
+  // ---- Daily NAV chart state ----
+  const [dailyData, setDailyData] = useState<DailyNavRow[]>([]);
+  const [dailyNavCurrency, setDailyNavCurrency] = useState<'PLN' | 'USD' | 'SGD'>('PLN');
+  const [dailyNavPeriod, setDailyNavPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
   // Which open-position asset the user drilled into (empty string = showing summary list)
   const [openSelectedTicker, setOpenSelectedTicker] = useState<string>('');
   // Set of purchase transaction indices that are currently included (checked).
@@ -657,7 +661,7 @@ const PortfolioBacktester = () => {
 
     try {
       // Fetch and parse the CSV data from all sheets
-      const { data, assets, lookup, yearsData: fetchedYearsData, closedData: fetchedClosedData, transactionData: fetchedTransactionData } = await fetchSheetData();
+      const { data, assets, lookup, yearsData: fetchedYearsData, closedData: fetchedClosedData, transactionData: fetchedTransactionData, dailyData: fetchedDailyData } = await fetchSheetData();
 
       // Update all our state with the new data
       setAssetData(data);
@@ -666,6 +670,7 @@ const PortfolioBacktester = () => {
       setYearsData(fetchedYearsData);
       setClosedData(fetchedClosedData);
       setTransactionData(fetchedTransactionData);
+      setDailyData(fetchedDailyData);
       // Auto-select all position tickers (both open and closed) by default
       const closedTickers = new Set(fetchedClosedData.map((row: ClosedPositionRow) => row.ticker));
       // Open tickers: have purchases in transaction data but NO "Proceeds from Sale" entries
@@ -8904,6 +8909,223 @@ const PortfolioBacktester = () => {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ============================================ */}
+                  {/* DAILY NAV SECTION                            */}
+                  {/* Line chart: NAV vs Inflation, both indexed   */}
+                  {/* to 100 at period start. Currency + period    */}
+                  {/* selectors. Stats overlay top-left.           */}
+                  {/* ============================================ */}
+                  {dailyData.length > 0 && (() => {
+                    // ---- 1. Filter data to selected period ----
+                    const today = new Date();
+                    const cutoff = dailyNavPeriod === '1Y' ? new Date(today.getFullYear() - 1, today.getMonth(), today.getDate())
+                                 : dailyNavPeriod === '3Y' ? new Date(today.getFullYear() - 3, today.getMonth(), today.getDate())
+                                 : dailyNavPeriod === '5Y' ? new Date(today.getFullYear() - 5, today.getMonth(), today.getDate())
+                                 : new Date('1900-01-01');
+                    const cutoffStr = cutoff.toISOString().split('T')[0];
+                    const periodData = dailyData.filter(r => r.date >= cutoffStr);
+                    if (periodData.length < 2) return null;
+
+                    // ---- 2. Pick columns for selected currency ----
+                    const navKey  = dailyNavCurrency === 'PLN' ? 'navPln'  : dailyNavCurrency === 'USD' ? 'navUsd'  : 'navSgd';
+                    const inflKey = dailyNavCurrency === 'PLN' ? 'inflPln' : dailyNavCurrency === 'USD' ? 'inflUsd' : 'inflSgd';
+
+                    const firstNAV  = periodData[0][navKey]  as number;
+                    const firstInfl = periodData[0][inflKey] as number;
+                    if (!firstNAV || !firstInfl) return null;
+
+                    // ---- 3. Index both series to 100 at period start ----
+                    const chartData = periodData.map(r => ({
+                      date:    r.date,
+                      nav:     ((r[navKey]  as number) / firstNAV)  * 100,
+                      infl:    ((r[inflKey] as number) / firstInfl) * 100,
+                      rawNav:  r[navKey]  as number,
+                      rawInfl: r[inflKey] as number,
+                    }));
+
+                    const lastRow = chartData[chartData.length - 1];
+                    const years = (new Date(lastRow.date).getTime() - new Date(chartData[0].date).getTime()) / (365.25 * 86400000);
+
+                    // ---- 4. Statistics ----
+                    const nominalCAGR  = years > 0 ? (Math.pow(lastRow.nav  / 100, 1 / years) - 1) * 100 : 0;
+                    const annInflation = years > 0 ? (Math.pow(lastRow.infl / 100, 1 / years) - 1) * 100 : 0;
+                    const realCAGR     = ((1 + nominalCAGR / 100) / (1 + annInflation / 100) - 1) * 100;
+
+                    // Annualised volatility from daily returns (× sqrt(252))
+                    const dailyReturns: number[] = [];
+                    for (let i = 1; i < chartData.length; i++) {
+                      if (chartData[i - 1].nav > 0) dailyReturns.push((chartData[i].nav - chartData[i - 1].nav) / chartData[i - 1].nav);
+                    }
+                    const drMean     = dailyReturns.reduce((s, r) => s + r, 0) / (dailyReturns.length || 1);
+                    const drVariance = dailyReturns.reduce((s, r) => s + (r - drMean) ** 2, 0) / (dailyReturns.length || 1);
+                    const annVol     = Math.sqrt(drVariance) * Math.sqrt(252) * 100;
+                    const sharpe     = annVol > 0 ? nominalCAGR / annVol : 0;
+
+                    // Drawdown stats on raw NAV values (not indexed — same result, just clearer intent)
+                    const navVals = periodData.map(r => r[navKey] as number);
+                    let ddPeak = navVals[0];
+                    let maxDD = 0;
+                    let longestDD = 0;
+                    let currStreak = 0;
+                    for (const v of navVals) {
+                      if (v >= ddPeak) {
+                        ddPeak = v;
+                        if (currStreak > longestDD) longestDD = currStreak;
+                        currStreak = 0;
+                      } else {
+                        const dd = ((v - ddPeak) / ddPeak) * 100;
+                        if (dd < maxDD) maxDD = dd;
+                        currStreak++;
+                      }
+                    }
+                    if (currStreak > longestDD) longestDD = currStreak;
+
+                    // Current drawdown: last price vs running peak through entire period
+                    let runPeak = navVals[0];
+                    for (const v of navVals) { if (v > runPeak) runPeak = v; }
+                    const currDD = ((navVals[navVals.length - 1] - runPeak) / runPeak) * 100;
+
+                    // ---- 5. X-axis ticks: one per year (closest actual date to Jan 1) ----
+                    const startYear = new Date(chartData[0].date).getFullYear();
+                    const endYear   = new Date(lastRow.date).getFullYear();
+                    const yearTicks: string[] = [];
+                    for (let y = startYear + 1; y <= endYear; y++) {
+                      const target = new Date(`${y}-01-01`).getTime();
+                      const closest = chartData.reduce((prev, cur) =>
+                        Math.abs(new Date(cur.date).getTime() - target) < Math.abs(new Date(prev.date).getTime() - target) ? cur : prev
+                      );
+                      if (!yearTicks.includes(closest.date)) yearTicks.push(closest.date);
+                    }
+
+                    // ---- 6. Y-axis ticks: dynamic range based on actual data, step of 5 ----
+                    const allYValues = chartData.flatMap(r => [r.nav, r.infl]);
+                    const yDataMin = Math.min(...allYValues);
+                    const yDataMax = Math.max(...allYValues);
+                    const yAxisMin = Math.floor(yDataMin / 5) * 5;
+                    const yAxisMax = Math.ceil(yDataMax / 5) * 5;
+                    const yAxisTicks: number[] = [];
+                    for (let t = yAxisMin; t <= yAxisMax; t += 5) yAxisTicks.push(t);
+
+                    // ---- 7. Edge bubbles (right-edge labels) ----
+                    // The bubble value drives Y positioning; the label shows the raw price.
+                    const navBubbleDefs: BubbleDef[] = [
+                      { value: lastRow.nav,  color: '#1e40af', label: lastRow.rawNav.toFixed(2) },
+                      { value: lastRow.infl, color: '#dc2626', label: lastRow.rawInfl.toFixed(2) },
+                    ];
+                    const DailyNavBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, navBubbleDefs);
+
+                    // ---- 8. Render ----
+                    return (
+                      <div className="mt-6">
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-md font-semibold text-gray-700">Daily NAV</h3>
+                          <span className="text-xs text-gray-400">Both series indexed to 100 at period start</span>
+                        </div>
+
+                        {/* Currency + Period selectors */}
+                        <div className="flex items-center gap-5 mb-4 flex-wrap">
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                            {(['PLN', 'USD', 'SGD'] as const).map(c => (
+                              <button key={c} onClick={() => setDailyNavCurrency(c)}
+                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavCurrency === c ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                              >{c}</button>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500 mr-1">Period:</span>
+                            {(['1Y', '3Y', '5Y', 'Max'] as const).map(p => (
+                              <button key={p} onClick={() => setDailyNavPeriod(p)}
+                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavPeriod === p ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                              >{p}</button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-white p-4 rounded-lg shadow">
+                          {/* Wrapper gives the stats overlay something to position against */}
+                          <div style={{ position: 'relative' }}>
+
+                            {/* Stats overlay — top-left corner inside the plot area (past the Y axis) */}
+                            <div style={{
+                              position: 'absolute', top: 24, left: 48, zIndex: 10,
+                              background: 'rgba(255,255,255,0.92)', border: '1px solid #e5e7eb',
+                              borderRadius: 5, padding: '5px 10px', fontSize: 11, pointerEvents: 'none', lineHeight: 1.75,
+                            }}>
+                              <table style={{ borderCollapse: 'collapse' }}>
+                                <tbody>
+                                  {[
+                                    ['CAGR',        `${nominalCAGR.toFixed(1)}%`,  nominalCAGR  >= 0 ? '#16a34a' : '#dc2626'],
+                                    ['Ann. Infl.',  `${annInflation.toFixed(1)}%`, '#6b7280'],
+                                    ['Real CAGR',   `${realCAGR.toFixed(1)}%`,     realCAGR     >= 0 ? '#16a34a' : '#dc2626'],
+                                    ['Ann. Vol.',   `${annVol.toFixed(1)}%`,       '#374151'],
+                                    ['Sharpe',      sharpe.toFixed(2),             '#374151'],
+                                    ['Max DD',      `${maxDD.toFixed(1)}%`,        '#dc2626'],
+                                    ['Curr DD',     `${currDD.toFixed(1)}%`,       currDD < -0.01 ? '#dc2626' : '#16a34a'],
+                                    ['Longest DD',  `${longestDD}d`,               '#374151'],
+                                  ].map(([label, val, color]) => (
+                                    <tr key={label as string}>
+                                      <td style={{ color: '#6b7280', paddingRight: 10 }}>{label}</td>
+                                      <td style={{ fontWeight: 600, color: color as string }}>{val}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+
+                            <ResponsiveContainer width="100%" height={420}>
+                              <LineChart data={chartData} margin={{ top: 20, right: 55, left: 5, bottom: 35 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                <XAxis
+                                  dataKey="date"
+                                  ticks={yearTicks}
+                                  tickFormatter={(d: string) => d.substring(0, 4)}
+                                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                                  height={30}
+                                />
+                                <YAxis
+                                  domain={[yAxisMin, yAxisMax]}
+                                  ticks={yAxisTicks}
+                                  tickFormatter={(v: number) => v.toFixed(0)}
+                                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                                  width={36}
+                                />
+                                <Tooltip
+                                  formatter={(value: number, name: string) => [value.toFixed(2), name]}
+                                  labelFormatter={(label: string) => label}
+                                  contentStyle={{ fontSize: 12 }}
+                                />
+                                {/* Right-edge bubbles showing latest raw NAV and inflation values */}
+                                <Customized component={DailyNavBubbles} />
+                                {/* NAV line — solid blue */}
+                                <Line
+                                  type="monotone"
+                                  dataKey="nav"
+                                  name={`NAV ${dailyNavCurrency}`}
+                                  stroke="#1e40af"
+                                  strokeWidth={2}
+                                  dot={false}
+                                  connectNulls
+                                />
+                                {/* Inflation line — dashed red */}
+                                <Line
+                                  type="monotone"
+                                  dataKey="infl"
+                                  name={`Inflation ${dailyNavCurrency}`}
+                                  stroke="#dc2626"
+                                  strokeWidth={1.5}
+                                  strokeDasharray="5 3"
+                                  dot={false}
+                                  connectNulls
+                                />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
                       </div>
                     );
                   })()}
