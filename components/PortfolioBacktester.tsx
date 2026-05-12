@@ -484,10 +484,8 @@ const PortfolioBacktester = () => {
   // Which currency to display monetary values in (Charts 1 & 2)
   const [portfolioCurrency, setPortfolioCurrency] = useState<'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD'>('PLN');
   // Which currencies are shown in Charts 3 & 4 (Returns/Growth by Year)
-  // All three selected by default; user can toggle individual currencies on/off
-  const [selectedReturnCurrencies, setSelectedReturnCurrencies] = useState<string[]>(['PLN', 'USD', 'SGD']);
-  // Whether the currency filter dropdown for Charts 3 & 4 is open
-  const [returnCurrencyDropdownOpen, setReturnCurrencyDropdownOpen] = useState(false);
+  // PLN selected by default; user can toggle individual currencies on/off
+  const [selectedReturnCurrencies, setSelectedReturnCurrencies] = useState<string[]>(['PLN']);
 
   // Asset filtering state (shared across Annual Returns, Best To Worst, Monthly Prices tabs)
   // These filters let users narrow down which assets are displayed in the tables
@@ -8552,18 +8550,18 @@ const PortfolioBacktester = () => {
                 </div>
               ) : (
                 <>
-                  {/* Currency dropdown — affects Charts 1 & 2 only */}
-                  <div className="mb-4 flex items-center gap-2">
-                    <span className="text-sm font-medium text-gray-700">Currency:</span>
-                    <select
-                      value={portfolioCurrency}
-                      onChange={(e) => setPortfolioCurrency(e.target.value as typeof portfolioCurrency)}
-                      className="px-3 py-1.5 text-sm border border-gray-300 bg-white rounded-lg outline-none cursor-pointer"
-                    >
-                      {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
+                  {/* Currency buttons — affects Charts 1 & 2 only; single-select */}
+                  <div className="mb-4 flex items-center gap-1">
+                    <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                    {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setPortfolioCurrency(c)}
+                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                          portfolioCurrency === c ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >{c}</button>
+                    ))}
                   </div>
 
                   {/* Chart 1: Portfolio Value by Year — stacked bar chart */}
@@ -9306,53 +9304,24 @@ const PortfolioBacktester = () => {
                     );
                   })()}
 
-                  {/* Currency filter dropdown — controls which bars appear in Charts 3 & 4 */}
-                  <div className="mb-4 relative inline-block">
-                    <button
-                      onClick={() => setReturnCurrencyDropdownOpen(!returnCurrencyDropdownOpen)}
-                      className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
-                        returnCurrencyDropdownOpen ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
-                      }`}
-                    >
-                      <span className="font-medium">Currencies:</span>
-                      <span className="text-gray-600">
-                        {selectedReturnCurrencies.length === 3 ? 'All' : selectedReturnCurrencies.length === 0 ? 'None' : selectedReturnCurrencies.join(', ')}
-                      </span>
-                      <svg className={`w-4 h-4 transition-transform ${returnCurrencyDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </button>
-                    {returnCurrencyDropdownOpen && (
-                      <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px]">
-                        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
-                          <span className="text-sm font-medium text-gray-700">Show Currencies</span>
-                          <button
-                            onClick={() => setSelectedReturnCurrencies(selectedReturnCurrencies.length === 3 ? [] : ['PLN', 'USD', 'SGD'])}
-                            className="text-xs text-blue-600 hover:underline"
-                          >
-                            {selectedReturnCurrencies.length === 3 ? 'Deselect All' : 'Select All'}
-                          </button>
-                        </div>
-                        <div className="p-2">
-                          {(['PLN', 'USD', 'SGD'] as const).map(c => (
-                            <label key={c} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
-                              <input
-                                type="checkbox"
-                                checked={selectedReturnCurrencies.includes(c)}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setSelectedReturnCurrencies([...selectedReturnCurrencies, c]);
-                                  } else {
-                                    setSelectedReturnCurrencies(selectedReturnCurrencies.filter(x => x !== c));
-                                  }
-                                }}
-                              />
-                              <span>{c}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                  {/* Currency toggle buttons — controls which bars appear in Charts 3 & 4; multi-select */}
+                  <div className="mb-4 flex items-center gap-1">
+                    <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                    {([['PLN', '#000000'], ['USD', '#ef4444'], ['SGD', '#F5A623']] as const).map(([c, color]) => {
+                      const active = selectedReturnCurrencies.includes(c);
+                      return (
+                        <button
+                          key={c}
+                          onClick={() => setSelectedReturnCurrencies(prev =>
+                            prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]
+                          )}
+                          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors border ${
+                            active ? 'text-white border-transparent' : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                          }`}
+                          style={active ? { backgroundColor: color, borderColor: color } : {}}
+                        >{c}</button>
+                      );
+                    })}
                   </div>
 
                   {/* Chart 3: Returns by Year — grouped bar chart */}
