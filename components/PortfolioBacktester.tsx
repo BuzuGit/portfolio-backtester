@@ -686,7 +686,7 @@ const PortfolioBacktester = () => {
       setSelectedAssetTickers(lookup.map(a => a.ticker));
       setSelectedAssetClasses(Array.from(new Set(lookup.map(a => a.assetClass).filter(Boolean))));
       setSelectedCurrencies(Array.from(new Set(lookup.map(a => a.currency).filter(Boolean))));
-      setSelectedAssetSubcategories(Array.from(new Set(lookup.map(a => a.assetSubcategory).filter(Boolean))));
+      setSelectedAssetSubcategories(['Basic']);
 
       // Set the date range based on the data
       if (data.length > 0) {
