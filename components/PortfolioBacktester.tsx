@@ -17,7 +17,7 @@
 */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter } from 'recharts';
+import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_SALE, FLOW_DIVIDEND } from '@/lib/fetchData';
 
@@ -9649,6 +9649,55 @@ const PortfolioBacktester = () => {
                 };
                 openSummaryData.sort((a, b) => (assetClassOrder[a.assetClass] ?? 99) - (assetClassOrder[b.assetClass] ?? 99));
 
+                // --- Asset class breakdown (table + pie chart above Open Positions) ---
+                const ASSET_CLASS_COLORS: Record<string, string> = {
+                  'Fixed Income': '#22c55e', 'Equities': '#ef4444', 'Crypto': '#111827', 'Alternatives': '#a855f7',
+                };
+                // When no Ccy filter is active, default all breakdown values to PLN.
+                const effectiveCcy = positionsCurrency || 'PLN';
+                const effectiveCcyLabel = effectiveCcy;
+                // Helpers to convert a native currency to PLN using available FX data
+                const toPLNForDate = (nativeCcy: string, dateStr: string): number => {
+                  if (nativeCcy === 'PLN') return 1;
+                  return getFxRateForDate(FX_TICKER_MAP[nativeCcy] || '', dateStr);
+                };
+                const toPLNLatest = (nativeCcy: string): number => {
+                  if (nativeCcy === 'PLN') return 1;
+                  return latestRow ? getFxRate(latestRow, FX_TICKER_MAP[nativeCcy] || '') : 1;
+                };
+                // Roll up each open position into its asset class bucket
+                const acRollupMap: Record<string, { invested: number; currentValue: number; pnl: number }> = {};
+                for (const row of openSummaryData) {
+                  const cls = row.assetClass || 'Other';
+                  if (!acRollupMap[cls]) acRollupMap[cls] = { invested: 0, currentValue: 0, pnl: 0 };
+                  let investedEff: number, currentValueEff: number, pnlEff: number;
+                  if (positionsCurrency) {
+                    // Already converted per-transaction at historical FX rates
+                    investedEff = row.investedConverted;
+                    currentValueEff = row.currentValueConverted;
+                    pnlEff = row.totalPnLConverted;
+                  } else {
+                    // No Ccy filter — convert to PLN using per-transaction historical rates for invested
+                    const purchases = getOpenPurchases(row.ticker);
+                    const dividends = getOpenDividends(row.ticker);
+                    const nativeCcy = assetLookup.find(a => a.ticker === row.ticker)?.currency || 'PLN';
+                    investedEff = purchases.reduce((sum, t) => sum + t.amount * toPLNForDate(nativeCcy, t.date), 0);
+                    const dividendsEff = dividends.reduce((sum, t) => sum + t.amount * toPLNForDate(nativeCcy, t.date), 0);
+                    currentValueEff = row.currentValue * toPLNLatest(nativeCcy);
+                    pnlEff = currentValueEff + dividendsEff - investedEff;
+                  }
+                  acRollupMap[cls].invested += investedEff;
+                  acRollupMap[cls].currentValue += currentValueEff;
+                  acRollupMap[cls].pnl += pnlEff;
+                }
+                const totalEffectivePV = Object.values(acRollupMap).reduce((sum, v) => sum + v.currentValue, 0);
+                const assetClassRollup = Object.entries(acRollupMap)
+                  .map(([cls, vals]) => ({
+                    assetClass: cls, ...vals,
+                    weight: totalEffectivePV > 0 ? (vals.currentValue / totalEffectivePV) * 100 : 0,
+                  }))
+                  .sort((a, b) => (assetClassOrder[a.assetClass] ?? 99) - (assetClassOrder[b.assetClass] ?? 99));
+
                 // --- Compute portfolio weights for open positions ---
                 // Weight = each position's current value / total portfolio value (uses converted currency when available)
                 const totalPortfolioValue = openSummaryData.reduce((sum, r) => sum + (positionsCurrency ? r.currentValueConverted : r.currentValue), 0);
@@ -9695,6 +9744,104 @@ const PortfolioBacktester = () => {
 
                 return (
                   <>
+                    {/* === Asset Class Breakdown === */}
+                    {openSummaryData.length > 0 && (
+                      <div className="bg-white p-4 rounded-lg shadow mb-4">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3">By Asset Class</h4>
+                        <div className="flex gap-6 items-start">
+                          <div className="overflow-x-auto flex-1">
+                            <table className="w-full text-xs border-collapse">
+                              <thead>
+                                <tr className="border-b border-gray-200">
+                                  <th className="text-left py-2 px-2 bg-gray-200">Asset Class</th>
+                                  <th className="text-right py-2 px-2 bg-gray-200">Invested {effectiveCcyLabel}</th>
+                                  <th className="text-right py-2 px-2 bg-gray-200">Current Value {effectiveCcyLabel}</th>
+                                  <th className="text-right py-2 px-2 bg-gray-200">Total PnL {effectiveCcyLabel}</th>
+                                  <th className="text-right py-2 px-2 bg-gray-200">Return %</th>
+                                  <th className="text-right py-2 px-2 bg-gray-200">Weight</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {assetClassRollup.map((row, idx) => (
+                                  <tr key={row.assetClass} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                                    <td className="py-2 px-2 text-gray-700">
+                                      <div className="flex items-center gap-2">
+                                        <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: ASSET_CLASS_COLORS[row.assetClass] || '#9ca3af' }} />
+                                        {row.assetClass}
+                                      </div>
+                                    </td>
+                                    <td className="text-right py-2 px-2 font-mono">{row.invested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                    <td className="text-right py-2 px-2 font-mono">{row.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {row.pnl >= 0 ? '+' : ''}{row.pnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    </td>
+                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {row.invested > 0 ? `${row.pnl >= 0 ? '+' : ''}${((row.pnl / row.invested) * 100).toFixed(1)}%` : '—'}
+                                    </td>
+                                    <td className="text-right py-2 px-2 font-mono">{row.weight.toFixed(1)}%</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                {(() => {
+                                  const totalInv = assetClassRollup.reduce((s, r) => s + r.invested, 0);
+                                  const totalCur = assetClassRollup.reduce((s, r) => s + r.currentValue, 0);
+                                  const totalPnL = assetClassRollup.reduce((s, r) => s + r.pnl, 0);
+                                  return (
+                                    <tr className="border-t-2 border-gray-300 font-semibold bg-gray-200">
+                                      <td className="py-2 px-2 text-gray-700 font-mono">{assetClassRollup.length} Classes</td>
+                                      <td className="text-right py-2 px-2 font-mono">{totalInv.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                      <td className="text-right py-2 px-2 font-mono">{totalCur.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                      <td className={`text-right py-2 px-2 font-mono ${totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {totalPnL >= 0 ? '+' : ''}{totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                      </td>
+                                      <td className={`text-right py-2 px-2 font-mono ${totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {totalInv > 0 ? `${totalPnL >= 0 ? '+' : ''}${((totalPnL / totalInv) * 100).toFixed(1)}%` : '—'}
+                                      </td>
+                                      <td className="text-right py-2 px-2 font-mono">100.0%</td>
+                                    </tr>
+                                  );
+                                })()}
+                              </tfoot>
+                            </table>
+                          </div>
+                          <div style={{ width: 220, height: 200, flexShrink: 0 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <PieChart>
+                                <Pie
+                                  data={assetClassRollup}
+                                  dataKey="weight"
+                                  nameKey="assetClass"
+                                  cx="50%"
+                                  cy="50%"
+                                  outerRadius={75}
+                                  innerRadius={35}
+                                  paddingAngle={2}
+                                  labelLine={false}
+                                  label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }: { cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; percent: number }) => {
+                                    if (percent < 0.05) return null;
+                                    const RAD = Math.PI / 180;
+                                    const r = innerRadius + (outerRadius - innerRadius) * 0.5;
+                                    return (
+                                      <text x={cx + r * Math.cos(-midAngle * RAD)} y={cy + r * Math.sin(-midAngle * RAD)} fill="white" textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold">
+                                        {`${(percent * 100).toFixed(1)}%`}
+                                      </text>
+                                    );
+                                  }}
+                                >
+                                  {assetClassRollup.map((row) => (
+                                    <Cell key={row.assetClass} fill={ASSET_CLASS_COLORS[row.assetClass] || '#9ca3af'} />
+                                  ))}
+                                </Pie>
+                                <Tooltip formatter={(value: number) => [`${value.toFixed(1)}%`, 'Weight']} />
+                                <Legend iconType="square" iconSize={10} wrapperStyle={{ fontSize: 11 }} />
+                              </PieChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* === Open Positions Table === */}
                     {openSummaryData.length > 0 && (
                       <div className="bg-white p-4 rounded-lg shadow mb-4">
