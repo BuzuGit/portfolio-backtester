@@ -570,6 +570,8 @@ const PortfolioBacktester = () => {
   // Chart date range controls for open position price chart
   const [openGraphStarts, setOpenGraphStarts] = useState<string>('');
   const [openGraphEnds, setOpenGraphEnds] = useState<string>('');
+  // Asset class filter: clicking a row/slice in the breakdown filters Open Positions
+  const [openAssetClassFilter, setOpenAssetClassFilter] = useState<string | null>(null);
   // Ref for the "select all" checkbox in open position detail view
   const openSelectAllRef = useRef<HTMLInputElement>(null);
 
@@ -9734,6 +9736,11 @@ const PortfolioBacktester = () => {
                   };
                 });
 
+                // Merge weights into each row so we can filter without losing the index
+                const filteredOpenData = openSummaryData
+                  .map((row, idx) => ({ ...row, _weight: openWeights[idx] }))
+                  .filter(row => !openAssetClassFilter || row.assetClass === openAssetClassFilter);
+
                 if (openSummaryData.length === 0 && closedSummaryData.length === 0) {
                   return (
                     <div className="bg-white p-8 rounded-lg shadow text-center text-gray-500">
@@ -9763,7 +9770,17 @@ const PortfolioBacktester = () => {
                               </thead>
                               <tbody>
                                 {assetClassRollup.map((row, idx) => (
-                                  <tr key={row.assetClass} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                                  <tr
+                                    key={row.assetClass}
+                                    className={`border-b border-gray-50 cursor-pointer transition-colors ${
+                                      openAssetClassFilter === row.assetClass
+                                        ? 'bg-blue-50 outline outline-1 outline-blue-300'
+                                        : openAssetClassFilter
+                                        ? 'opacity-40'
+                                        : idx % 2 === 0 ? 'hover:bg-blue-50' : 'bg-gray-25 hover:bg-blue-50'
+                                    }`}
+                                    onClick={() => setOpenAssetClassFilter(prev => prev === row.assetClass ? null : row.assetClass)}
+                                  >
                                     <td className="py-2 px-2 text-gray-700">
                                       <div className="flex items-center gap-2">
                                         <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: ASSET_CLASS_COLORS[row.assetClass] || '#9ca3af' }} />
@@ -9830,7 +9847,12 @@ const PortfolioBacktester = () => {
                                   }}
                                 >
                                   {assetClassRollup.map((row) => (
-                                    <Cell key={row.assetClass} fill={ASSET_CLASS_COLORS[row.assetClass] || '#9ca3af'} />
+                                    <Cell
+                                      key={row.assetClass}
+                                      fill={ASSET_CLASS_COLORS[row.assetClass] || '#9ca3af'}
+                                      style={{ cursor: 'pointer', opacity: !openAssetClassFilter || openAssetClassFilter === row.assetClass ? 1 : 0.3 }}
+                                      onClick={() => setOpenAssetClassFilter(prev => prev === row.assetClass ? null : row.assetClass)}
+                                    />
                                   ))}
                                 </Pie>
                                 <Tooltip formatter={(value: number) => [`${value.toFixed(1)}%`, 'Weight']} />
@@ -9845,7 +9867,15 @@ const PortfolioBacktester = () => {
                     {/* === Open Positions Table === */}
                     {openSummaryData.length > 0 && (
                       <div className="bg-white p-4 rounded-lg shadow mb-4">
-                        <h4 className="text-sm font-semibold text-gray-700 mb-3">Open Positions</h4>
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                          Open Positions
+                          {openAssetClassFilter && (
+                            <span className="flex items-center gap-1 text-xs font-normal bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+                              {openAssetClassFilter}
+                              <button onClick={(e) => { e.stopPropagation(); setOpenAssetClassFilter(null); }} className="hover:text-blue-900 leading-none">✕</button>
+                            </span>
+                          )}
+                        </h4>
                         <div className="overflow-x-auto">
                           <table className="w-full text-xs border-collapse">
                             <thead>
@@ -9867,7 +9897,7 @@ const PortfolioBacktester = () => {
                               </tr>
                             </thead>
                             <tbody>
-                              {openSummaryData.map((row, idx) => (
+                              {filteredOpenData.map((row, idx) => (
                                 <tr
                                   key={row.ticker}
                                   className={`border-b border-gray-50 cursor-pointer hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}
@@ -9901,15 +9931,14 @@ const PortfolioBacktester = () => {
                                   </td>
                                   {/* Weight cell with inline bar chart */}
                                   <td className="py-2 px-2 font-mono" style={{ position: 'relative', overflow: 'hidden' }}>
-                                    {/* Gray bar scaled relative to the largest weight */}
                                     <div style={{
                                       position: 'absolute', left: 0, top: 0, bottom: 0,
-                                      width: `${(openWeights[idx] / maxWeight) * 100}%`,
-                                      backgroundColor: 'rgb(209, 213, 219)', /* gray-300 */
+                                      width: `${(row._weight / maxWeight) * 100}%`,
+                                      backgroundColor: 'rgb(209, 213, 219)',
                                       borderRadius: '0 2px 2px 0',
                                     }} />
                                     <span style={{ position: 'relative' }} className="text-right block">
-                                      {openWeights[idx].toFixed(1)}%
+                                      {row._weight.toFixed(1)}%
                                     </span>
                                   </td>
                                   {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{row.investedConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
@@ -9922,12 +9951,12 @@ const PortfolioBacktester = () => {
                             </tbody>
                             <tfoot>
                               {(() => {
-                                const totalInvestedCcy = openSummaryData.reduce((sum, r) => sum + r.investedConverted, 0);
-                                const totalCurrentCcy = openSummaryData.reduce((sum, r) => sum + r.currentValueConverted, 0);
-                                const totalPnLCcy = openSummaryData.reduce((sum, r) => sum + r.totalPnLConverted, 0);
+                                const totalInvestedCcy = filteredOpenData.reduce((sum, r) => sum + r.investedConverted, 0);
+                                const totalCurrentCcy = filteredOpenData.reduce((sum, r) => sum + r.currentValueConverted, 0);
+                                const totalPnLCcy = filteredOpenData.reduce((sum, r) => sum + r.totalPnLConverted, 0);
                                 return (
                                   <tr className="border-t-2 border-gray-300 font-semibold bg-gray-200">
-                                    <td className="py-2 px-2 text-gray-700 font-mono">{openSummaryData.length} Holdings</td>
+                                    <td className="py-2 px-2 text-gray-700 font-mono">{filteredOpenData.length} Holdings</td>
                                     <td colSpan={10}></td>
                                     {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{totalInvestedCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
                                     {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{totalCurrentCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
