@@ -9727,6 +9727,28 @@ const PortfolioBacktester = () => {
                   }))
                   .sort((a, b) => (assetClassOrder[a.assetClass] ?? 99) - (assetClassOrder[b.assetClass] ?? 99));
 
+                // --- Currency drill-down per asset class ---
+                // When an asset class row is clicked (openAssetClassFilter is set) we show sub-rows
+                // underneath it revealing how that class is split by native currency.
+                // Clicking a sub-row also sets openCurrencyFilter so all three sections sync.
+                const acCurrencyBreakdown: Record<string, Record<string, { invested: number; currentValue: number; pnl: number }>> = {};
+                for (const row of currencyFilteredData) {
+                  const cls = row.assetClass || 'Other';
+                  const ccy = row.nativeCurrency || 'PLN';
+                  if (!acCurrencyBreakdown[cls]) acCurrencyBreakdown[cls] = {};
+                  if (!acCurrencyBreakdown[cls][ccy]) acCurrencyBreakdown[cls][ccy] = { invested: 0, currentValue: 0, pnl: 0 };
+                  if (positionsCurrency) {
+                    acCurrencyBreakdown[cls][ccy].invested += row.investedConverted;
+                    acCurrencyBreakdown[cls][ccy].currentValue += row.currentValueConverted;
+                    acCurrencyBreakdown[cls][ccy].pnl += row.totalPnLConverted;
+                  } else {
+                    const conv = toPLNLatest(row.nativeCurrency);
+                    acCurrencyBreakdown[cls][ccy].invested += row.totalInvested * conv;
+                    acCurrencyBreakdown[cls][ccy].currentValue += row.currentValue * conv;
+                    acCurrencyBreakdown[cls][ccy].pnl += row.totalPnL * conv;
+                  }
+                }
+
                 // --- Compute portfolio weights for open positions ---
                 // Weight = each position's current value / total portfolio value (uses converted currency when available)
                 const totalPortfolioValue = openSummaryData.reduce((sum, r) => sum + (positionsCurrency ? r.currentValueConverted : r.currentValue), 0);
@@ -9806,33 +9828,75 @@ const PortfolioBacktester = () => {
                               </thead>
                               <tbody>
                                 {assetClassRollup.map((row, idx) => (
-                                  <tr
-                                    key={row.assetClass}
-                                    className={`border-b border-gray-50 cursor-pointer transition-colors ${
-                                      openAssetClassFilter === row.assetClass
-                                        ? 'bg-blue-50 outline outline-1 outline-blue-300'
-                                        : openAssetClassFilter
-                                        ? 'opacity-40'
-                                        : idx % 2 === 0 ? 'hover:bg-blue-50' : 'bg-gray-25 hover:bg-blue-50'
-                                    }`}
-                                    onClick={() => setOpenAssetClassFilter(prev => prev === row.assetClass ? null : row.assetClass)}
-                                  >
-                                    <td className="py-2 px-2 text-gray-700">
-                                      <div className="flex items-center gap-2">
-                                        <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: ASSET_CLASS_COLORS[row.assetClass] || '#9ca3af' }} />
-                                        {row.assetClass}
-                                      </div>
-                                    </td>
-                                    <td className="text-right py-2 px-2 font-mono">{row.invested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                    <td className="text-right py-2 px-2 font-mono">{row.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                      {row.pnl >= 0 ? '+' : ''}{row.pnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    </td>
-                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                      {row.invested > 0 ? `${row.pnl >= 0 ? '+' : ''}${((row.pnl / row.invested) * 100).toFixed(1)}%` : '—'}
-                                    </td>
-                                    <td className="text-right py-2 px-2 font-mono">{row.weight.toFixed(1)}%</td>
-                                  </tr>
+                                  <React.Fragment key={row.assetClass}>
+                                    {/* Asset class summary row */}
+                                    <tr
+                                      className={`border-b border-gray-50 cursor-pointer transition-colors ${
+                                        openAssetClassFilter === row.assetClass
+                                          ? 'bg-blue-50 outline outline-1 outline-blue-300'
+                                          : openAssetClassFilter
+                                          ? 'opacity-40'
+                                          : idx % 2 === 0 ? 'hover:bg-blue-50' : 'bg-gray-25 hover:bg-blue-50'
+                                      }`}
+                                      onClick={() => setOpenAssetClassFilter(prev => prev === row.assetClass ? null : row.assetClass)}
+                                    >
+                                      <td className="py-2 px-2 text-gray-700">
+                                        <div className="flex items-center gap-2">
+                                          <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: ASSET_CLASS_COLORS[row.assetClass] || '#9ca3af' }} />
+                                          {row.assetClass}
+                                          {/* Chevron hint: down when expanded, right when collapsed */}
+                                          <span className="text-gray-400 text-xs ml-auto">{openAssetClassFilter === row.assetClass ? '▾' : '▸'}</span>
+                                        </div>
+                                      </td>
+                                      <td className="text-right py-2 px-2 font-mono">{row.invested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                      <td className="text-right py-2 px-2 font-mono">{row.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                      <td className={`text-right py-2 px-2 font-mono font-medium ${row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {row.pnl >= 0 ? '+' : ''}{row.pnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                      </td>
+                                      <td className={`text-right py-2 px-2 font-mono font-medium ${row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {row.invested > 0 ? `${row.pnl >= 0 ? '+' : ''}${((row.pnl / row.invested) * 100).toFixed(1)}%` : '—'}
+                                      </td>
+                                      <td className="text-right py-2 px-2 font-mono">{row.weight.toFixed(1)}%</td>
+                                    </tr>
+                                    {/* Currency drill-down sub-rows — only visible when this class is selected */}
+                                    {openAssetClassFilter === row.assetClass && acCurrencyBreakdown[row.assetClass] &&
+                                      Object.entries(acCurrencyBreakdown[row.assetClass])
+                                        .sort((a, b) => b[1].currentValue - a[1].currentValue)
+                                        .map(([ccy, vals]) => {
+                                          const isSelectedCcy = openCurrencyFilter === ccy;
+                                          return (
+                                            <tr
+                                              key={ccy}
+                                              className={`border-b border-blue-100 cursor-pointer transition-colors ${
+                                                isSelectedCcy
+                                                  ? 'bg-amber-50 outline outline-1 outline-amber-400'
+                                                  : 'bg-blue-50/50 hover:bg-amber-50/50'
+                                              }`}
+                                              onClick={(e) => { e.stopPropagation(); setOpenCurrencyFilter(prev => prev === ccy ? null : ccy); }}
+                                            >
+                                              <td className="py-1.5 px-2 pl-7 text-gray-500">
+                                                <div className="flex items-center gap-2">
+                                                  {/* Color dot matches the By Currency bar chart */}
+                                                  <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: CURRENCY_COLORS[ccy] || '#6b7280' }} />
+                                                  {ccy}
+                                                </div>
+                                              </td>
+                                              <td className="text-right py-1.5 px-2 font-mono text-gray-600">{vals.invested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                              <td className="text-right py-1.5 px-2 font-mono text-gray-600">{vals.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                              <td className={`text-right py-1.5 px-2 font-mono ${vals.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                {vals.pnl >= 0 ? '+' : ''}{vals.pnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                              </td>
+                                              <td className={`text-right py-1.5 px-2 font-mono ${vals.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                {vals.invested > 0 ? `${vals.pnl >= 0 ? '+' : ''}${((vals.pnl / vals.invested) * 100).toFixed(1)}%` : '—'}
+                                              </td>
+                                              <td className="text-right py-1.5 px-2 font-mono text-gray-600">
+                                                {totalEffectivePV > 0 ? `${(vals.currentValue / totalEffectivePV * 100).toFixed(1)}%` : '—'}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })
+                                    }
+                                  </React.Fragment>
                                 ))}
                               </tbody>
                               <tfoot>
