@@ -9809,6 +9809,7 @@ const PortfolioBacktester = () => {
                         .sort((a, b) => b.currentValue - a.currentValue)
                     : currencyRollup;
                 const maxActiveCurrencyValue = Math.max(...activeCurrencyData.map(r => r.currentValue), 0.01);
+                const totalActiveCurrencyValue = activeCurrencyData.reduce((sum, r) => sum + r.currentValue, 0);
 
                 // --- Compute portfolio weights for open positions ---
                 // Weight = each position's current value / total portfolio value (uses converted currency when available)
@@ -10016,16 +10017,24 @@ const PortfolioBacktester = () => {
                                 >
                                   {/* Currency label (fixed width, right-aligned for clean column) */}
                                   <span className="text-xs font-mono text-gray-600 w-8 text-right flex-shrink-0">{ccyRow.currency}</span>
-                                  {/* Proportional bar */}
+                                  {/* Proportional bar — amount shown inside when bar is wide enough to fit */}
                                   <div className="relative flex-1 h-5 bg-gray-100 rounded overflow-hidden">
                                     <div
-                                      className="h-full rounded"
+                                      className="h-full rounded flex items-center pl-1.5"
                                       style={{ width: `${barPct}%`, backgroundColor: color }}
-                                    />
+                                    >
+                                      {barPct >= 15 && (
+                                        <span className="text-white font-mono truncate" style={{ fontSize: 10 }}>
+                                          {ccyRow.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
-                                  {/* Value in effective currency (PLN by default, or selected ccy) */}
-                                  <span className="text-xs font-mono text-gray-700 w-28 text-right flex-shrink-0">
-                                    {ccyRow.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} {effectiveCcy}
+                                  {/* % of total (sum of all bars in the active dataset) to the right */}
+                                  <span className="text-xs font-mono text-gray-600 w-12 text-right flex-shrink-0">
+                                    {totalActiveCurrencyValue > 0
+                                      ? `${(ccyRow.currentValue / totalActiveCurrencyValue * 100).toFixed(1)}%`
+                                      : '—'}
                                   </span>
                                 </div>
                               );
