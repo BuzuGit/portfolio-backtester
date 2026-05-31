@@ -358,12 +358,20 @@ const FX_TICKER_MAP: { [key: string]: string } = {
 // Asset class colors for the breakdown chart and table color dots
 const ASSET_CLASS_COLORS: Record<string, string> = {
   'Fixed Income': '#22c55e', 'Equities': '#ef4444', 'Crypto': '#111827', 'Alternatives': '#a855f7',
+  'Metals & Crypto': '#b45309', // amber-700 — gold-ish to represent the physical + crypto nature
 };
 
 // Colors for the by-currency bar chart — one distinct color per native currency
 const CURRENCY_COLORS: Record<string, string> = {
   PLN: '#f59e0b', USD: '#3b82f6', SGD: '#10b981', EUR: '#8b5cf6', CHF: '#f97316',
+  'M&C': '#b45309', // matches the Metals & Crypto asset class color
 };
+
+// "Group Metals & Crypto" feature: assets whose raw asset class is 'Other' (Gold + Crypto in this
+// portfolio's Google Sheet) can be displayed as a unified "Metals & Crypto" asset class AND as a
+// separate "M&C" pseudo-currency in the By Currency bar chart so they don't inflate fiat buckets.
+const METALS_CRYPTO_LABEL = 'Metals & Crypto'; // display label for the grouped asset class
+const METALS_CRYPTO_CCY   = 'M&C';             // pseudo-currency code shown in the bar chart
 
 // Currency symbols for display formatting
 const CURRENCY_SYMBOLS: { [key: string]: string } = {
@@ -584,6 +592,9 @@ const PortfolioBacktester = () => {
   const [openAssetClassFilter, setOpenAssetClassFilter] = useState<string | null>(null);
   // Currency filter: clicking a bar in the currency breakdown filters Asset Class + Open Positions
   const [openCurrencyFilter, setOpenCurrencyFilter] = useState<string | null>(null);
+  // Toggle: when true, assets classified as "Other" (Gold + Crypto) are relabelled "Metals & Crypto"
+  // as an asset class AND pulled out of their fiat currency bucket into a "M&C" pseudo-currency.
+  const [groupMetalsCrypto, setGroupMetalsCrypto] = useState(true);
   // Ref for the "select all" checkbox in open position detail view
   const openSelectAllRef = useRef<HTMLInputElement>(null);
 
@@ -9559,6 +9570,28 @@ const PortfolioBacktester = () => {
                     ))}
                   </select>
                 </div>
+
+                {/* "Group M&C" toggle — when on, Gold + Crypto ("Other") become "Metals & Crypto" as
+                    both an asset class and a separate currency bar, keeping fiat bars pure */}
+                <button
+                  onClick={() => {
+                    setGroupMetalsCrypto(prev => !prev);
+                    // Clear any active filter whose label only exists in one mode
+                    setOpenAssetClassFilter(null);
+                    setOpenCurrencyFilter(null);
+                  }}
+                  className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors ${
+                    groupMetalsCrypto
+                      ? 'bg-amber-700 text-white border-amber-700'
+                      : 'bg-white text-gray-500 border-gray-300 hover:border-amber-600 hover:text-amber-700'
+                  }`}
+                  title={groupMetalsCrypto
+                    ? 'Metals & Crypto are grouped as their own class and currency — click to ungroup'
+                    : 'Gold and Crypto currently show as "Other" — click to group as Metals & Crypto'}
+                >
+                  <span>{groupMetalsCrypto ? '●' : '○'}</span>
+                  Group M&amp;C
+                </button>
               </div>
 
               {/* --- SUMMARY VIEW (when no specific asset is drilled into) --- */}
@@ -9658,9 +9691,9 @@ const PortfolioBacktester = () => {
                   };
                 });
 
-                // Sort open positions by asset class: Fixed Income → Crypto → Alternatives → Equities
+                // Sort open positions by asset class: Fixed Income → M&C → Alternatives → Equities
                 const assetClassOrder: Record<string, number> = {
-                  'Fixed Income': 0, 'Crypto': 1, 'Alternatives': 2, 'Equities': 3,
+                  'Fixed Income': 0, 'Crypto': 1, 'Other': 1, 'Metals & Crypto': 1, 'Alternatives': 2, 'Equities': 3,
                 };
                 openSummaryData.sort((a, b) => (assetClassOrder[a.assetClass] ?? 99) - (assetClassOrder[b.assetClass] ?? 99));
 
@@ -9673,18 +9706,35 @@ const PortfolioBacktester = () => {
                   return latestRow ? getFxRate(latestRow, FX_TICKER_MAP[nativeCcy] || '') : 1;
                 };
 
+                // Helpers for the "Group Metals & Crypto" toggle:
+                // effectiveClass — when toggle is on, any asset whose raw class is 'Other' (or missing)
+                //   becomes 'Metals & Crypto'; otherwise returns the class as-is, defaulting to 'Other'.
+                const effectiveClass = (rawCls: string): string => {
+                  const cls = rawCls || 'Other';
+                  return groupMetalsCrypto && cls === 'Other' ? METALS_CRYPTO_LABEL : cls;
+                };
+                // effectiveCurrency — when toggle is on, M&C assets get a pseudo-currency 'M&C' so
+                //   their value is excluded from real fiat bars (e.g. USD) in the By Currency chart.
+                const effectiveCurrency = (row: { nativeCurrency: string; assetClass: string }): string => {
+                  const cls = row.assetClass || 'Other';
+                  return groupMetalsCrypto && cls === 'Other' ? METALS_CRYPTO_CCY : row.nativeCurrency;
+                };
+
                 // --- Currency filter: slice openSummaryData to only the selected native currency ---
                 // The bar chart always shows ALL currencies; this subset drives the Asset Class section.
+                // Uses effectiveCurrency so clicking the "M&C" bar correctly includes Gold+Crypto rows.
                 const currencyFilteredData = openCurrencyFilter
-                  ? openSummaryData.filter(row => row.nativeCurrency === openCurrencyFilter)
+                  ? openSummaryData.filter(row => effectiveCurrency(row) === openCurrencyFilter)
                   : openSummaryData;
 
                 // --- Currency rollup (always from full openSummaryData — bar chart shows every currency) ---
+                // Uses effectiveCurrency so M&C assets appear as 'M&C' instead of their fiat currency.
                 const ccyRollupMap: Record<string, number> = {};
                 for (const row of openSummaryData) {
-                  const ccy = row.nativeCurrency || 'PLN';
-                  // Use converted value when a currency filter is selected, otherwise convert to PLN
-                  const cvEff = positionsCurrency ? row.currentValueConverted : row.currentValue * toPLNLatest(ccy);
+                  const ccy = effectiveCurrency(row);
+                  // For fiat currencies use toPLNLatest; for M&C use the row's own native currency for conversion
+                  const nativeCcyForConv = ccy === METALS_CRYPTO_CCY ? (row.nativeCurrency || 'PLN') : ccy;
+                  const cvEff = positionsCurrency ? row.currentValueConverted : row.currentValue * toPLNLatest(nativeCcyForConv);
                   ccyRollupMap[ccy] = (ccyRollupMap[ccy] || 0) + cvEff;
                 }
                 // Sort by value descending so the largest bar appears at the top
@@ -9700,7 +9750,7 @@ const PortfolioBacktester = () => {
                 // native totals stored on each row (avoids re-fetching transactions).
                 const acRollupMap: Record<string, { invested: number; currentValue: number; pnl: number }> = {};
                 for (const row of currencyFilteredData) {
-                  const cls = row.assetClass || 'Other';
+                  const cls = effectiveClass(row.assetClass); // remaps 'Other' → 'Metals & Crypto' when toggle is on
                   if (!acRollupMap[cls]) acRollupMap[cls] = { invested: 0, currentValue: 0, pnl: 0 };
                   let investedEff: number, currentValueEff: number, pnlEff: number;
                   if (positionsCurrency) {
@@ -9733,8 +9783,8 @@ const PortfolioBacktester = () => {
                 // Clicking a sub-row also sets openCurrencyFilter so all three sections sync.
                 const acCurrencyBreakdown: Record<string, Record<string, { invested: number; currentValue: number; pnl: number }>> = {};
                 for (const row of currencyFilteredData) {
-                  const cls = row.assetClass || 'Other';
-                  const ccy = row.nativeCurrency || 'PLN';
+                  const cls = effectiveClass(row.assetClass);   // e.g. 'Other' → 'Metals & Crypto'
+                  const ccy = effectiveCurrency(row);            // e.g. 'USD' → 'M&C' for gold/crypto
                   if (!acCurrencyBreakdown[cls]) acCurrencyBreakdown[cls] = {};
                   if (!acCurrencyBreakdown[cls][ccy]) acCurrencyBreakdown[cls][ccy] = { invested: 0, currentValue: 0, pnl: 0 };
                   if (positionsCurrency) {
@@ -9798,11 +9848,12 @@ const PortfolioBacktester = () => {
 
                 // Merge weights into each row so we can filter without losing the index.
                 // Apply currency filter AND asset class filter together (AND logic — both must match).
+                // Uses effectiveCurrency/effectiveClass so the M&C grouping is respected.
                 const filteredOpenData = openSummaryData
                   .map((row, idx) => ({ ...row, _weight: openWeights[idx] }))
                   .filter(row =>
-                    (!openCurrencyFilter || row.nativeCurrency === openCurrencyFilter) &&
-                    (!openAssetClassFilter || row.assetClass === openAssetClassFilter)
+                    (!openCurrencyFilter  || effectiveCurrency(row) === openCurrencyFilter) &&
+                    (!openAssetClassFilter || effectiveClass(row.assetClass) === openAssetClassFilter)
                   );
 
                 if (openSummaryData.length === 0 && closedSummaryData.length === 0) {
