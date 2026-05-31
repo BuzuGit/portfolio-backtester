@@ -360,6 +360,11 @@ const ASSET_CLASS_COLORS: Record<string, string> = {
   'Fixed Income': '#22c55e', 'Equities': '#ef4444', 'Crypto': '#111827', 'Alternatives': '#a855f7',
 };
 
+// Colors for the by-currency bar chart — one distinct color per native currency
+const CURRENCY_COLORS: Record<string, string> = {
+  PLN: '#f59e0b', USD: '#3b82f6', SGD: '#10b981', EUR: '#8b5cf6', CHF: '#f97316',
+};
+
 // Currency symbols for display formatting
 const CURRENCY_SYMBOLS: { [key: string]: string } = {
   PLN: 'zl', USD: '$', SGD: 'S$', EUR: '€', CHF: 'CHF', '': '$'
@@ -577,6 +582,8 @@ const PortfolioBacktester = () => {
   const [openGraphEnds, setOpenGraphEnds] = useState<string>('');
   // Asset class filter: clicking a row/slice in the breakdown filters Open Positions
   const [openAssetClassFilter, setOpenAssetClassFilter] = useState<string | null>(null);
+  // Currency filter: clicking a bar in the currency breakdown filters Asset Class + Open Positions
+  const [openCurrencyFilter, setOpenCurrencyFilter] = useState<string | null>(null);
   // Ref for the "select all" checkbox in open position detail view
   const openSelectAllRef = useRef<HTMLInputElement>(null);
 
@@ -9642,6 +9649,7 @@ const PortfolioBacktester = () => {
 
                   return {
                     ticker, name: assetInfo?.name || '', assetClass: assetInfo?.assetClass || '',
+                    nativeCurrency,
                     numTransactions: purchases.length,
                     firstBuyDate, lastValuation: today, timeHeldYears,
                     avgBuyPrice, currentPrice, totalShares,
@@ -9656,20 +9664,42 @@ const PortfolioBacktester = () => {
                 };
                 openSummaryData.sort((a, b) => (assetClassOrder[a.assetClass] ?? 99) - (assetClassOrder[b.assetClass] ?? 99));
 
-                // --- Asset class breakdown (table + pie chart above Open Positions) ---
+                // --- Shared display helpers ---
                 // When no Ccy filter is active, default all breakdown values to PLN.
                 const effectiveCcy = positionsCurrency || 'PLN';
-                // Helper: convert a native currency to PLN at the latest available rate
+                // Helper: convert a native currency amount to PLN using the latest available FX rate
                 const toPLNLatest = (nativeCcy: string): number => {
                   if (nativeCcy === 'PLN') return 1;
                   return latestRow ? getFxRate(latestRow, FX_TICKER_MAP[nativeCcy] || '') : 1;
                 };
-                // Roll up each open position into its asset class bucket.
+
+                // --- Currency filter: slice openSummaryData to only the selected native currency ---
+                // The bar chart always shows ALL currencies; this subset drives the Asset Class section.
+                const currencyFilteredData = openCurrencyFilter
+                  ? openSummaryData.filter(row => row.nativeCurrency === openCurrencyFilter)
+                  : openSummaryData;
+
+                // --- Currency rollup (always from full openSummaryData — bar chart shows every currency) ---
+                const ccyRollupMap: Record<string, number> = {};
+                for (const row of openSummaryData) {
+                  const ccy = row.nativeCurrency || 'PLN';
+                  // Use converted value when a currency filter is selected, otherwise convert to PLN
+                  const cvEff = positionsCurrency ? row.currentValueConverted : row.currentValue * toPLNLatest(ccy);
+                  ccyRollupMap[ccy] = (ccyRollupMap[ccy] || 0) + cvEff;
+                }
+                // Sort by value descending so the largest bar appears at the top
+                const currencyRollup = Object.entries(ccyRollupMap)
+                  .map(([currency, currentValue]) => ({ currency, currentValue }))
+                  .sort((a, b) => b.currentValue - a.currentValue);
+                // Largest value = 100% bar width; others scale proportionally
+                const maxCurrencyValue = Math.max(...currencyRollup.map(r => r.currentValue), 0.01);
+
+                // --- Asset class breakdown (uses currencyFilteredData so it syncs with currency filter) ---
                 // When positionsCurrency is set, openSummaryData already has historically-accurate
                 // converted values — use them directly. When not set, apply latest PLN rate to the
-                // native totals already computed in openSummaryData (avoids re-fetching transactions).
+                // native totals stored on each row (avoids re-fetching transactions).
                 const acRollupMap: Record<string, { invested: number; currentValue: number; pnl: number }> = {};
-                for (const row of openSummaryData) {
+                for (const row of currencyFilteredData) {
                   const cls = row.assetClass || 'Other';
                   if (!acRollupMap[cls]) acRollupMap[cls] = { invested: 0, currentValue: 0, pnl: 0 };
                   let investedEff: number, currentValueEff: number, pnlEff: number;
@@ -9679,9 +9709,8 @@ const PortfolioBacktester = () => {
                     currentValueEff = row.currentValueConverted;
                     pnlEff = row.totalPnLConverted;
                   } else {
-                    // Convert native totals to PLN at the latest rate (summary-level approximation)
-                    const nativeCcy = assetLookup.find(a => a.ticker === row.ticker)?.currency || 'PLN';
-                    const conv = toPLNLatest(nativeCcy);
+                    // Convert native currency to PLN at the latest rate (summary-level approximation)
+                    const conv = toPLNLatest(row.nativeCurrency);
                     investedEff = row.totalInvested * conv;
                     currentValueEff = row.currentValue * conv;
                     pnlEff = row.totalPnL * conv;
@@ -9734,10 +9763,14 @@ const PortfolioBacktester = () => {
                   };
                 });
 
-                // Merge weights into each row so we can filter without losing the index
+                // Merge weights into each row so we can filter without losing the index.
+                // Apply currency filter AND asset class filter together (AND logic — both must match).
                 const filteredOpenData = openSummaryData
                   .map((row, idx) => ({ ...row, _weight: openWeights[idx] }))
-                  .filter(row => !openAssetClassFilter || row.assetClass === openAssetClassFilter);
+                  .filter(row =>
+                    (!openCurrencyFilter || row.nativeCurrency === openCurrencyFilter) &&
+                    (!openAssetClassFilter || row.assetClass === openAssetClassFilter)
+                  );
 
                 if (openSummaryData.length === 0 && closedSummaryData.length === 0) {
                   return (
@@ -9752,7 +9785,12 @@ const PortfolioBacktester = () => {
                     {/* === Asset Class Breakdown === */}
                     {openSummaryData.length > 0 && (
                       <div className="bg-white p-4 rounded-lg shadow mb-4">
-                        <h4 className="text-sm font-semibold text-gray-700 mb-3">By Asset Class</h4>
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                          By Asset Class
+                          {openCurrencyFilter && (
+                            <span className="text-xs font-normal text-amber-600">— {openCurrencyFilter} positions only</span>
+                          )}
+                        </h4>
                         <div className="flex gap-6 items-start">
                           <div className="overflow-x-auto flex-1">
                             <table className="w-full text-xs border-collapse">
@@ -9862,11 +9900,67 @@ const PortfolioBacktester = () => {
                       </div>
                     )}
 
+                    {/* === Currency Breakdown (horizontal bar chart) === */}
+                    {openSummaryData.length > 0 && (
+                      <div className="bg-white p-4 rounded-lg shadow mb-4">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3">By Currency</h4>
+                        {/* flex gap-6 mirrors the Asset Class layout: bars take flex-1, spacer = 220px for visual alignment */}
+                        <div className="flex gap-6 items-start">
+                          <div className="flex-1 space-y-2">
+                            {currencyRollup.map(ccyRow => {
+                              const isSelected = openCurrencyFilter === ccyRow.currency;
+                              const isFiltered = !!openCurrencyFilter && !isSelected;
+                              // Bar width as a % of the largest currency
+                              const barPct = maxCurrencyValue > 0 ? (ccyRow.currentValue / maxCurrencyValue) * 100 : 0;
+                              const color = CURRENCY_COLORS[ccyRow.currency] || '#6b7280';
+                              return (
+                                <div
+                                  key={ccyRow.currency}
+                                  className={`flex items-center gap-2 cursor-pointer px-1 py-0.5 rounded transition-colors ${
+                                    isSelected
+                                      ? 'bg-amber-50 outline outline-1 outline-amber-400'
+                                      : isFiltered
+                                      ? 'opacity-30'
+                                      : 'hover:bg-gray-50'
+                                  }`}
+                                  onClick={() => setOpenCurrencyFilter(prev => prev === ccyRow.currency ? null : ccyRow.currency)}
+                                >
+                                  {/* Currency label (fixed width, right-aligned for clean column) */}
+                                  <span className="text-xs font-mono text-gray-600 w-8 text-right flex-shrink-0">{ccyRow.currency}</span>
+                                  {/* Proportional bar */}
+                                  <div className="relative flex-1 h-5 bg-gray-100 rounded overflow-hidden">
+                                    <div
+                                      className="h-full rounded"
+                                      style={{ width: `${barPct}%`, backgroundColor: color }}
+                                    />
+                                  </div>
+                                  {/* Value in effective currency (PLN by default, or selected ccy) */}
+                                  <span className="text-xs font-mono text-gray-700 w-28 text-right flex-shrink-0">
+                                    {ccyRow.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} {effectiveCcy}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {/* Empty spacer — keeps this card's content width aligned with the table in Asset Class above */}
+                          <div style={{ width: 220, flexShrink: 0 }} />
+                        </div>
+                      </div>
+                    )}
+
                     {/* === Open Positions Table === */}
                     {openSummaryData.length > 0 && (
                       <div className="bg-white p-4 rounded-lg shadow mb-4">
                         <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                           Open Positions
+                          {/* Currency filter badge (amber) — cleared by clicking ✕ */}
+                          {openCurrencyFilter && (
+                            <span className="flex items-center gap-1 text-xs font-normal bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                              {openCurrencyFilter}
+                              <button onClick={(e) => { e.stopPropagation(); setOpenCurrencyFilter(null); }} className="hover:text-amber-900 leading-none">✕</button>
+                            </span>
+                          )}
+                          {/* Asset class filter badge (blue) — cleared by clicking ✕ */}
                           {openAssetClassFilter && (
                             <span className="flex items-center gap-1 text-xs font-normal bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
                               {openAssetClassFilter}
