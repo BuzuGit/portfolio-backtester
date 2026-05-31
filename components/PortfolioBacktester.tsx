@@ -355,6 +355,11 @@ const FX_TICKER_MAP: { [key: string]: string } = {
   USD: 'USDPLN', SGD: 'SGDPLN', EUR: 'EURPLN', CHF: 'CHFPLN', PLN: ''
 };
 
+// Asset class colors for the breakdown chart and table color dots
+const ASSET_CLASS_COLORS: Record<string, string> = {
+  'Fixed Income': '#22c55e', 'Equities': '#ef4444', 'Crypto': '#111827', 'Alternatives': '#a855f7',
+};
+
 // Currency symbols for display formatting
 const CURRENCY_SYMBOLS: { [key: string]: string } = {
   PLN: 'zl', USD: '$', SGD: 'S$', EUR: '€', CHF: 'CHF', '': '$'
@@ -9652,22 +9657,17 @@ const PortfolioBacktester = () => {
                 openSummaryData.sort((a, b) => (assetClassOrder[a.assetClass] ?? 99) - (assetClassOrder[b.assetClass] ?? 99));
 
                 // --- Asset class breakdown (table + pie chart above Open Positions) ---
-                const ASSET_CLASS_COLORS: Record<string, string> = {
-                  'Fixed Income': '#22c55e', 'Equities': '#ef4444', 'Crypto': '#111827', 'Alternatives': '#a855f7',
-                };
                 // When no Ccy filter is active, default all breakdown values to PLN.
                 const effectiveCcy = positionsCurrency || 'PLN';
-                const effectiveCcyLabel = effectiveCcy;
-                // Helpers to convert a native currency to PLN using available FX data
-                const toPLNForDate = (nativeCcy: string, dateStr: string): number => {
-                  if (nativeCcy === 'PLN') return 1;
-                  return getFxRateForDate(FX_TICKER_MAP[nativeCcy] || '', dateStr);
-                };
+                // Helper: convert a native currency to PLN at the latest available rate
                 const toPLNLatest = (nativeCcy: string): number => {
                   if (nativeCcy === 'PLN') return 1;
                   return latestRow ? getFxRate(latestRow, FX_TICKER_MAP[nativeCcy] || '') : 1;
                 };
-                // Roll up each open position into its asset class bucket
+                // Roll up each open position into its asset class bucket.
+                // When positionsCurrency is set, openSummaryData already has historically-accurate
+                // converted values — use them directly. When not set, apply latest PLN rate to the
+                // native totals already computed in openSummaryData (avoids re-fetching transactions).
                 const acRollupMap: Record<string, { invested: number; currentValue: number; pnl: number }> = {};
                 for (const row of openSummaryData) {
                   const cls = row.assetClass || 'Other';
@@ -9679,14 +9679,12 @@ const PortfolioBacktester = () => {
                     currentValueEff = row.currentValueConverted;
                     pnlEff = row.totalPnLConverted;
                   } else {
-                    // No Ccy filter — convert to PLN using per-transaction historical rates for invested
-                    const purchases = getOpenPurchases(row.ticker);
-                    const dividends = getOpenDividends(row.ticker);
+                    // Convert native totals to PLN at the latest rate (summary-level approximation)
                     const nativeCcy = assetLookup.find(a => a.ticker === row.ticker)?.currency || 'PLN';
-                    investedEff = purchases.reduce((sum, t) => sum + t.amount * toPLNForDate(nativeCcy, t.date), 0);
-                    const dividendsEff = dividends.reduce((sum, t) => sum + t.amount * toPLNForDate(nativeCcy, t.date), 0);
-                    currentValueEff = row.currentValue * toPLNLatest(nativeCcy);
-                    pnlEff = currentValueEff + dividendsEff - investedEff;
+                    const conv = toPLNLatest(nativeCcy);
+                    investedEff = row.totalInvested * conv;
+                    currentValueEff = row.currentValue * conv;
+                    pnlEff = row.totalPnL * conv;
                   }
                   acRollupMap[cls].invested += investedEff;
                   acRollupMap[cls].currentValue += currentValueEff;
@@ -9761,9 +9759,9 @@ const PortfolioBacktester = () => {
                               <thead>
                                 <tr className="border-b border-gray-200">
                                   <th className="text-left py-2 px-2 bg-gray-200">Asset Class</th>
-                                  <th className="text-right py-2 px-2 bg-gray-200">Invested {effectiveCcyLabel}</th>
-                                  <th className="text-right py-2 px-2 bg-gray-200">Current Value {effectiveCcyLabel}</th>
-                                  <th className="text-right py-2 px-2 bg-gray-200">Total PnL {effectiveCcyLabel}</th>
+                                  <th className="text-right py-2 px-2 bg-gray-200">Invested {effectiveCcy}</th>
+                                  <th className="text-right py-2 px-2 bg-gray-200">Current Value {effectiveCcy}</th>
+                                  <th className="text-right py-2 px-2 bg-gray-200">Total PnL {effectiveCcy}</th>
                                   <th className="text-right py-2 px-2 bg-gray-200">Return %</th>
                                   <th className="text-right py-2 px-2 bg-gray-200">Weight</th>
                                 </tr>
