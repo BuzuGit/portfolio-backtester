@@ -29,9 +29,10 @@
       "Bash(npx kill-port 3000)",
       "Bash(npx kill-port 3000 3001)",
       "Bash(git status -u)",
-      "Bash(gh pr create --title 'Add Risk/Return scatter plot to Correlations tab' --body ' *)",
-      "Bash(curl -sL \"https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM3Qq52UZwmQyRQrG_YER6-RNnagk2GG9Os65kFPtkNTpNtZywaoMEV8w_xDDuu0eRdEoPWgn/pub?gid=882618775&output=csv\")",
-      "Read(//tmp/**)"
+      "Bash(netstat -ano)",
+      "Bash(grep -n \"^  const \\\\|^  //\" /c/Users/pbelz/OneDrive/Claude/PortfolioBacktester/components/PortfolioBacktester.tsx)",
+      "Bash(ls -lh /c/Users/pbelz/OneDrive/Claude/PortfolioBacktester/*.png)",
+      "Bash(find C:UserspbelzOneDriveClaudePortfolioBacktester -name *.tsx -path */components/*)"
     ]
   }
 }

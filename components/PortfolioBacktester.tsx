@@ -592,6 +592,8 @@ const PortfolioBacktester = () => {
   const [openAssetClassFilter, setOpenAssetClassFilter] = useState<string | null>(null);
   // Currency filter: clicking a bar in the currency breakdown filters Asset Class + Open Positions
   const [openCurrencyFilter, setOpenCurrencyFilter] = useState<string | null>(null);
+  // Account filter: clicking a bar in the By Account breakdown filters Asset Class, By Currency, and Open Positions
+  const [openAccountFilter, setOpenAccountFilter] = useState<string | null>(null);
   // Toggle: when true, assets classified as "Other" (Gold + Crypto) are relabelled "Metals & Crypto"
   // as an asset class AND pulled out of their fiat currency bucket into a "M&C" pseudo-currency.
   const [groupMetalsCrypto, setGroupMetalsCrypto] = useState(true);
@@ -9720,17 +9722,31 @@ const PortfolioBacktester = () => {
                   return groupMetalsCrypto && cls === 'Other' ? METALS_CRYPTO_CCY : row.nativeCurrency;
                 };
 
-                // --- Currency filter: slice openSummaryData to only the selected native currency ---
-                // The bar chart always shows ALL currencies; this subset drives the Asset Class section.
-                // Uses effectiveCurrency so clicking the "M&C" bar correctly includes Gold+Crypto rows.
-                const currencyFilteredData = openCurrencyFilter
-                  ? openSummaryData.filter(row => effectiveCurrency(row) === openCurrencyFilter)
-                  : openSummaryData;
+                // --- Build a map of ticker → set of accounts (from Purchase of Asset transactions only) ---
+                // Used to filter the portfolio by account — a ticker is "in" an account if it has
+                // at least one purchase from that account.
+                const tickerPurchaseAccounts: Record<string, Set<string>> = {};
+                for (const t of transactionData) {
+                  if (t.flow !== 'Purchase of Asset') continue;
+                  if (!tickerPurchaseAccounts[t.ticker]) tickerPurchaseAccounts[t.ticker] = new Set();
+                  tickerPurchaseAccounts[t.ticker].add(t.account || 'Unknown');
+                }
+
+                // --- Currency filter + Account filter: both narrow the data driving Asset Class + Open Positions ---
+                const currencyFilteredData = openSummaryData.filter(row => {
+                  if (openCurrencyFilter && effectiveCurrency(row) !== openCurrencyFilter) return false;
+                  if (openAccountFilter && !tickerPurchaseAccounts[row.ticker]?.has(openAccountFilter)) return false;
+                  return true;
+                });
 
                 // --- Currency rollup (always from full openSummaryData — bar chart shows every currency) ---
+                // When account filter is active, show only that account's tickers in the bar chart.
                 // Uses effectiveCurrency so M&C assets appear as 'M&C' instead of their fiat currency.
+                const ccyRollupSource = openAccountFilter
+                  ? openSummaryData.filter(row => tickerPurchaseAccounts[row.ticker]?.has(openAccountFilter))
+                  : openSummaryData;
                 const ccyRollupMap: Record<string, number> = {};
-                for (const row of openSummaryData) {
+                for (const row of ccyRollupSource) {
                   const ccy = effectiveCurrency(row);
                   // For fiat currencies use toPLNLatest; for M&C use the row's own native currency for conversion
                   const nativeCcyForConv = ccy === METALS_CRYPTO_CCY ? (row.nativeCurrency || 'PLN') : ccy;
@@ -9854,7 +9870,8 @@ const PortfolioBacktester = () => {
                   .map((row, idx) => ({ ...row, _weight: openWeights[idx] }))
                   .filter(row =>
                     (!openCurrencyFilter  || effectiveCurrency(row) === openCurrencyFilter) &&
-                    (!openAssetClassFilter || effectiveClass(row.assetClass) === openAssetClassFilter)
+                    (!openAssetClassFilter || effectiveClass(row.assetClass) === openAssetClassFilter) &&
+                    (!openAccountFilter   || tickerPurchaseAccounts[row.ticker]?.has(openAccountFilter))
                   );
 
                 if (openSummaryData.length === 0 && closedSummaryData.length === 0) {
@@ -10017,17 +10034,14 @@ const PortfolioBacktester = () => {
                                 >
                                   {/* Currency label (fixed width, right-aligned for clean column) */}
                                   <span className="text-xs font-mono text-gray-600 w-8 text-right flex-shrink-0">{ccyRow.currency}</span>
-                                  {/* Proportional bar — amount shown inside when bar is wide enough to fit */}
-                                  <div className="relative flex-1 h-5 bg-gray-100 rounded overflow-hidden">
+                                  <div className="relative flex-1 h-5 bg-gray-100 rounded">
                                     <div
                                       className="h-full rounded flex items-center pl-1.5"
                                       style={{ width: `${barPct}%`, backgroundColor: color }}
                                     >
-                                      {barPct >= 15 && (
-                                        <span className="text-white font-mono truncate" style={{ fontSize: 10 }}>
-                                          {ccyRow.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                        </span>
-                                      )}
+                                      <span className="font-mono whitespace-nowrap" style={{ fontSize: 10, color: barPct >= 10 ? 'white' : color }}>
+                                        {ccyRow.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                      </span>
                                     </div>
                                   </div>
                                   {/* % of total (sum of all bars in the active dataset) to the right */}
@@ -10046,6 +10060,100 @@ const PortfolioBacktester = () => {
                       </div>
                     )}
 
+                    {/* === By Account Breakdown (horizontal bar chart) === */}
+                    {openSummaryData.length > 0 && (() => {
+                      // Build the account rollup from data already filtered by currency + asset class filters.
+                      // currencyFilteredData already accounts for both openCurrencyFilter and openAccountFilter,
+                      // but here we want the source for the bars to be filtered by currency + asset class only
+                      // (not by account itself — otherwise clicking an account would hide the other bars).
+                      const acctBarSource = openSummaryData.filter(row =>
+                        (!openCurrencyFilter  || effectiveCurrency(row) === openCurrencyFilter) &&
+                        (!openAssetClassFilter || effectiveClass(row.assetClass) === openAssetClassFilter)
+                      );
+
+                      // For each ticker in the filtered set, allocate its current value to each account
+                      // in proportion to how much was purchased from that account (Purchase of Asset only).
+                      const acctRollupMap: Record<string, number> = {};
+                      for (const row of acctBarSource) {
+                        const purchases = getOpenPurchases(row.ticker);
+                        const purchaseOnly = purchases.filter(t => t.flow === 'Purchase of Asset');
+                        const tickerTotalInvested = purchaseOnly.reduce((s, t) => s + t.amount, 0);
+                        if (tickerTotalInvested === 0) continue;
+                        const acctInvested: Record<string, number> = {};
+                        for (const t of purchaseOnly) {
+                          const acct = t.account || 'Unknown';
+                          acctInvested[acct] = (acctInvested[acct] || 0) + t.amount;
+                        }
+                        const nativeCcyForConv = effectiveCurrency(row) === METALS_CRYPTO_CCY ? (row.nativeCurrency || 'PLN') : effectiveCurrency(row);
+                        const cvEff = positionsCurrency ? row.currentValueConverted : row.currentValue * toPLNLatest(nativeCcyForConv);
+                        for (const [acct, invested] of Object.entries(acctInvested)) {
+                          acctRollupMap[acct] = (acctRollupMap[acct] || 0) + cvEff * (invested / tickerTotalInvested);
+                        }
+                      }
+                      const accountRollup = Object.entries(acctRollupMap)
+                        .map(([account, currentValue]) => ({ account, currentValue }))
+                        .sort((a, b) => b.currentValue - a.currentValue);
+                      const maxAccountValue = Math.max(...accountRollup.map(r => r.currentValue), 0.01);
+                      const totalAccountValue = accountRollup.reduce((s, r) => s + r.currentValue, 0);
+
+                      const ACCOUNT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
+
+                      return (
+                        <div className="bg-white p-4 rounded-lg shadow mb-4">
+                          <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                            By Account
+                            {openAssetClassFilter && (
+                              <span className="text-xs font-normal text-blue-600">— {openAssetClassFilter} only</span>
+                            )}
+                            {openCurrencyFilter && (
+                              <span className="text-xs font-normal text-amber-600">— {openCurrencyFilter} positions only</span>
+                            )}
+                          </h4>
+                          <div className="flex gap-6 items-start">
+                            <div className="flex-1 space-y-2">
+                              {accountRollup.map((acctRow, idx) => {
+                                const isSelected = openAccountFilter === acctRow.account;
+                                const isFiltered = !!openAccountFilter && !isSelected;
+                                const barPct = maxAccountValue > 0 ? (acctRow.currentValue / maxAccountValue) * 100 : 0;
+                                const color = ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length];
+                                return (
+                                  <div
+                                    key={acctRow.account}
+                                    className={`flex items-center gap-2 cursor-pointer px-1 py-0.5 rounded transition-colors ${
+                                      isSelected
+                                        ? 'bg-green-50 outline outline-1 outline-green-400'
+                                        : isFiltered
+                                        ? 'opacity-30'
+                                        : 'hover:bg-gray-50'
+                                    }`}
+                                    onClick={() => setOpenAccountFilter(prev => prev === acctRow.account ? null : acctRow.account)}
+                                  >
+                                    <span className="text-xs font-mono text-gray-600 text-right flex-shrink-0" style={{ minWidth: 160 }}>{acctRow.account}</span>
+                                    <div className="relative flex-1 h-5 bg-gray-100 rounded">
+                                      <div
+                                        className="h-full rounded flex items-center pl-1.5"
+                                        style={{ width: `${barPct}%`, backgroundColor: color }}
+                                      >
+                                        <span className="font-mono whitespace-nowrap" style={{ fontSize: 10, color: barPct >= 10 ? 'white' : color }}>
+                                          {acctRow.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <span className="text-xs font-mono text-gray-600 w-12 text-right flex-shrink-0">
+                                      {totalAccountValue > 0
+                                        ? `${(acctRow.currentValue / totalAccountValue * 100).toFixed(1)}%`
+                                        : '—'}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div style={{ width: 220, flexShrink: 0 }} />
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* === Open Positions Table === */}
                     {openSummaryData.length > 0 && (
                       <div className="bg-white p-4 rounded-lg shadow mb-4">
@@ -10063,6 +10171,13 @@ const PortfolioBacktester = () => {
                             <span className="flex items-center gap-1 text-xs font-normal bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
                               {openAssetClassFilter}
                               <button onClick={(e) => { e.stopPropagation(); setOpenAssetClassFilter(null); }} className="hover:text-blue-900 leading-none">✕</button>
+                            </span>
+                          )}
+                          {/* Account filter badge (green) — cleared by clicking ✕ */}
+                          {openAccountFilter && (
+                            <span className="flex items-center gap-1 text-xs font-normal bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
+                              {openAccountFilter}
+                              <button onClick={(e) => { e.stopPropagation(); setOpenAccountFilter(null); }} className="hover:text-green-900 leading-none">✕</button>
                             </span>
                           )}
                         </h4>

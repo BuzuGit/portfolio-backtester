@@ -162,6 +162,7 @@ export interface TransactionRow {
   asset: string;      // Asset name (e.g., "Nikko AM-STC Asia REIT")
   flow: FlowType;     // "Purchase of Asset", "Dividend", or "Proceeds from Sale"
   ticker: string;     // Ticker symbol (e.g., "CFATR")
+  account: string;    // Brokerage/bank account where the asset was held (e.g., "Saxo", "mBank")
 }
 
 // Daily NAV row from the "Daily" sheet (gid=882618775)
@@ -710,6 +711,7 @@ function parseTransactionData(csvText: string): TransactionRow[] {
       asset: readStr(values, 'Asset'),
       flow,
       ticker,
+      account: readStr(values, 'Flow to account:'),
     });
   }
 

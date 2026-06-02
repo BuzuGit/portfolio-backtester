@@ -4,8 +4,9 @@
     {
       "name": "dev",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "npm run dev"],
-      "port": 3000
+      "runtimeArgs": ["/c", "npx next dev"],
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }
