@@ -10054,8 +10054,44 @@ const PortfolioBacktester = () => {
                               );
                             })}
                           </div>
-                          {/* Empty spacer — keeps this card's content width aligned with the table in Asset Class above */}
-                          <div style={{ width: 220, flexShrink: 0 }} />
+                          {/* Pie chart — same dimensions as By Asset Class, colors match the bars */}
+                          <div style={{ width: 220, height: 200, flexShrink: 0 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <PieChart>
+                                <Pie
+                                  data={activeCurrencyData}
+                                  dataKey="currentValue"
+                                  nameKey="currency"
+                                  cx="50%"
+                                  cy="50%"
+                                  outerRadius={75}
+                                  innerRadius={35}
+                                  paddingAngle={2}
+                                  labelLine={false}
+                                  label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }: { cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; percent: number }) => {
+                                    if (percent < 0.05) return null;
+                                    const RAD = Math.PI / 180;
+                                    const r = innerRadius + (outerRadius - innerRadius) * 0.5;
+                                    return (
+                                      <text x={cx + r * Math.cos(-midAngle * RAD)} y={cy + r * Math.sin(-midAngle * RAD)} fill="white" textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold">
+                                        {`${(percent * 100).toFixed(1)}%`}
+                                      </text>
+                                    );
+                                  }}
+                                >
+                                  {activeCurrencyData.map((row) => (
+                                    <Cell
+                                      key={row.currency}
+                                      fill={CURRENCY_COLORS[row.currency] || '#6b7280'}
+                                      style={{ cursor: 'pointer', opacity: !openCurrencyFilter || openCurrencyFilter === row.currency ? 1 : 0.3 }}
+                                      onClick={() => setOpenCurrencyFilter(prev => prev === row.currency ? null : row.currency)}
+                                    />
+                                  ))}
+                                </Pie>
+                                <Tooltip formatter={(value: number) => [value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }), 'Value']} />
+                              </PieChart>
+                            </ResponsiveContainer>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -10148,7 +10184,44 @@ const PortfolioBacktester = () => {
                                 );
                               })}
                             </div>
-                            <div style={{ width: 220, flexShrink: 0 }} />
+                            {/* Pie chart — colors match the account bars by index */}
+                            <div style={{ width: 220, height: 200, flexShrink: 0 }}>
+                              <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                  <Pie
+                                    data={accountRollup}
+                                    dataKey="currentValue"
+                                    nameKey="account"
+                                    cx="50%"
+                                    cy="50%"
+                                    outerRadius={75}
+                                    innerRadius={35}
+                                    paddingAngle={2}
+                                    labelLine={false}
+                                    label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }: { cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; percent: number }) => {
+                                      if (percent < 0.05) return null;
+                                      const RAD = Math.PI / 180;
+                                      const r = innerRadius + (outerRadius - innerRadius) * 0.5;
+                                      return (
+                                        <text x={cx + r * Math.cos(-midAngle * RAD)} y={cy + r * Math.sin(-midAngle * RAD)} fill="white" textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold">
+                                          {`${(percent * 100).toFixed(1)}%`}
+                                        </text>
+                                      );
+                                    }}
+                                  >
+                                    {accountRollup.map((row, idx) => (
+                                      <Cell
+                                        key={row.account}
+                                        fill={ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length]}
+                                        style={{ cursor: 'pointer', opacity: !openAccountFilter || openAccountFilter === row.account ? 1 : 0.3 }}
+                                        onClick={() => setOpenAccountFilter(prev => prev === row.account ? null : row.account)}
+                                      />
+                                    ))}
+                                  </Pie>
+                                  <Tooltip formatter={(value: number) => [value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }), 'Value']} />
+                                </PieChart>
+                              </ResponsiveContainer>
+                            </div>
                           </div>
                         </div>
                       );
