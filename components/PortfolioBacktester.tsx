@@ -9354,7 +9354,37 @@ const PortfolioBacktester = () => {
                   {/* Chart 3: Returns by Year — grouped bar chart */}
                   {/* Bars shown/hidden based on selectedReturnCurrencies */}
                   <div className="bg-white p-4 rounded-lg shadow mb-4">
-                    <h3 className="text-md font-semibold text-gray-700 mb-2">Returns by Year (%)</h3>
+                    {/* Compute CAGR from annual returns for each selected currency.
+                        CAGR = geometric mean = (Π(1 + r_i/100))^(1/N) − 1.
+                        Only rows with a valid (finite) return value are included. */}
+                    {(() => {
+                      const ccyKeys: { key: 'PLN' | 'USD' | 'SGD'; field: 'returnPln' | 'returnUsd' | 'returnSgd'; color: string }[] = [
+                        { key: 'PLN', field: 'returnPln', color: '#374151' },
+                        { key: 'USD', field: 'returnUsd', color: '#ef4444' },
+                        { key: 'SGD', field: 'returnSgd', color: '#d97706' },
+                      ];
+                      const cagrParts = ccyKeys
+                        .filter(c => selectedReturnCurrencies.includes(c.key))
+                        .map(c => {
+                          const validReturns = yearsData.map(r => r[c.field]).filter(v => typeof v === 'number' && !isNaN(v));
+                          if (validReturns.length === 0) return null;
+                          const product = validReturns.reduce((acc, r) => acc * (1 + r / 100), 1);
+                          const cagr = (Math.pow(product, 1 / validReturns.length) - 1) * 100;
+                          const sign = cagr >= 0 ? '+' : '';
+                          return { key: c.key, cagr, sign, color: c.color };
+                        })
+                        .filter(Boolean) as { key: string; cagr: number; sign: string; color: string }[];
+                      return (
+                        <h3 className="text-md font-semibold text-gray-700 mb-2 flex items-center gap-3 flex-wrap">
+                          <span>Returns by Year (%)</span>
+                          {cagrParts.map(c => (
+                            <span key={c.key} className="text-sm font-normal" style={{ color: c.color }}>
+                              {c.key} CAGR: {c.sign}{c.cagr.toFixed(1)}%
+                            </span>
+                          ))}
+                        </h3>
+                      );
+                    })()}
                     <ResponsiveContainer width="100%" height={350}>
                       <BarChart
                         data={getReturnsChartData()}
