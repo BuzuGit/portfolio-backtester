@@ -6814,44 +6814,40 @@ const PortfolioBacktester = () => {
                               return { best: Math.max(...yearReturns), worst: Math.min(...yearReturns) };
                             })();
 
-                            // ---- Correlation to IWDA (Pearson, monthly returns) ----
-                            // Matches months between selected asset (from priceData) and IWDA
-                            // (from assetData) over the visible period, or the overlap if shorter.
-                            const iwdaCorr = (() => {
-                              const IWDA = 'IWDA';
-                              if (monthlySelectedTicker === IWDA) return 1;
+                            // ---- Correlation helper: Pearson correlation of monthly returns vs a benchmark ----
+                            const calcCorr = (benchTicker: string): number | null => {
+                              if (monthlySelectedTicker === benchTicker) return 1;
                               if (!assetData) return null;
 
-                              // Build IWDA last-price-per-month map from the full dataset
-                              const iwdaByMonth = new Map<string, number>();
+                              // Build benchmark last-price-per-month map
+                              const benchByMonth = new Map<string, number>();
                               for (const row of assetData) {
-                                const p = Number(row[IWDA]);
+                                const p = Number(row[benchTicker]);
                                 if (!p || p <= 0) continue;
                                 const d = new Date(row.date as string);
                                 const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-                                iwdaByMonth.set(ym, p); // last row per month wins (data is chronological)
+                                benchByMonth.set(ym, p);
                               }
 
-                              // Compute paired monthly returns for overlapping months
+                              const toYM = (dateStr: string) => {
+                                const d = new Date(dateStr);
+                                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                              };
+
                               const pairs: { a: number; b: number }[] = [];
                               for (let i = 1; i < priceData.length; i++) {
-                                const toYM = (dateStr: string) => {
-                                  const d = new Date(dateStr);
-                                  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-                                };
                                 const ym = toYM(priceData[i].date);
                                 const prevYm = toYM(priceData[i - 1].date);
-                                const iwdaCurr = iwdaByMonth.get(ym);
-                                const iwdaPrev = iwdaByMonth.get(prevYm);
-                                if (iwdaCurr == null || iwdaPrev == null || iwdaPrev === 0) continue;
+                                const bCurr = benchByMonth.get(ym);
+                                const bPrev = benchByMonth.get(prevYm);
+                                if (bCurr == null || bPrev == null || bPrev === 0) continue;
                                 pairs.push({
                                   a: (priceData[i].price - priceData[i - 1].price) / priceData[i - 1].price,
-                                  b: (iwdaCurr - iwdaPrev) / iwdaPrev,
+                                  b: (bCurr - bPrev) / bPrev,
                                 });
                               }
                               if (pairs.length < 3) return null;
 
-                              // Pearson correlation coefficient
                               const n = pairs.length;
                               const aMean = pairs.reduce((s, p) => s + p.a, 0) / n;
                               const bMean = pairs.reduce((s, p) => s + p.b, 0) / n;
@@ -6862,7 +6858,10 @@ const PortfolioBacktester = () => {
                               }
                               const denom = Math.sqrt(denA * denB);
                               return denom === 0 ? null : num / denom;
-                            })();
+                            };
+
+                            const iwdaCorr = calcCorr('IWDA');
+                            const vdtaCorr = calcCorr('VDTA');
 
                             return (
                               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
@@ -6880,6 +6879,7 @@ const PortfolioBacktester = () => {
                                       <th className="text-right py-2 px-2">Best Year</th>
                                       <th className="text-right py-2 px-2">Worst Year</th>
                                       <th className="text-right py-2 px-2">Corr IWDA</th>
+                                      <th className="text-right py-2 px-2">Corr VDTA</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -6899,6 +6899,9 @@ const PortfolioBacktester = () => {
                                       </td>
                                       <td className="text-right py-2 px-2">
                                         {iwdaCorr !== null ? iwdaCorr.toFixed(2) : '—'}
+                                      </td>
+                                      <td className="text-right py-2 px-2">
+                                        {vdtaCorr !== null ? vdtaCorr.toFixed(2) : '—'}
                                       </td>
                                     </tr>
                                   </tbody>
