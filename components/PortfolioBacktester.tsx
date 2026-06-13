@@ -3382,7 +3382,14 @@ const PortfolioBacktester = () => {
 
     // 4. Separate into price, drawdown, and SMA-distance arrays for the three charts
     const priceData = visibleData.map(d => ({ date: d.date, price: d.price, sma10: d.sma10 }));
-    const drawdownData = visibleData.map(d => ({ date: d.date, drawdown: d.drawdown }));
+
+    // Recompute drawdown from scratch within the visible window so the chart
+    // reflects the selected period only — not the full history ATH.
+    let windowAth = 0;
+    const drawdownData = visibleData.map(d => {
+      if (d.price > windowAth) windowAth = d.price;
+      return { date: d.date, drawdown: windowAth > 0 ? ((d.price - windowAth) / windowAth) * 100 : 0 };
+    });
 
     // SMA distance chart data: only months where SMA exists
     const smaDistData = visibleData
@@ -3396,10 +3403,11 @@ const PortfolioBacktester = () => {
     let maxPricePoint: { date: string; price: number } | null = null;
     let minPricePoint: { date: string; price: number } | null = null;
     let maxDrawdownPoint: { date: string; drawdown: number } | null = null;
-    for (const d of visibleData) {
+    for (let i = 0; i < visibleData.length; i++) {
+      const d = visibleData[i];
       if (!maxPricePoint || d.price > maxPricePoint.price) maxPricePoint = { date: d.date, price: d.price };
       if (!minPricePoint || d.price < minPricePoint.price) minPricePoint = { date: d.date, price: d.price };
-      if (!maxDrawdownPoint || d.drawdown < maxDrawdownPoint.drawdown) maxDrawdownPoint = { date: d.date, drawdown: d.drawdown };
+      if (!maxDrawdownPoint || drawdownData[i].drawdown < maxDrawdownPoint.drawdown) maxDrawdownPoint = { date: d.date, drawdown: drawdownData[i].drawdown };
     }
 
     // Notable points for SMA distance: furthest above SMA (green dot) and furthest below (red dot)
