@@ -482,7 +482,7 @@ const PortfolioBacktester = () => {
 
   // Best To Worst view mode: 'year' for annual returns, or a number (1-5) for period returns
   // When null or 'year', the year dropdown is used. When 1-5, shows period returns.
-  const [bestToWorstMode, setBestToWorstMode] = useState<'year' | 1 | 2 | 3 | 4 | 5>('year');
+  const [bestToWorstMode, setBestToWorstMode] = useState<'year' | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10>('year');
 
   // Trend Following tab state
   // Selected asset ticker for trend following analysis
@@ -6128,7 +6128,7 @@ const PortfolioBacktester = () => {
                     </div>
                     {/* Period Buttons */}
                     <div className="flex gap-1">
-                      {([1, 2, 3, 4, 5] as const).map(period => (
+                      {([1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const).map(period => (
                         <button
                           key={period}
                           onClick={() => setBestToWorstMode(period)}
@@ -6764,6 +6764,90 @@ const PortfolioBacktester = () => {
                               ))}
                             </div>
                           </div>
+
+                          {/* Statistics — same metrics as the Backtest tab, filtered by the period buttons and end-date selector above */}
+                          {(() => {
+                            // Build a ReturnPoint array from the already-filtered priceData + drawdownData.
+                            // Both arrays come from the same visibleData slice, so they share indices.
+                            const statPoints: ReturnPoint[] = priceData.map((p, i) => ({
+                              date: p.date,
+                              value: p.price,
+                              drawdown: drawdownData[i]?.drawdown ?? 0,
+                            }));
+                            if (statPoints.length < 2) return null;
+
+                            // ---- Total Return ----
+                            const statStart = statPoints[0].value;
+                            const statEnd = statPoints[statPoints.length - 1].value;
+                            const statTotalReturn = ((statEnd - statStart) / statStart) * 100;
+
+                            // ---- CAGR ----
+                            const statStartDate = new Date(statPoints[0].date);
+                            const statEndDate = new Date(statPoints[statPoints.length - 1].date);
+                            const statYears = (statEndDate.getTime() - statStartDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+                            const statCagr = statYears >= 1
+                              ? (Math.pow(statEnd / statStart, 1 / statYears) - 1) * 100
+                              : null;
+
+                            // ---- Volatility (annualised) ----
+                            const statPeriodic: number[] = [];
+                            for (let i = 1; i < statPoints.length; i++) {
+                              statPeriodic.push((statPoints[i].value - statPoints[i - 1].value) / statPoints[i - 1].value);
+                            }
+                            const statMean = statPeriodic.reduce((s, r) => s + r, 0) / statPeriodic.length;
+                            const statVariance = statPeriodic.map(r => Math.pow(r - statMean, 2)).reduce((s, sq) => s + sq, 0) / statPeriodic.length;
+                            const statVol = Math.sqrt(statVariance) * Math.sqrt(12) * 100;
+
+                            // ---- Max & Current Drawdown ----
+                            const statMaxDD = Math.min(...statPoints.map(p => p.drawdown));
+                            const statCurrDD = statPoints[statPoints.length - 1].drawdown;
+
+                            // ---- Longest Drawdown (months continuously below ATH) ----
+                            let statLongestDD = 0;
+                            let statCurDD = 0;
+                            for (const p of statPoints) {
+                              if (p.drawdown < 0) {
+                                statCurDD++;
+                              } else {
+                                if (statCurDD > statLongestDD) statLongestDD = statCurDD;
+                                statCurDD = 0;
+                              }
+                            }
+                            if (statCurDD > statLongestDD) statLongestDD = statCurDD;
+
+                            // ---- Sharpe Ratio (0% risk-free rate, same as Backtest tab) ----
+                            const statSharpe = statVol > 0 && statCagr !== null ? statCagr / statVol : null;
+
+                            return (
+                              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
+                                <h3 className="text-md font-semibold text-gray-700 mb-2">Statistics</h3>
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="border-b-2 border-gray-200">
+                                      <th className="text-right py-2 px-2">Total Return</th>
+                                      <th className="text-right py-2 px-2">CAGR</th>
+                                      <th className="text-right py-2 px-2">Vol</th>
+                                      <th className="text-right py-2 px-2">Sharpe</th>
+                                      <th className="text-right py-2 px-2">Max DD</th>
+                                      <th className="text-right py-2 px-2">Longest DD</th>
+                                      <th className="text-right py-2 px-2">Curr DD</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr className="border-b border-gray-100">
+                                      <td className="text-right py-2 px-2">{statTotalReturn.toFixed(2)}%</td>
+                                      <td className="text-right py-2 px-2">{statCagr !== null ? `${statCagr.toFixed(2)}%` : '—'}</td>
+                                      <td className="text-right py-2 px-2">{statVol.toFixed(2)}%</td>
+                                      <td className="text-right py-2 px-2">{statSharpe !== null ? statSharpe.toFixed(2) : '—'}</td>
+                                      <td className="text-right py-2 px-2 text-red-600">{statMaxDD.toFixed(2)}%</td>
+                                      <td className="text-right py-2 px-2 text-purple-700">{formatPeriod(statLongestDD)}</td>
+                                      <td className="text-right py-2 px-2 text-orange-600">{statCurrDD.toFixed(2)}%</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            );
+                          })()}
 
                           {/* Chart 1: Price + 10M SMA */}
                           <ResponsiveContainer width="100%" height={350}>
@@ -7426,6 +7510,7 @@ const PortfolioBacktester = () => {
                               </div>
                             );
                           })()}
+
                         </div>
                       );
                     })()}
