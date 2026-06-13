@@ -6790,6 +6790,80 @@ const PortfolioBacktester = () => {
                             const stats = calculateStatistics(statPoints, { name: monthlySelectedTicker } as Portfolio);
                             if (!stats) return null;
 
+                            // ---- Best / Worst calendar year within the visible period ----
+                            // Group priceData by year, compute return for each year using the
+                            // previous year-end price (or first price in window for the first year).
+                            const bestWorstYear = (() => {
+                              if (priceData.length < 2) return null;
+                              const yearMap = new Map<number, number[]>();
+                              for (const p of priceData) {
+                                const y = new Date(p.date).getFullYear();
+                                if (!yearMap.has(y)) yearMap.set(y, []);
+                                yearMap.get(y)!.push(p.price);
+                              }
+                              const years = Array.from(yearMap.keys()).sort();
+                              if (years.length < 1) return null;
+                              const yearReturns: number[] = [];
+                              let prevEnd = priceData[0].price;
+                              for (const y of years) {
+                                const prices = yearMap.get(y)!;
+                                const lastPrice = prices[prices.length - 1];
+                                yearReturns.push(((lastPrice - prevEnd) / prevEnd) * 100);
+                                prevEnd = lastPrice;
+                              }
+                              return { best: Math.max(...yearReturns), worst: Math.min(...yearReturns) };
+                            })();
+
+                            // ---- Correlation to IWDA (Pearson, monthly returns) ----
+                            // Matches months between selected asset (from priceData) and IWDA
+                            // (from assetData) over the visible period, or the overlap if shorter.
+                            const iwdaCorr = (() => {
+                              const IWDA = 'IWDA';
+                              if (monthlySelectedTicker === IWDA) return 1;
+                              if (!assetData) return null;
+
+                              // Build IWDA last-price-per-month map from the full dataset
+                              const iwdaByMonth = new Map<string, number>();
+                              for (const row of assetData) {
+                                const p = Number(row[IWDA]);
+                                if (!p || p <= 0) continue;
+                                const d = new Date(row.date as string);
+                                const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                                iwdaByMonth.set(ym, p); // last row per month wins (data is chronological)
+                              }
+
+                              // Compute paired monthly returns for overlapping months
+                              const pairs: { a: number; b: number }[] = [];
+                              for (let i = 1; i < priceData.length; i++) {
+                                const toYM = (dateStr: string) => {
+                                  const d = new Date(dateStr);
+                                  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                                };
+                                const ym = toYM(priceData[i].date);
+                                const prevYm = toYM(priceData[i - 1].date);
+                                const iwdaCurr = iwdaByMonth.get(ym);
+                                const iwdaPrev = iwdaByMonth.get(prevYm);
+                                if (iwdaCurr == null || iwdaPrev == null || iwdaPrev === 0) continue;
+                                pairs.push({
+                                  a: (priceData[i].price - priceData[i - 1].price) / priceData[i - 1].price,
+                                  b: (iwdaCurr - iwdaPrev) / iwdaPrev,
+                                });
+                              }
+                              if (pairs.length < 3) return null;
+
+                              // Pearson correlation coefficient
+                              const n = pairs.length;
+                              const aMean = pairs.reduce((s, p) => s + p.a, 0) / n;
+                              const bMean = pairs.reduce((s, p) => s + p.b, 0) / n;
+                              let num = 0, denA = 0, denB = 0;
+                              for (const p of pairs) {
+                                const da = p.a - aMean, db = p.b - bMean;
+                                num += da * db; denA += da * da; denB += db * db;
+                              }
+                              const denom = Math.sqrt(denA * denB);
+                              return denom === 0 ? null : num / denom;
+                            })();
+
                             return (
                               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
                                 <h3 className="text-md font-semibold text-gray-700 mb-2">Statistics</h3>
@@ -6803,6 +6877,9 @@ const PortfolioBacktester = () => {
                                       <th className="text-right py-2 px-2">Max DD</th>
                                       <th className="text-right py-2 px-2">Longest DD</th>
                                       <th className="text-right py-2 px-2">Curr DD</th>
+                                      <th className="text-right py-2 px-2">Best Year</th>
+                                      <th className="text-right py-2 px-2">Worst Year</th>
+                                      <th className="text-right py-2 px-2">Corr IWDA</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -6814,6 +6891,15 @@ const PortfolioBacktester = () => {
                                       <td className="text-right py-2 px-2 text-red-600">{stats.maxDrawdown}%</td>
                                       <td className="text-right py-2 px-2 text-purple-700">{stats.longestDrawdown}</td>
                                       <td className="text-right py-2 px-2 text-orange-600">{stats.currentDrawdown}%</td>
+                                      <td className="text-right py-2 px-2 text-green-600">
+                                        {bestWorstYear ? `+${bestWorstYear.best.toFixed(1)}%` : '—'}
+                                      </td>
+                                      <td className="text-right py-2 px-2 text-red-600">
+                                        {bestWorstYear ? `${bestWorstYear.worst.toFixed(1)}%` : '—'}
+                                      </td>
+                                      <td className="text-right py-2 px-2">
+                                        {iwdaCorr !== null ? iwdaCorr.toFixed(2) : '—'}
+                                      </td>
                                     </tr>
                                   </tbody>
                                 </table>
