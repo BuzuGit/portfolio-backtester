@@ -8579,7 +8579,7 @@ const PortfolioBacktester = () => {
                 const ys = scatterData.map(d => d.y);
                 const xPad = Math.max(3, (Math.max(...xs) - Math.min(...xs)) * 0.15);
                 const yPad = Math.max(3, (Math.max(...ys) - Math.min(...ys)) * 0.15);
-                const xMin = parseFloat((Math.min(...xs) - xPad).toFixed(1));
+                const xMin = Math.max(0, parseFloat((Math.min(...xs) - xPad).toFixed(1)));
                 const xMax = parseFloat((Math.max(...xs) + xPad).toFixed(1));
                 const yMin = parseFloat((Math.min(...ys) - yPad).toFixed(1));
                 const yMax = parseFloat((Math.max(...ys) + yPad).toFixed(1));
