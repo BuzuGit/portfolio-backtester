@@ -3001,6 +3001,13 @@ const PortfolioBacktester = () => {
     }
     if (!startRow) return null;
 
+    // Reject if the actual start date is more than ~3 months from the target.
+    // This means the asset doesn't have data going back the full requested period,
+    // so it should be excluded rather than showing a shorter return mislabelled as e.g. "10Y".
+    const actualStartMs = new Date(startRow.date).getTime();
+    const targetStartMs = new Date(targetDateStr).getTime();
+    if (actualStartMs - targetStartMs > 93 * 24 * 60 * 60 * 1000) return null;
+
     const startPrice = Number(startRow[ticker]);
     const totalReturn = ((endPrice / startPrice) - 1) * 100;
 
