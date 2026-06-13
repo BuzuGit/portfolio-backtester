@@ -6765,58 +6765,15 @@ const PortfolioBacktester = () => {
                             </div>
                           </div>
 
-                          {/* Statistics — same metrics as the Backtest tab, filtered by the period buttons and end-date selector above */}
+                          {/* Statistics — delegates to the shared calculateStatistics() used by the Backtest tab */}
                           {(() => {
-                            // Build a ReturnPoint array from the already-filtered priceData + drawdownData.
-                            // Both arrays come from the same visibleData slice, so they share indices.
                             const statPoints: ReturnPoint[] = priceData.map((p, i) => ({
                               date: p.date,
                               value: p.price,
-                              drawdown: drawdownData[i]?.drawdown ?? 0,
+                              drawdown: drawdownData[i].drawdown,
                             }));
-                            if (statPoints.length < 2) return null;
-
-                            // ---- Total Return ----
-                            const statStart = statPoints[0].value;
-                            const statEnd = statPoints[statPoints.length - 1].value;
-                            const statTotalReturn = ((statEnd - statStart) / statStart) * 100;
-
-                            // ---- CAGR ----
-                            const statStartDate = new Date(statPoints[0].date);
-                            const statEndDate = new Date(statPoints[statPoints.length - 1].date);
-                            const statYears = (statEndDate.getTime() - statStartDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-                            const statCagr = statYears >= 1
-                              ? (Math.pow(statEnd / statStart, 1 / statYears) - 1) * 100
-                              : null;
-
-                            // ---- Volatility (annualised) ----
-                            const statPeriodic: number[] = [];
-                            for (let i = 1; i < statPoints.length; i++) {
-                              statPeriodic.push((statPoints[i].value - statPoints[i - 1].value) / statPoints[i - 1].value);
-                            }
-                            const statMean = statPeriodic.reduce((s, r) => s + r, 0) / statPeriodic.length;
-                            const statVariance = statPeriodic.map(r => Math.pow(r - statMean, 2)).reduce((s, sq) => s + sq, 0) / statPeriodic.length;
-                            const statVol = Math.sqrt(statVariance) * Math.sqrt(12) * 100;
-
-                            // ---- Max & Current Drawdown ----
-                            const statMaxDD = Math.min(...statPoints.map(p => p.drawdown));
-                            const statCurrDD = statPoints[statPoints.length - 1].drawdown;
-
-                            // ---- Longest Drawdown (months continuously below ATH) ----
-                            let statLongestDD = 0;
-                            let statCurDD = 0;
-                            for (const p of statPoints) {
-                              if (p.drawdown < 0) {
-                                statCurDD++;
-                              } else {
-                                if (statCurDD > statLongestDD) statLongestDD = statCurDD;
-                                statCurDD = 0;
-                              }
-                            }
-                            if (statCurDD > statLongestDD) statLongestDD = statCurDD;
-
-                            // ---- Sharpe Ratio (0% risk-free rate, same as Backtest tab) ----
-                            const statSharpe = statVol > 0 && statCagr !== null ? statCagr / statVol : null;
+                            const stats = calculateStatistics(statPoints, { name: monthlySelectedTicker } as Portfolio);
+                            if (!stats) return null;
 
                             return (
                               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
@@ -6835,13 +6792,13 @@ const PortfolioBacktester = () => {
                                   </thead>
                                   <tbody>
                                     <tr className="border-b border-gray-100">
-                                      <td className="text-right py-2 px-2">{statTotalReturn.toFixed(2)}%</td>
-                                      <td className="text-right py-2 px-2">{statCagr !== null ? `${statCagr.toFixed(2)}%` : '—'}</td>
-                                      <td className="text-right py-2 px-2">{statVol.toFixed(2)}%</td>
-                                      <td className="text-right py-2 px-2">{statSharpe !== null ? statSharpe.toFixed(2) : '—'}</td>
-                                      <td className="text-right py-2 px-2 text-red-600">{statMaxDD.toFixed(2)}%</td>
-                                      <td className="text-right py-2 px-2 text-purple-700">{formatPeriod(statLongestDD)}</td>
-                                      <td className="text-right py-2 px-2 text-orange-600">{statCurrDD.toFixed(2)}%</td>
+                                      <td className="text-right py-2 px-2">{stats.totalReturn}%</td>
+                                      <td className="text-right py-2 px-2">{stats.cagr}%</td>
+                                      <td className="text-right py-2 px-2">{stats.volatility}%</td>
+                                      <td className="text-right py-2 px-2">{stats.sharpeRatio}</td>
+                                      <td className="text-right py-2 px-2 text-red-600">{stats.maxDrawdown}%</td>
+                                      <td className="text-right py-2 px-2 text-purple-700">{stats.longestDrawdown}</td>
+                                      <td className="text-right py-2 px-2 text-orange-600">{stats.currentDrawdown}%</td>
                                     </tr>
                                   </tbody>
                                 </table>
