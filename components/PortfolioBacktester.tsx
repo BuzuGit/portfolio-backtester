@@ -6790,6 +6790,15 @@ const PortfolioBacktester = () => {
                             const stats = calculateStatistics(statPoints, { name: monthlySelectedTicker } as Portfolio);
                             if (!stats) return null;
 
+                            // Period length from first to last data point in the visible window
+                            const periodStart = new Date(statPoints[0].date);
+                            const periodEnd = new Date(statPoints[statPoints.length - 1].date);
+                            const periodMonths = (periodEnd.getFullYear() - periodStart.getFullYear()) * 12
+                              + (periodEnd.getMonth() - periodStart.getMonth());
+
+                            // Value of 100 invested at the start of the period
+                            const valueOf100 = (100 * statPoints[statPoints.length - 1].value / statPoints[0].value).toFixed(0);
+
                             // ---- Best / Worst calendar year within the visible period ----
                             // Group priceData by year, compute return for each year using the
                             // previous year-end price (or first price in window for the first year).
@@ -6869,7 +6878,9 @@ const PortfolioBacktester = () => {
                                 <table className="w-full text-xs">
                                   <thead>
                                     <tr className="border-b-2 border-gray-200">
+                                      <th className="text-right py-2 px-2">Period</th>
                                       <th className="text-right py-2 px-2">Total Return</th>
+                                      <th className="text-right py-2 px-2">100 → ?</th>
                                       <th className="text-right py-2 px-2">CAGR</th>
                                       <th className="text-right py-2 px-2">Vol</th>
                                       <th className="text-right py-2 px-2">Sharpe</th>
@@ -6884,7 +6895,9 @@ const PortfolioBacktester = () => {
                                   </thead>
                                   <tbody>
                                     <tr className="border-b border-gray-100">
+                                      <td className="text-right py-2 px-2">{formatPeriod(periodMonths)}</td>
                                       <td className="text-right py-2 px-2">{stats.totalReturn}%</td>
+                                      <td className="text-right py-2 px-2 font-semibold">{valueOf100}</td>
                                       <td className="text-right py-2 px-2">{stats.cagr}%</td>
                                       <td className="text-right py-2 px-2">{stats.volatility}%</td>
                                       <td className="text-right py-2 px-2">{stats.sharpeRatio}</td>
