@@ -3383,7 +3383,9 @@ const PortfolioBacktester = () => {
         effectiveData = fullData.slice(0, endIdx + 1);
       }
     }
-    const n = period === 'max' ? effectiveData.length : Math.min(periodMonths[period] || effectiveData.length, effectiveData.length);
+    // +1 so the window includes both endpoints: e.g. 1Y = Jun 2025 AND Jun 2026 = 13 data points, 12 monthly intervals.
+    // Without +1, slicing 12 points gives Jul 2025–Jun 2026 — off by one month from the financial standard.
+    const n = period === 'max' ? effectiveData.length : Math.min((periodMonths[period] || 0) + 1, effectiveData.length);
     const visibleData = effectiveData.slice(effectiveData.length - n);
     if (visibleData.length === 0) return null;
 
@@ -6790,9 +6792,9 @@ const PortfolioBacktester = () => {
                             const stats = calculateStatistics(statPoints, { name: monthlySelectedTicker } as Portfolio);
                             if (!stats) return null;
 
-                            // Period length: one data point per month, so the count is the period in months.
-                            // (Date arithmetic would give count-1 months — the span between first and last — which reads "4y 11m" for a 5Y selection.)
-                            const periodMonths = statPoints.length;
+                            // Intervals between monthly data points = the actual period covered.
+                            // (length-1 because 13 points from Jun 25 to Jun 26 = 12 monthly intervals = 1y)
+                            const periodMonths = statPoints.length - 1;
 
                             // Value of 100 invested at the start of the period
                             const valueOf100 = (100 * statPoints[statPoints.length - 1].value / statPoints[0].value).toFixed(0);
