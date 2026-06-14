@@ -6790,11 +6790,9 @@ const PortfolioBacktester = () => {
                             const stats = calculateStatistics(statPoints, { name: monthlySelectedTicker } as Portfolio);
                             if (!stats) return null;
 
-                            // Period length from first to last data point in the visible window
-                            const periodStart = new Date(statPoints[0].date);
-                            const periodEnd = new Date(statPoints[statPoints.length - 1].date);
-                            const periodMonths = (periodEnd.getFullYear() - periodStart.getFullYear()) * 12
-                              + (periodEnd.getMonth() - periodStart.getMonth());
+                            // Period length: one data point per month, so the count is the period in months.
+                            // (Date arithmetic would give count-1 months — the span between first and last — which reads "4y 11m" for a 5Y selection.)
+                            const periodMonths = statPoints.length;
 
                             // Value of 100 invested at the start of the period
                             const valueOf100 = (100 * statPoints[statPoints.length - 1].value / statPoints[0].value).toFixed(0);
