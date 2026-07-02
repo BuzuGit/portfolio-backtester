@@ -605,6 +605,12 @@ const PortfolioBacktester = () => {
   const [monthlySelectedTicker, setMonthlySelectedTicker] = useState<string>('');
   // How many years of data to show in the monthly charts (default: show everything)
   const [monthlyChartPeriod, setMonthlyChartPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max'>('max');
+  // Which currency the selected asset's detail subsection is displayed in.
+  // Defaults to the asset's own native currency (set when an asset is clicked),
+  // so by default everything shows in the asset's original currency (no conversion).
+  // The user can switch to PLN / USD / EUR / CHF / SGD to re-express all stats,
+  // charts, and tables below in that currency using the app's FX data.
+  const [monthlyDisplayCurrency, setMonthlyDisplayCurrency] = useState<string>('');
   // Which return period to show in the periodic returns bar chart (Monthly/Quarterly/Annual)
   const [returnsChartPeriod, setReturnsChartPeriod] = useState<'monthly' | 'quarterly' | 'annual'>('quarterly');
   // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
@@ -3327,9 +3333,13 @@ const PortfolioBacktester = () => {
   const getMonthlyChartData = (
     ticker: string,
     period: '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max',
-    cutoffDate?: string  // Optional: if provided, treat this as the last month (for Graphs tab "End Date" filter)
+    cutoffDate?: string,  // Optional: if provided, treat this as the last month (for Graphs tab "End Date" filter)
+    targetCurrency?: string  // Optional: convert every price into this currency (''/native = no conversion)
   ) => {
     if (!assetData || assetData.length === 0) return null;
+
+    // The asset's native (original) currency — the currency its raw prices are quoted in.
+    const assetCcy = getAssetCurrency(ticker);
 
     // 1. Extract monthly prices: group by YYYY-MM, take the last valid price per month
     const monthlyMap = new Map<string, { date: string; price: number }>();
@@ -3339,8 +3349,12 @@ const PortfolioBacktester = () => {
       const d = new Date(row.date);
       if (isNaN(d.getTime())) continue;
       const ym = toYM(d);
+      // Convert this month's price into the requested currency using THIS row's FX rates.
+      // getConversionRate returns 1 when targetCurrency is empty or equals the native currency,
+      // so the default (native) case leaves prices untouched.
+      const convRate = getConversionRate(row, assetCcy, targetCurrency || '');
       // Overwrite with the latest row for this month (data is chronological)
-      monthlyMap.set(ym, { date: row.date, price: p });
+      monthlyMap.set(ym, { date: row.date, price: p * convRate });
     }
     // Sort by date to get a chronological array
     const allMonths = Array.from(monthlyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
@@ -5098,6 +5112,52 @@ const PortfolioBacktester = () => {
             <div className="mt-6">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Results</h2>
 
+              {/* Statistics Table */}
+              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
+                <h3 className="text-md font-semibold text-gray-700 mb-2">Statistics</h3>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b-2 border-gray-200">
+                      <th className="text-left py-2 px-2">Portfolio</th>
+                      <th className="text-right py-2 px-2">Return</th>
+                      <th className="text-right py-2 px-2">CAGR</th>
+                      <th className="text-right py-2 px-2">Vol</th>
+                      <th className="text-right py-2 px-2">Sharpe</th>
+                      <th className="text-right py-2 px-2">Max DD</th>
+                      <th className="text-right py-2 px-2">Longest DD</th>
+                      <th className="text-right py-2 px-2">Curr DD</th>
+                      <th className="text-right py-2 px-2">End Val</th>
+                      <th className="text-right py-2 px-2">End Post W</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {backtestResults.map((result, idx) => (
+                      <tr key={idx} className="border-b border-gray-100">
+                        <td className="py-2 px-2 font-medium" style={{ color: result.portfolio.color }}>
+                          {result.stats.name}
+                        </td>
+                        <td className="text-right py-2 px-2">{result.stats.totalReturn}%</td>
+                        <td className="text-right py-2 px-2">{result.stats.cagr}%</td>
+                        <td className="text-right py-2 px-2">{result.stats.volatility}%</td>
+                        <td className="text-right py-2 px-2">{result.stats.sharpeRatio}</td>
+                        <td className="text-right py-2 px-2 text-red-600">{result.stats.maxDrawdown}%</td>
+                        <td className="text-right py-2 px-2 text-purple-700">{result.stats.longestDrawdown}</td>
+                        <td className="text-right py-2 px-2 text-orange-600">{result.stats.currentDrawdown}%</td>
+                        <td className="text-right py-2 px-2 font-semibold">{CURRENCY_SYMBOLS[result.portfolio.baseCurrency] || '$'}{parseFloat(result.stats.endingValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                        <td className="text-right py-2 px-2 font-semibold">
+                          {(() => {
+                            // Calculate ending value after inflation-adjusted withdrawals
+                            const wData = calculateWithdrawalReturns(result.returns, parseFloat(withdrawalRate), parseFloat(inflationRate));
+                            const endVal = wData.length > 0 ? wData[wData.length - 1].value : 0;
+                            return `${CURRENCY_SYMBOLS[result.portfolio.baseCurrency] || '$'}${endVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+                          })()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
               {/* Portfolio Value Chart */}
               <div className="bg-white p-2 sm:p-4 rounded-lg shadow mb-4">
                 <h3 className="text-md font-semibold text-gray-700 mb-2 text-center">Portfolio Value</h3>
@@ -5180,52 +5240,6 @@ const PortfolioBacktester = () => {
                     })}
                   </LineChart>
                 </ResponsiveContainer>
-              </div>
-
-              {/* Statistics Table */}
-              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto">
-                <h3 className="text-md font-semibold text-gray-700 mb-2">Statistics</h3>
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b-2 border-gray-200">
-                      <th className="text-left py-2 px-2">Portfolio</th>
-                      <th className="text-right py-2 px-2">Return</th>
-                      <th className="text-right py-2 px-2">CAGR</th>
-                      <th className="text-right py-2 px-2">Vol</th>
-                      <th className="text-right py-2 px-2">Sharpe</th>
-                      <th className="text-right py-2 px-2">Max DD</th>
-                      <th className="text-right py-2 px-2">Longest DD</th>
-                      <th className="text-right py-2 px-2">Curr DD</th>
-                      <th className="text-right py-2 px-2">End Val</th>
-                      <th className="text-right py-2 px-2">End Post W</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {backtestResults.map((result, idx) => (
-                      <tr key={idx} className="border-b border-gray-100">
-                        <td className="py-2 px-2 font-medium" style={{ color: result.portfolio.color }}>
-                          {result.stats.name}
-                        </td>
-                        <td className="text-right py-2 px-2">{result.stats.totalReturn}%</td>
-                        <td className="text-right py-2 px-2">{result.stats.cagr}%</td>
-                        <td className="text-right py-2 px-2">{result.stats.volatility}%</td>
-                        <td className="text-right py-2 px-2">{result.stats.sharpeRatio}</td>
-                        <td className="text-right py-2 px-2 text-red-600">{result.stats.maxDrawdown}%</td>
-                        <td className="text-right py-2 px-2 text-purple-700">{result.stats.longestDrawdown}</td>
-                        <td className="text-right py-2 px-2 text-orange-600">{result.stats.currentDrawdown}%</td>
-                        <td className="text-right py-2 px-2 font-semibold">{CURRENCY_SYMBOLS[result.portfolio.baseCurrency] || '$'}{parseFloat(result.stats.endingValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                        <td className="text-right py-2 px-2 font-semibold">
-                          {(() => {
-                            // Calculate ending value after inflation-adjusted withdrawals
-                            const wData = calculateWithdrawalReturns(result.returns, parseFloat(withdrawalRate), parseFloat(inflationRate));
-                            const endVal = wData.length > 0 ? wData[wData.length - 1].value : 0;
-                            return `${CURRENCY_SYMBOLS[result.portfolio.baseCurrency] || '$'}${endVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-                          })()}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
 
               {/* Annual Returns Bar Chart */}
@@ -6486,7 +6500,14 @@ const PortfolioBacktester = () => {
                             return (
                               <tr
                                 key={asset.ticker}
-                                onClick={() => setMonthlySelectedTicker(prev => prev === asset.ticker ? '' : asset.ticker)}
+                                onClick={() => setMonthlySelectedTicker(prev => {
+                                  // Toggle selection: clicking the already-selected asset closes it
+                                  const next = prev === asset.ticker ? '' : asset.ticker;
+                                  // When opening a (new) asset, reset the display currency to that
+                                  // asset's native currency so it always opens in its "original" currency.
+                                  if (next) setMonthlyDisplayCurrency(getAssetCurrency(next));
+                                  return next;
+                                })}
                                 className={`border-b border-gray-50 cursor-pointer transition-colors ${
                                   monthlySelectedTicker === asset.ticker
                                     ? 'bg-blue-50 hover:bg-blue-100'
@@ -6629,7 +6650,7 @@ const PortfolioBacktester = () => {
                     {monthlySelectedTicker && (() => {
                       const assetInfo = assetLookup.find(l => l.ticker === monthlySelectedTicker);
                       const assetName = assetInfo ? assetInfo.name : monthlySelectedTicker;
-                      const chartResult = getMonthlyChartData(monthlySelectedTicker, monthlyChartPeriod, monthlyEndDate || undefined);
+                      const chartResult = getMonthlyChartData(monthlySelectedTicker, monthlyChartPeriod, monthlyEndDate || undefined, monthlyDisplayCurrency);
 
                       if (!chartResult) return (
                         <div className="text-center py-4 text-gray-500 mt-4">
@@ -6739,11 +6760,14 @@ const PortfolioBacktester = () => {
 
                       // Build ReturnPoint[] from raw asset prices so we can reuse
                       // calculateMonthlyReturns() for the calendar-style returns table
+                      // Convert each raw price into the selected display currency (native = no-op)
+                      // so the Returns and Prices tables below match the charts/statistics above.
+                      const selectedAssetCcy = getAssetCurrency(monthlySelectedTicker);
                       const assetReturnPoints: ReturnPoint[] = assetData
                         ?.filter(row => typeof row[monthlySelectedTicker] === 'number')
                         .map(row => ({
                           date: row.date as string,
-                          value: row[monthlySelectedTicker] as number,
+                          value: (row[monthlySelectedTicker] as number) * getConversionRate(row, selectedAssetCcy, monthlyDisplayCurrency),
                           drawdown: 0 // not used by calculateMonthlyReturns
                         })) || [];
                       const assetMonthlyReturns = calculateMonthlyReturns(assetReturnPoints);
@@ -6765,20 +6789,41 @@ const PortfolioBacktester = () => {
                                 </span>
                               )}
                             </h3>
-                            <div className="flex gap-1">
-                              {(['1Y', '2Y', '3Y', '4Y', '5Y', '6Y', 'max'] as const).map(p => (
-                                <button
-                                  key={p}
-                                  onClick={() => setMonthlyChartPeriod(p)}
-                                  className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                    monthlyChartPeriod === p
-                                      ? 'bg-blue-500 text-white border-blue-500'
-                                      : 'bg-white border-gray-300 hover:bg-gray-100'
-                                  }`}
-                                >
-                                  {p === 'max' ? 'Max' : p}
-                                </button>
-                              ))}
+                            <div className="flex items-center gap-2 flex-wrap justify-end">
+                              {/* Currency buttons — re-express everything below in the chosen currency.
+                                  The button matching the asset's native currency is highlighted by
+                                  default (that's the "original currency" view). */}
+                              <div className="flex gap-1">
+                                {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(ccy => (
+                                  <button
+                                    key={ccy}
+                                    onClick={() => setMonthlyDisplayCurrency(ccy)}
+                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                      monthlyDisplayCurrency === ccy
+                                        ? 'bg-indigo-600 text-white border-indigo-600'
+                                        : 'bg-white border-gray-300 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    {ccy}
+                                  </button>
+                                ))}
+                              </div>
+                              {/* Period buttons — how many years of history to show */}
+                              <div className="flex gap-1">
+                                {(['1Y', '2Y', '3Y', '4Y', '5Y', '6Y', 'max'] as const).map(p => (
+                                  <button
+                                    key={p}
+                                    onClick={() => setMonthlyChartPeriod(p)}
+                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                      monthlyChartPeriod === p
+                                        ? 'bg-indigo-600 text-white border-indigo-600'
+                                        : 'bg-white border-gray-300 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    {p === 'max' ? 'Max' : p}
+                                  </button>
+                                ))}
+                              </div>
                             </div>
                           </div>
 
@@ -6833,20 +6878,13 @@ const PortfolioBacktester = () => {
                               for (const row of assetData) {
                                 const p = Number(row[benchTicker]);
                                 if (!p || p <= 0) continue;
-                                const d = new Date(row.date as string);
-                                const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-                                benchByMonth.set(ym, p);
+                                benchByMonth.set(toYM(new Date(row.date as string)), p);
                               }
-
-                              const toYM = (dateStr: string) => {
-                                const d = new Date(dateStr);
-                                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-                              };
 
                               const pairs: { a: number; b: number }[] = [];
                               for (let i = 1; i < priceData.length; i++) {
-                                const ym = toYM(priceData[i].date);
-                                const prevYm = toYM(priceData[i - 1].date);
+                                const ym = toYM(new Date(priceData[i].date));
+                                const prevYm = toYM(new Date(priceData[i - 1].date));
                                 const bCurr = benchByMonth.get(ym);
                                 const bPrev = benchByMonth.get(prevYm);
                                 if (bCurr == null || bPrev == null || bPrev === 0) continue;
@@ -6905,7 +6943,7 @@ const PortfolioBacktester = () => {
                                       <td className="text-right py-2 px-2 text-purple-700">{stats.longestDrawdown}</td>
                                       <td className="text-right py-2 px-2 text-orange-600">{stats.currentDrawdown}%</td>
                                       <td className="text-right py-2 px-2 text-green-600">
-                                        {bestWorstYear ? `+${bestWorstYear.best.toFixed(1)}%` : '—'}
+                                        {bestWorstYear ? `${bestWorstYear.best >= 0 ? '+' : ''}${bestWorstYear.best.toFixed(1)}%` : '—'}
                                       </td>
                                       <td className="text-right py-2 px-2 text-red-600">
                                         {bestWorstYear ? `${bestWorstYear.worst.toFixed(1)}%` : '—'}
