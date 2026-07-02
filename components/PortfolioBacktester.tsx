@@ -6870,7 +6870,12 @@ const PortfolioBacktester = () => {
 
                             // ---- Correlation helper: Pearson correlation of monthly returns vs a benchmark ----
                             const calcCorr = (benchTicker: string): number | null => {
-                              if (monthlySelectedTicker === benchTicker) return 1;
+                              // NOTE: we deliberately do NOT short-circuit when the selected asset IS
+                              // the benchmark. In the asset's native currency the two price series are
+                              // identical, so the computed correlation is exactly 1.00 anyway. But when
+                              // the user views the benchmark (IWDA/VDTA) in a different currency, the
+                              // asset side is FX-converted while the benchmark stays in native USD — so
+                              // the real correlation is < 1 (FX adds noise). Letting it compute reflects that.
                               if (!assetData) return null;
 
                               // Build benchmark last-price-per-month map
