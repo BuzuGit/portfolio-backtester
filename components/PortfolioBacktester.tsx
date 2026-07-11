@@ -7279,7 +7279,44 @@ const PortfolioBacktester = () => {
                               Calendar-style table: rows = years, columns = Jan–Dec + FY.
                               Reuses calculateMonthlyReturns() — same table as in backtest tab.
                               ================================================ */}
-                          {Object.keys(assetMonthlyReturns).length > 0 && (
+                          {Object.keys(assetMonthlyReturns).length > 0 && (() => {
+                            // Years that actually have at least one monthly return (same filter used by the rows below)
+                            const returnYears = Object.keys(assetMonthlyReturns)
+                              .filter(year => assetMonthlyReturns[year].monthly.some(r => r !== null));
+
+                            // --- Column summary stats (for the Average + Loss rate footer rows) ---
+                            // For each of the 12 months: simple average of the shown values, and [# negative, # total]
+                            const monthAvg: (number | null)[] = [];
+                            const monthLoss: [number, number][] = [];
+                            for (let m = 0; m < 12; m++) {
+                              const vals = returnYears
+                                .map(y => assetMonthlyReturns[y].monthly[m])
+                                .filter((r): r is number => r !== null);
+                              monthAvg[m] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+                              monthLoss[m] = [vals.filter(v => v < 0).length, vals.length];
+                            }
+
+                            // FY column: simple average of each year's full-year return, plus loss count
+                            const fyVals = returnYears.map(y => assetMonthlyReturns[y].fy);
+                            const fyAvg = fyVals.length ? fyVals.reduce((a, b) => a + b, 0) / fyVals.length : null;
+                            const fyLoss: [number, number] = [fyVals.filter(v => v < 0).length, fyVals.length];
+
+                            // Quarter columns (1Q–4Q): recompute each year's quarter return, then average / count losses
+                            const qAvg: (number | null)[] = [];
+                            const qLoss: [number, number][] = [];
+                            [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]].forEach((qMonths, qi) => {
+                              const qvals: number[] = [];
+                              for (const y of returnYears) {
+                                const mReturns = qMonths.map(m => assetMonthlyReturns[y].monthly[m]);
+                                if (!mReturns.some(r => r !== null)) continue;
+                                const qReturn = mReturns.reduce<number>((acc, r) => r !== null ? acc * (1 + r / 100) : acc, 1);
+                                qvals.push((qReturn - 1) * 100);
+                              }
+                              qAvg[qi] = qvals.length ? qvals.reduce((a, b) => a + b, 0) / qvals.length : null;
+                              qLoss[qi] = [qvals.filter(v => v < 0).length, qvals.length];
+                            });
+
+                            return (
                             <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
                               <h3 className="text-md font-semibold mb-2 text-gray-700">
                                 Returns — {monthlySelectedTicker}
@@ -7355,10 +7392,63 @@ const PortfolioBacktester = () => {
                                       })}
                                     </tr>
                                   ))}
+                                  {/* ---- AVERAGE row: simple mean of each column, colored green/red like the data ---- */}
+                                  <tr className="border-t-2 border-gray-200">
+                                    <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0">Average</td>
+                                    {monthAvg.map((avg, m) => {
+                                      if (avg === null) {
+                                        return <td key={m} className="text-right py-2 px-2 text-gray-300">-</td>;
+                                      }
+                                      const bgColor = avg >= 0 ? 'bg-green-50' : 'bg-red-50';
+                                      const textColor = avg >= 0 ? 'text-green-700' : 'text-red-700';
+                                      return (
+                                        <td key={m} className={`text-right py-2 px-2 ${bgColor} ${textColor}`}>
+                                          {avg.toFixed(2)}%
+                                        </td>
+                                      );
+                                    })}
+                                    <td className={`text-right py-2 px-2 font-semibold ${
+                                      fyAvg === null ? 'text-gray-300' : fyAvg >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                    }`}>
+                                      {fyAvg === null ? '-' : `${fyAvg.toFixed(2)}%`}
+                                    </td>
+                                    <td className="w-2"></td>
+                                    {qAvg.map((avg, qi) => {
+                                      if (avg === null) {
+                                        return <td key={`qa${qi}`} className="text-right py-2 px-2 text-gray-300">-</td>;
+                                      }
+                                      return (
+                                        <td key={`qa${qi}`} className={`text-right py-2 px-2 font-semibold ${
+                                          avg >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                        }`}>
+                                          {avg.toFixed(2)}%
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                  {/* ---- LOSS RATE row: "x/Y" = negative months / total months, styled like the header ---- */}
+                                  <tr className="border-b border-gray-100">
+                                    <td className="py-2 px-2 font-semibold bg-gray-50 sticky left-0">Loss rate</td>
+                                    {monthLoss.map(([neg, total], m) => (
+                                      <td key={m} className="text-right py-2 px-2 bg-gray-50 text-gray-600">
+                                        {total > 0 ? `${neg}/${total}` : '-'}
+                                      </td>
+                                    ))}
+                                    <td className="text-right py-2 px-2 bg-gray-100 font-semibold text-gray-600">
+                                      {fyLoss[1] > 0 ? `${fyLoss[0]}/${fyLoss[1]}` : '-'}
+                                    </td>
+                                    <td className="w-2"></td>
+                                    {qLoss.map(([neg, total], qi) => (
+                                      <td key={`ql${qi}`} className="text-right py-2 px-2 bg-gray-100 font-semibold text-gray-600">
+                                        {total > 0 ? `${neg}/${total}` : '-'}
+                                      </td>
+                                    ))}
+                                  </tr>
                                 </tbody>
                               </table>
                             </div>
-                          )}
+                            );
+                          })()}
 
                           {/* ================================================
                               MONTHLY PRICES TABLE
