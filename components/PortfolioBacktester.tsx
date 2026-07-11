@@ -32,6 +32,8 @@ const toYM = (d: Date): string =>
 
 /** Month abbreviations for X-axis date labels. */
 const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+/** Full month names, used by the Monthly tab seasonality (loss-rate) screen. */
+const MONTH_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 /**
  * Derive the list of "open" tickers from transaction data.
@@ -626,6 +628,9 @@ const PortfolioBacktester = () => {
   // Monthly Prices tab: which column is currently sorted (null = default lookup-table order)
   // Values: 'name', 'month-0'..'month-12', 'sma10', 'signal', 'ticker', 'ret12m', 'dd12m'
   const [monthlySortColumn, setMonthlySortColumn] = useState<string | null>(null);
+  // Monthly Prices tab: seasonality screen — selected calendar month (0=Jan..11=Dec, null = off).
+  // When set, a ranking card appears sorting the filtered assets by their loss rate in that month.
+  const [seasonMonth, setSeasonMonth] = useState<number | null>(null);
 
   // Close Years dropdown when clicking outside
   useEffect(() => {
@@ -3318,6 +3323,62 @@ const PortfolioBacktester = () => {
     });
 
     return { months, assets };
+  };
+
+  // Minimum years of history required for an asset to appear in the seasonality
+  // ranking. Guards against a single fluke month (e.g. 1/1 = 100%) dominating.
+  const MIN_SEASON_YEARS = 5;
+
+  /**
+   * Seasonality screen for the Monthly tab.
+   *
+   * Ranks the currently-filtered assets by how often they have LOST money in a
+   * given calendar month (0 = Jan … 11 = Dec), across every year of available
+   * history. This answers "which assets are safest / riskiest in September?".
+   *
+   * - "Loss rate" = (# years that month's return was negative) / (# years with data).
+   *   A return of exactly 0% is NOT counted as a loss (same convention as the
+   *   Returns table's Loss rate row).
+   * - Returns are measured in each asset's NATIVE currency (raw prices, no FX
+   *   conversion) — the same basis as the main Monthly table above.
+   * - Only assets with at least MIN_SEASON_YEARS years of that month are kept.
+   * - Respects the Assets/Class/Currency/Subcategory filters via getFilteredAssetLookup().
+   * - Sorted best → worst: lowest loss rate first; ties broken by higher average return.
+   */
+  const getSeasonalityRanking = (month: number): Array<{
+    ticker: string;
+    name: string;
+    years: number;      // how many years of this month we have data for
+    losses: number;     // how many of those years were negative
+    lossRate: number;   // losses / years, in 0..1
+    avg: number;        // simple average return (%) for this month across the years
+  }> => {
+    if (!assetData || assetData.length === 0) return [];
+
+    return getFilteredAssetLookup()
+      .map(asset => {
+        // Build this asset's native-currency price series, then reuse the same
+        // month-by-month engine the per-asset Returns table uses.
+        const points: ReturnPoint[] = assetData
+          .filter(row => typeof row[asset.ticker] === 'number')
+          .map(row => ({ date: row.date as string, value: row[asset.ticker] as number, drawdown: 0 }));
+        const monthlyReturns = calculateMonthlyReturns(points);
+
+        // Collect this calendar month's return from every year that has one
+        const vals: number[] = [];
+        for (const year of Object.keys(monthlyReturns)) {
+          const v = monthlyReturns[year].monthly[month];
+          if (v !== null) vals.push(v);
+        }
+
+        const years = vals.length;
+        const losses = vals.filter(v => v < 0).length;
+        const avg = years > 0 ? vals.reduce((a, b) => a + b, 0) / years : 0;
+        return { ticker: asset.ticker, name: asset.name, years, losses, lossRate: years > 0 ? losses / years : 0, avg };
+      })
+      .filter(r => r.years >= MIN_SEASON_YEARS)
+      // Lowest loss rate first (best); ties → higher average return ranks higher
+      .sort((a, b) => a.lossRate - b.lossRate || b.avg - a.avg);
   };
 
   /**
@@ -6362,7 +6423,99 @@ const PortfolioBacktester = () => {
                     ];
                   })()}
                 </select>
+
+                {/* Seasonality screen selector — pick a calendar month to rank assets
+                    by their historical loss rate in that month (best → worst). */}
+                <select
+                  value={seasonMonth === null ? '' : String(seasonMonth)}
+                  onChange={(e) => setSeasonMonth(e.target.value === '' ? null : parseInt(e.target.value))}
+                  className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
+                  title="Rank the filtered assets by how often they lost money in a chosen month"
+                >
+                  <option value="">Seasonality: off</option>
+                  {MONTH_FULL.map((name, i) => (
+                    <option key={i} value={i}>{name}</option>
+                  ))}
+                </select>
               </AssetFilterControls>
+
+              {/* ================================================
+                  SEASONALITY RANKING CARD
+                  Appears only when a month is chosen in the "Seasonality" selector.
+                  Ranks the filtered assets from lowest to highest loss rate in that
+                  month, so you can see which assets to favour / avoid seasonally.
+                  ================================================ */}
+              {seasonMonth !== null && (() => {
+                const ranking = getSeasonalityRanking(seasonMonth);
+                const monthName = MONTH_FULL[seasonMonth];
+                return (
+                  <div className="bg-white p-4 rounded-lg shadow mb-4">
+                    <h3 className="text-md font-semibold mb-1 text-gray-700">
+                      {monthName} — assets ranked best → worst
+                    </h3>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Lowest loss rate first. Loss rate = share of years with a negative {monthName} return
+                      (native currency). Only assets with {MIN_SEASON_YEARS}+ years of history are shown;
+                      ties are broken by higher average return.
+                    </p>
+                    {ranking.length === 0 ? (
+                      <div className="bg-yellow-50 p-3 rounded text-yellow-800 text-sm">
+                        No filtered assets have at least {MIN_SEASON_YEARS} years of {monthName} history.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b-2 border-gray-200 text-gray-600">
+                              <th className="text-right py-2 px-2 bg-gray-50">#</th>
+                              <th className="text-left py-2 px-2 bg-gray-50">Asset</th>
+                              <th className="text-left py-2 px-2 bg-gray-50">Ticker</th>
+                              <th className="text-right py-2 px-2 bg-gray-100 font-semibold">Loss rate</th>
+                              <th className="text-right py-2 px-2 bg-gray-50">Avg {monthName.slice(0, 3)}</th>
+                              <th className="text-right py-2 px-2 bg-gray-50">Years</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ranking.map((r, i) => {
+                              const lossPct = Math.round(r.lossRate * 100);
+                              // Colour the loss rate: greener when low (good), redder when high (bad)
+                              const lossColor = r.lossRate <= 0.34
+                                ? 'bg-green-100 text-green-800'
+                                : r.lossRate >= 0.5
+                                  ? 'bg-red-100 text-red-800'
+                                  : 'bg-yellow-50 text-yellow-800';
+                              const avgColor = r.avg >= 0 ? 'text-green-700' : 'text-red-700';
+                              return (
+                                <tr
+                                  key={r.ticker}
+                                  onClick={() => setMonthlySelectedTicker(prev => {
+                                    // Clicking a row opens that asset's detail below (same as the main table)
+                                    const next = prev === r.ticker ? '' : r.ticker;
+                                    if (next) setMonthlyDisplayCurrency(getAssetCurrency(next));
+                                    return next;
+                                  })}
+                                  className={`border-b border-gray-100 cursor-pointer transition-colors ${
+                                    monthlySelectedTicker === r.ticker ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'
+                                  }`}
+                                >
+                                  <td className="text-right py-1.5 px-2 text-gray-400">{i + 1}</td>
+                                  <td className="text-left py-1.5 px-2 font-medium">{r.name}</td>
+                                  <td className="text-left py-1.5 px-2 text-gray-500">{r.ticker}</td>
+                                  <td className={`text-right py-1.5 px-2 font-semibold ${lossColor}`}>
+                                    {r.losses}/{r.years} ({lossPct}%)
+                                  </td>
+                                  <td className={`text-right py-1.5 px-2 ${avgColor}`}>{r.avg.toFixed(2)}%</td>
+                                  <td className="text-right py-1.5 px-2 text-gray-500">{r.years}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {(() => {
                 const { months, assets: unsortedAssets } = getMonthlyPricesData();
