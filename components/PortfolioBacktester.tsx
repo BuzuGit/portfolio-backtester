@@ -357,6 +357,21 @@ const FX_TICKER_MAP: { [key: string]: string } = {
   USD: 'USDPLN', SGD: 'SGDPLN', EUR: 'EURPLN', CHF: 'CHFPLN', PLN: ''
 };
 
+/**
+ * The xxxPLN FX rate for `currency` stored on a Years-sheet row.
+ * `which` picks the period-END snapshot (right for portfolio VALUES) or the
+ * yearly AVERAGE (right for FLOWS like contributions). Returns 1 for PLN (the
+ * base currency) and 0 if the rate is missing (callers guard on that).
+ * Extracted so the charts and the breakdown table all convert the same way.
+ */
+const yearsRowRate = (row: YearsRow, currency: string, which: 'end' | 'avg'): number => {
+  if (currency === 'PLN') return 1;
+  const map: { [k: string]: number } = which === 'end'
+    ? { USD: row.endUsdPln, EUR: row.endEurPln, CHF: row.endChfPln, SGD: row.endSgdPln }
+    : { USD: row.avgUsdPln, EUR: row.avgEurPln, CHF: row.avgChfPln, SGD: row.avgSgdPln };
+  return map[currency] || 0;
+};
+
 // Asset class colors for the breakdown chart and table color dots
 const ASSET_CLASS_COLORS: Record<string, string> = {
   'Fixed Income': '#22c55e', 'Equities': '#ef4444', 'Crypto': '#111827', 'Alternatives': '#a855f7',
@@ -3704,120 +3719,73 @@ const PortfolioBacktester = () => {
   // Use the module-level CURRENCY_SYMBOLS constant for display (e.g., "3.96M zl" or "$1.2M")
 
   /**
-   * Converts a YearsRow's monetary values from PLN to the selected currency.
-   *
-   * PLN is the base currency — values are stored as-is.
-   * For other currencies, we divide:
-   *   - Flow amounts (contributions, profit) by the average FX rate for that year
-   *   - Cumulative/snapshot amounts (contr cumulative, profit cumulative, growth) by the end-of-period rate
-   *
-   * Returns null if the required FX rate is 0 or missing (row will be skipped).
+   * Per-year portfolio figures in `cur`, computed the VALUE-CONSISTENT way (shared by
+   * both portfolio charts and the breakdown table's total, so they always agree):
+   *   endValue     = year-end portfolio value        (endAmount ÷ period-END rate)
+   *   startValue   = previous year-end value          (continuity)
+   *   contributions= contributions ÷ AVERAGE rate     (a flow)
+   *   profit       = (endValue − startValue) − contributions   ← the residual
+   * Deriving profit as a residual (rather than PLN-profit ÷ average rate) is the only
+   * self-consistent choice in a non-PLN currency, because portfolio VALUE converts at the
+   * period-end rate — so growth (= contributions + profit) always equals the real change
+   * in value. In PLN every rate is 1, so this reduces to the raw Years-sheet numbers.
    */
-  const convertYearsRow = (row: YearsRow, currency: string): {
-    contributions: number; profit: number;
-    contrCumulative: number; profitCumulative: number; endAmount: number;
-  } | null => {
-    // PLN = base currency, no conversion needed
-    if (currency === 'PLN') {
-      return {
-        contributions: row.contributions,
-        profit: row.profit,
-        contrCumulative: row.contrCumulative,
-        profitCumulative: row.profitCumulative,
-        endAmount: row.endAmount,
-      };
-    }
-
-    // Look up the right FX rates for this currency
-    const rateMap: { [key: string]: { avg: number; end: number } } = {
-      USD: { avg: row.avgUsdPln, end: row.endUsdPln },
-      EUR: { avg: row.avgEurPln, end: row.endEurPln },
-      CHF: { avg: row.avgChfPln, end: row.endChfPln },
-      SGD: { avg: row.avgSgdPln, end: row.endSgdPln },
-    };
-
-    const rates = rateMap[currency];
-    if (!rates || !rates.avg || !rates.end) return null; // Skip row if FX rate is missing/zero
-
-    return {
-      contributions: row.contributions / rates.avg,
-      profit: row.profit / rates.avg,
-      contrCumulative: row.contrCumulative / rates.end,
-      profitCumulative: row.profitCumulative / rates.end,
-      endAmount: row.endAmount / rates.end,
-    };
-  };
-
-  /**
-   * Chart 1 data: Portfolio Value by Year (stacked bar)
-   * Bottom segment = Contributions Cumulative, Top segment = Profit Cumulative
-   * Values are shown in millions for readability
-   */
-  const getPortfolioValueChartData = () => {
-    return yearsData
-      .map(row => {
-        const converted = convertYearsRow(row, portfolioCurrency);
-        if (!converted) return null;
-        // Extract just the year (e.g., "2016-12-31" → "2016")
-        const year = row.date.includes('-') ? row.date.split('-')[0] : row.date;
-        return {
-          year,
-          contrCumulative: converted.contrCumulative / 1_000_000,
-          profitCumulative: converted.profitCumulative / 1_000_000,
-          total: converted.endAmount / 1_000_000,
-        };
-      })
-      .filter((d): d is NonNullable<typeof d> => d !== null);
-  };
-
-  /**
-   * Chart 2 data: Contributions and Profit by Year (stacked bar + growth label)
-   * Bottom segment = Contributions, Top segment = Profit
-   * Growth = Contributions + Profit (total for that year), shown as a label above the bar
-   */
-  const getContributionsProfitChartData = () => {
-    const cur = portfolioCurrency;
-    // Each YearsRow stores FX as xxxPLN (PLN per 1 unit of the currency). "End" rates are
-    // period-end snapshots; "Avg" rates are the year's average (right for flows).
-    const endRateOf = (row: YearsRow): number =>
-      cur === 'PLN' ? 1 : ({ USD: row.endUsdPln, EUR: row.endEurPln, CHF: row.endChfPln, SGD: row.endSgdPln } as { [k: string]: number })[cur] || 0;
-    const avgRateOf = (row: YearsRow): number =>
-      cur === 'PLN' ? 1 : ({ USD: row.avgUsdPln, EUR: row.avgEurPln, CHF: row.avgChfPln, SGD: row.avgSgdPln } as { [k: string]: number })[cur] || 0;
-
-    // Compute profit as a VALUE RESIDUAL rather than converting the PLN profit at the
-    // average rate. In a non-PLN currency the two disagree when the exchange rate moves:
-    // portfolio VALUE converts at the period-end rate, so the only self-consistent profit is
-    //     profit = (end value − start value) − contributions
-    // which guarantees growth = contributions + profit = the actual change in value.
-    const out: { year: string; contributions: number; profitPositive: number; profitNegative: number; lossSpacer: number; profit: number; growthTotal: number }[] = [];
+  const getYearlyValueSeries = (cur: string) => {
+    const out: { year: string; endValue: number; startValue: number; contributions: number; profit: number }[] = [];
     let prevEndValue: number | null = null;
     for (const row of yearsData) {
-      const er = endRateOf(row), ar = avgRateOf(row);
+      const er = yearsRowRate(row, cur, 'end'), ar = yearsRowRate(row, cur, 'avg');
       if (!er || !ar) { prevEndValue = null; continue; } // skip if FX missing for this currency
-      const endValue = row.endAmount / er;                     // year-end portfolio value (snapshot)
-      const startValue = prevEndValue != null ? prevEndValue   // = previous year-end value (continuity)
-        : row.startAmount / er;                                // first year: fall back to its start amount
-      const contributions = row.contributions / ar;            // flow → average rate
-      const profit = (endValue - startValue) - contributions;  // the residual = true profit in `cur`
-      const profitPositive = profit >= 0 ? profit : 0;
-      const profitNegative = profit < 0 ? profit : 0;
+      const endValue = row.endAmount / er;
+      const startValue = prevEndValue != null ? prevEndValue : row.startAmount / er; // 1st year: own start
+      const contributions = row.contributions / ar;
+      const profit = (endValue - startValue) - contributions;
       const year = row.date.includes('-') ? row.date.split('-')[0] : row.date;
-      out.push({
-        year,
-        contributions,
-        profitPositive,
-        profitNegative,
-        // The bars share one stackId and Recharts accumulates them sequentially, which would
-        // push the black "contributions" bar below zero in loss years. A transparent spacer
-        // equal to the loss cancels it out, so contributions always starts at 0 and the yellow
-        // loss bar (drawn first, 0 → negative) stays visible below the axis.
-        lossSpacer: profit < 0 ? -profit : 0,
-        profit,
-        growthTotal: contributions + profit,
-      });
+      out.push({ year, endValue, startValue, contributions, profit });
       prevEndValue = endValue;
     }
     return out;
+  };
+
+  /**
+   * Chart 1 data: Portfolio Value by Year (stacked bar), in millions.
+   * Bottom segment = Contributions Cumulative, Top segment = Profit Cumulative.
+   * The stack total is the actual portfolio value (endValue). We accumulate the
+   * value-consistent yearly profit for the top segment and take contributions as the
+   * remainder (endValue − cumulative profit) — so the split matches Chart 2 and the
+   * bar total stays exactly the portfolio value in every currency.
+   */
+  const getPortfolioValueChartData = () => {
+    let cumProfit = 0;
+    return getYearlyValueSeries(portfolioCurrency).map(s => {
+      cumProfit += s.profit;
+      return {
+        year: s.year,
+        contrCumulative: (s.endValue - cumProfit) / 1_000_000,
+        profitCumulative: cumProfit / 1_000_000,
+        total: s.endValue / 1_000_000,
+      };
+    });
+  };
+
+  /**
+   * Chart 2 data: Contributions and Profit by Year (stacked bar + growth label).
+   * Bottom segment = Contributions, Top segment = Profit (loss drops below the axis).
+   */
+  const getContributionsProfitChartData = () => {
+    return getYearlyValueSeries(portfolioCurrency).map(s => ({
+      year: s.year,
+      contributions: s.contributions,
+      profitPositive: s.profit >= 0 ? s.profit : 0,
+      profitNegative: s.profit < 0 ? s.profit : 0,
+      // The bars share one stackId and Recharts accumulates them sequentially, which would
+      // push the black "contributions" bar below zero in loss years. A transparent spacer
+      // equal to the loss cancels it out, so contributions always starts at 0 and the yellow
+      // loss bar (drawn first, 0 → negative) stays visible below the axis.
+      lossSpacer: s.profit < 0 ? -s.profit : 0,
+      profit: s.profit,
+      growthTotal: s.contributions + s.profit,
+    }));
   };
 
   /**
@@ -4172,39 +4140,43 @@ const PortfolioBacktester = () => {
     // Biggest contributor first (losers sink to the bottom).
     assets.sort((a, b) => b.totalConverted - a.totalConverted);
 
-    const yearRow = yearsData.find(r => r.date.startsWith(`${year}`)) || null;
     const sumConverted = assets.reduce((s, a) => s + a.totalConverted, 0);
 
-    // Value-consistent total profit in the selected currency — the SAME method the
-    // "Contributions and Profit by Year" chart now uses, so the table's total matches it:
-    //     profit = (end portfolio value − start portfolio value) − contributions
-    // with portfolio values converted at the period-END rate and contributions at the
-    // AVERAGE rate. (In PLN this is exactly the Years-sheet profit.) This replaces the old
-    // "PLN profit ÷ average rate" total, which mixed conversion methods and made "Other"
-    // implausibly large in non-PLN views.
-    const endRateOf = (row: YearsRow): number =>
-      currency === 'PLN' ? 1 : ({ USD: row.endUsdPln, EUR: row.endEurPln, CHF: row.endChfPln, SGD: row.endSgdPln } as { [k: string]: number })[currency] || 0;
-    const avgRateOf = (row: YearsRow): number =>
-      currency === 'PLN' ? 1 : ({ USD: row.avgUsdPln, EUR: row.avgEurPln, CHF: row.avgChfPln, SGD: row.avgSgdPln } as { [k: string]: number })[currency] || 0;
-
-    let total = 0;
-    if (yearRow) {
-      const er = endRateOf(yearRow), ar = avgRateOf(yearRow);
-      if (er && ar) {
-        const endValue = yearRow.endAmount / er;
-        const prevRow = yearsData.find(r => r.date.startsWith(`${year - 1}`)) || null;
-        const prevEr = prevRow ? endRateOf(prevRow) : 0;
-        const startValue = prevRow && prevEr ? prevRow.endAmount / prevEr : yearRow.startAmount / er;
-        const contributions = yearRow.contributions / ar;
-        total = (endValue - startValue) - contributions;
-      }
-    }
+    // Value-consistent total profit in the selected currency — taken straight from the
+    // shared per-year series, so it's identical to the "Contributions and Profit by Year"
+    // chart's bar for this year. (profit = end value − start value − contributions; in PLN
+    // that's exactly the Years-sheet profit.) This replaces the old "PLN profit ÷ average
+    // rate" total, which mixed conversion methods and made "Other" implausible in non-PLN.
+    const total = getYearlyValueSeries(currency).find(s => s.year === `${year}`)?.profit ?? 0;
 
     // Everything not itemised (unpriced/guarded assets, cash, fees, timing) = the residual.
     const other = total - sumConverted;
 
     return { assets, other, total };
   };
+
+  // The years the breakdown table can show (newest first), and the resolved selection
+  // (the user's pick, else the latest year). Cheap, but memoised so the value below is stable.
+  const breakdownYears = useMemo(
+    () => Array.from(new Set(
+      yearsData.map(r => parseInt(r.date.slice(0, 4), 10)).filter(y => !isNaN(y))
+    )).sort((a, b) => b - a),
+    [yearsData],
+  );
+  const resolvedBreakdownYear = (breakdownYear != null && breakdownYears.includes(breakdownYear))
+    ? breakdownYear
+    : (breakdownYears[0] ?? null);
+
+  // getYearlyProfitBreakdown is the heaviest per-render computation (per-asset lot walk over
+  // the transaction + closed sheets). Memoise it on its real inputs so it only recomputes when
+  // the data, the selected year, or the currency actually change — not on every re-render.
+  const breakdownData = useMemo(
+    () => (resolvedBreakdownYear == null
+      ? { assets: [] as ReturnType<typeof getYearlyProfitBreakdown>['assets'], other: 0, total: 0 }
+      : getYearlyProfitBreakdown(resolvedBreakdownYear, portfolioCurrency)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [resolvedBreakdownYear, portfolioCurrency, yearsData, assetData, transactionData, closedData, assetLookup],
+  );
 
   /**
    * Chart 3 data: Returns by Year (grouped bars)
@@ -9634,21 +9606,14 @@ const PortfolioBacktester = () => {
                   {/* selected currency (the gap = FX effect). "Other" = unpriced/guarded */}
                   {/* assets + cash/fees, so the Total always matches the chart's bar. */}
                   {(() => {
-                    if (yearsData.length === 0) return null;
-
-                    // Build the list of selectable years (newest first) from the Years data.
-                    const allYears = Array.from(new Set(
-                      yearsData.map(r => parseInt(r.date.slice(0, 4), 10)).filter(y => !isNaN(y))
-                    )).sort((a, b) => b - a);
-                    if (allYears.length === 0) return null;
-
-                    // Default to the latest year unless the user picked one.
-                    const selectedYear = (breakdownYear != null && allYears.includes(breakdownYear))
-                      ? breakdownYear
-                      : allYears[0];
+                    // Selectable years + the resolved selection and the (memoised) breakdown are
+                    // computed at the top of the component; this block just renders them.
+                    const allYears = breakdownYears;
+                    const selectedYear = resolvedBreakdownYear;
+                    if (allYears.length === 0 || selectedYear == null) return null;
 
                     const sym = CURRENCY_SYMBOLS[portfolioCurrency];
-                    const { assets, other, total } = getYearlyProfitBreakdown(selectedYear, portfolioCurrency);
+                    const { assets, other, total } = breakdownData;
 
                     // --- Formatting helpers ---
                     const nativeSym = (ccy: string) => CURRENCY_SYMBOLS[ccy] || ccy;
@@ -9674,8 +9639,9 @@ const PortfolioBacktester = () => {
                       const yr = yearsData.find(r => r.date.startsWith(`${selectedYear}`)) || null;
                       const prevYr = yearsData.find(r => r.date.startsWith(`${selectedYear - 1}`)) || null;
                       if (!yr) return [] as { ccy: string; pct: number }[];
-                      const endToPln = (row: YearsRow, ccy: string): number =>
-                        ccy === 'PLN' ? 1 : ({ USD: row.endUsdPln, EUR: row.endEurPln, CHF: row.endChfPln, SGD: row.endSgdPln } as { [k: string]: number })[ccy] || 0;
+                      const endToPln = (row: YearsRow, ccy: string): number => yearsRowRate(row, ccy, 'end');
+                      // Start-of-year rate: only used for the very first year (otherwise we use the
+                      // prior year-end). YearsRow only has start-period rates for USD/EUR/SGD.
                       const startToPln = (row: YearsRow, ccy: string): number =>
                         ccy === 'PLN' ? 1 : ({ USD: row.startUsdPln, EUR: row.startEurPln, SGD: row.startSgdPln } as { [k: string]: number })[ccy] || endToPln(row, ccy);
                       // Every currency that contributed this year (asset natives), plus PLN (the base of
