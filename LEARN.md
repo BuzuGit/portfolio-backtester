@@ -345,6 +345,55 @@ The key steps:
 
 **Lesson:** When many outputs derive from one input, transform the input once rather than transforming each output. It's less code, it's impossible for sections to disagree with each other, and sometimes a tricky requirement (like "convert this side but not that side") solves itself.
 
+### 9. Decomposing a Year's Profit by Asset (and the "scale mismatch" landmine)
+
+**The goal:** Below the "Contributions and Profit by Year" chart, show a table that breaks a single year's total profit into *how much each asset generated that year* — split into "shares I held on 1 January" vs. "shares I bought during the year" — in whatever currency the buttons are set to. So you can see, e.g., that in 2024 Bitcoin was your biggest engine (+87k zl) and Bitcoin ETF's early dip was the main drag.
+
+**The insight that made it simple:** Instead of trying to replay a running "how many shares did I own each day" simulation (which needs careful FIFO matching of sells to buys), we noticed the data is already organised as self-contained *lots*. Every sale in the "Closed" sheet is one complete buy→sell record; every share you still hold is a buy-only row in the "Data" sheet. So each lot can be valued **independently** with a plain school-level formula:
+
+> profit in year Y = (what it was worth at the end of Y, or the cash you got if you sold) − (what it was worth at the start of Y, or the cash you paid if you bought it that year)
+
+Because each boundary is converted at *that month's* exchange rate, this automatically includes currency gains/losses and handles buying-more or selling-part mid-year with no special cases. Anything we can't price (assets missing from the quote feed, cash, fees) isn't guessed at — it's lumped into an **"Other"** row defined as *(total year profit) − (sum of priced assets)*, which guarantees the table always adds up to the bar in the chart above.
+
+**The landmine — a units mismatch that inflated a number 5×:** The first run showed a phantom **+565,000 zl** from a 2019 cash-bond lot (IB01). The cause: that lot was *traded* at a price around **5** per share back in 2019, but the price-history column for the same ticker reads around **26** in 2019 (the series is on a different, rebased scale). Multiplying `shares × price-from-the-sheet` therefore multiplied a ~7,800 position as if it were ~44,000 — a 5.6× fiction.
+
+**The fix — value by *relative move*, not absolute price:** For sold lots we no longer do `shares × price`. We take the lot's **actual cost** and scale it by how much the price series *moved* since the buy month: `cost × price(boundary) ÷ price(buyMonth)`. The scale cancels out — the answer is identical to `shares × price` when the data is clean, but immune when it isn't. The phantom 565k collapsed to a correct **+780 zl**.
+
+**How we caught it:** Before wiring anything into the 12,000-line component, we re-implemented the whole calculation as a standalone ~80-line Node script reading the raw CSVs, and printed the per-asset breakdown for several years alongside the official yearly totals. The 2019 number screamed "impossible," which is exactly what a sanity harness is for. Only after the script reconciled cleanly did we port the identical logic into the app — and then confirmed the live table matched the script figure-for-figure.
+
+**Lesson:** When you multiply two numbers that come from *different sources* (transaction share counts × a separate price feed), you're implicitly trusting that they're on the same scale — and real-world financial data often isn't. Prefer **ratios/relative changes**, which are scale-free, over absolute multiplications whenever you can. And when a calculation must be *accurate*, build a throwaway checker against the raw data first; a number that's obviously wrong is a gift.
+
+**The redesign — from "answer" to "worksheet":** The first version showed two profit columns ("held at start" vs "added during year"). The client's reaction was honest: *"this confuses me — I want to see the quantity, the price it started at, the price it ended at, and the profit, so I can check the maths myself."* A profit figure with no visible mechanism is a black box, however correct. So each asset became a set of **segments** — *held from start*, *held from start · sold*, *bought in 2024*, *bought & sold*, *income* — and each segment shows **shares · start price · end price · profit**, laid out so `shares × (end − start)` visibly equals the profit. A single asset like IWDA in 2024 now reads as a little story: started with 795 shares (kept 145, sold 650), bought 565 more.
+
+**Native currency vs. the FX gap:** Prices live in each asset's *own* currency (SGD REITs, USD ETFs, PLN stocks), so the arithmetic only ties out in that currency. We show a **Profit (native)** column that ties out exactly, then a final **Profit (selected currency)** column that converts each boundary at its own month's exchange rate. The *gap between the two* is the currency effect — and it's often the headline: in 2024 MSCI World barely moved in dollars (+2,530 $) yet added **12,773 zł**, purely because the dollar strengthened against a big base. Exposing that gap turned a confusing number into an insight. (We copied this native-then-converted shape from the app's existing "Open Positions" table — consistency with what the user already understands beats inventing a new idiom.)
+
+**The scale guard, take two:** With prices now shown as `shares × price`, the old IB01 scale glitch could resurface in the *display*. Rather than the relative-cost trick, the final version uses an explicit **per-lot guard**: if the price feed at a lot's buy month disagrees with the price actually paid per share by more than ~3×, that lot is quarantined into "Other" instead of drawn as a distorted row. Clean lots render honestly; the one weird legacy lot bows out gracefully. The meta-lesson: when a rare bad input can't be trusted, it's often better to *exclude it visibly* than to silently "fix" it with a cleverer formula the user can't see.
+
+**Lesson:** Correct isn't the same as understandable. If a user has to take a number on faith, show them the arithmetic that produces it — even at the cost of more columns and more rows. And when you redesign, borrow the vocabulary and layout the user has already learned elsewhere in the product.
+
+### 10. The "impossible exchange rate" — converting flows and values with different rates
+
+**The smell:** A sharp-eyed user noticed the breakdown's "Other" bucket was 24% of profit in złoty but **73% in dollars** for the same year. As he put it: "there's no way this is that volatile — 98k PLN vs 82k USD implies an exchange rate of 1.2, and the dollar trades near 3.7." He was right, and chasing it uncovered a bug that had nothing to do with the breakdown at all.
+
+**The root cause:** the app converted the yearly summary into other currencies by dividing **every** number by that year's *average* exchange rate. But a portfolio's **value** isn't a flow — its dollar worth is a snapshot at the *end-of-period* rate. So the code was mixing two rates:
+
+- Contributions & profit (flows) ÷ **average** rate
+- Start/end portfolio value (snapshots) ÷ **period-end** rate
+
+When the exchange rate drifts during the year, those disagree, and the fundamental identity breaks: `growth (contributions + profit)` no longer equals `end value − start value`. Concretely, for 2026 the chart claimed +113k USD profit, but the portfolio's dollar value only rose ~86k and ~46k of that was fresh contributions — so the *real* profit was ~40k. The chart was overstating by ~73k, and that phantom 73k was exactly what leaked into the breakdown's "Other."
+
+**Why it was invisible in PLN:** złoty is the base currency, so every rate is 1.0 — average and end-of-period are identical. The bug could only appear once you pressed USD/SGD. A whole class of currency bugs hides behind "looks fine in the home currency."
+
+**The fix:** stop converting profit directly. Derive it as the residual of things that *can* be converted consistently:
+
+> `profit_in_currency = (end value − start value) − contributions`
+
+with values at the period-end rate and contributions at the average rate. Now `growth = contributions + profit = the actual change in value`, by construction, in every currency. In PLN it's algebraically identical to the old number (the accounting identity `end − start − contributions = profit`), so nothing there moved. In USD the breakdown's "Other" fell from 73% to 23% — matching the 22% it shows in PLN, because it's finally the *same* economic quantity viewed through a consistent lens.
+
+**How the numbers were pinned down:** the same standalone Node harness again. We printed, for every year, the chart's profit (`PLN ÷ avg`) beside the value-based profit (`Δvalue − contributions`). They disagreed wildly and in *both* directions — 2026 the chart was 3× too high, 2025 it was 6× too **low** — which is the fingerprint of a rate-mismatch rather than a simple scale error. A discrepancy that flips sign year to year is telling you the two quantities are measured on different rulers.
+
+**Lesson:** Never convert a "profit" or "return" figure directly into another currency by multiplying by one rate. Profit is a difference of values measured at different times; convert the *values* (each at its own moment's rate) and subtract. And treat the home-currency view with suspicion — it's exactly where multi-currency bugs go to hide, because there every rate is 1.
+
 ---
 
 ## How Good Engineers Think

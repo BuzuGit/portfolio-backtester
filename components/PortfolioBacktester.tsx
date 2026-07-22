@@ -503,6 +503,9 @@ const PortfolioBacktester = () => {
   const [yearsData, setYearsData] = useState<YearsRow[]>([]);
   // Which currency to display monetary values in (Charts 1 & 2)
   const [portfolioCurrency, setPortfolioCurrency] = useState<'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD'>('PLN');
+  // Which year the "Profit Breakdown by Asset" table shows.
+  // null = default to the latest available year in yearsData (computed at render time).
+  const [breakdownYear, setBreakdownYear] = useState<number | null>(null);
   // Which currencies are shown in Charts 3 & 4 (Returns/Growth by Year)
   // PLN selected by default; user can toggle individual currencies on/off
   const [selectedReturnCurrencies, setSelectedReturnCurrencies] = useState<string[]>(['PLN']);
@@ -3773,23 +3776,434 @@ const PortfolioBacktester = () => {
    * Growth = Contributions + Profit (total for that year), shown as a label above the bar
    */
   const getContributionsProfitChartData = () => {
-    return yearsData
-      .map(row => {
-        const converted = convertYearsRow(row, portfolioCurrency);
-        if (!converted) return null;
-        const year = row.date.includes('-') ? row.date.split('-')[0] : row.date;
-        // Split profit into positive (stacked above contributions) and negative (below zero)
-        // so negative years like 2022 show the loss bar dropping below the x-axis
-        return {
-          year,
-          contributions: converted.contributions,
-          profitPositive: converted.profit >= 0 ? converted.profit : 0,
-          profitNegative: converted.profit < 0 ? converted.profit : 0,
-          profit: converted.profit, // keep raw value for labels
-          growthTotal: converted.contributions + converted.profit,
-        };
-      })
-      .filter((d): d is NonNullable<typeof d> => d !== null);
+    const cur = portfolioCurrency;
+    // Each YearsRow stores FX as xxxPLN (PLN per 1 unit of the currency). "End" rates are
+    // period-end snapshots; "Avg" rates are the year's average (right for flows).
+    const endRateOf = (row: YearsRow): number =>
+      cur === 'PLN' ? 1 : ({ USD: row.endUsdPln, EUR: row.endEurPln, CHF: row.endChfPln, SGD: row.endSgdPln } as { [k: string]: number })[cur] || 0;
+    const avgRateOf = (row: YearsRow): number =>
+      cur === 'PLN' ? 1 : ({ USD: row.avgUsdPln, EUR: row.avgEurPln, CHF: row.avgChfPln, SGD: row.avgSgdPln } as { [k: string]: number })[cur] || 0;
+
+    // Compute profit as a VALUE RESIDUAL rather than converting the PLN profit at the
+    // average rate. In a non-PLN currency the two disagree when the exchange rate moves:
+    // portfolio VALUE converts at the period-end rate, so the only self-consistent profit is
+    //     profit = (end value − start value) − contributions
+    // which guarantees growth = contributions + profit = the actual change in value.
+    const out: { year: string; contributions: number; profitPositive: number; profitNegative: number; lossSpacer: number; profit: number; growthTotal: number }[] = [];
+    let prevEndValue: number | null = null;
+    for (const row of yearsData) {
+      const er = endRateOf(row), ar = avgRateOf(row);
+      if (!er || !ar) { prevEndValue = null; continue; } // skip if FX missing for this currency
+      const endValue = row.endAmount / er;                     // year-end portfolio value (snapshot)
+      const startValue = prevEndValue != null ? prevEndValue   // = previous year-end value (continuity)
+        : row.startAmount / er;                                // first year: fall back to its start amount
+      const contributions = row.contributions / ar;            // flow → average rate
+      const profit = (endValue - startValue) - contributions;  // the residual = true profit in `cur`
+      const profitPositive = profit >= 0 ? profit : 0;
+      const profitNegative = profit < 0 ? profit : 0;
+      const year = row.date.includes('-') ? row.date.split('-')[0] : row.date;
+      out.push({
+        year,
+        contributions,
+        profitPositive,
+        profitNegative,
+        // The bars share one stackId and Recharts accumulates them sequentially, which would
+        // push the black "contributions" bar below zero in loss years. A transparent spacer
+        // equal to the loss cancels it out, so contributions always starts at 0 and the yellow
+        // loss bar (drawn first, 0 → negative) stays visible below the axis.
+        lossSpacer: profit < 0 ? -profit : 0,
+        profit,
+        growthTotal: contributions + profit,
+      });
+      prevEndValue = endValue;
+    }
+    return out;
+  };
+
+  /**
+   * ============================================================
+   * PROFIT BREAKDOWN BY ASSET — for a single calendar year
+   * ============================================================
+   *
+   * Goal: take one year's total portfolio profit (the bar in the chart above)
+   * and show, for each asset, a transparent worksheet of HOW that profit was
+   * made — quantity, the price it started the year at, the price it ended at,
+   * and the resulting profit — so you can eyeball that
+   *      shares × (end price − start price) ≈ profit.
+   *
+   * To make that arithmetic tie out, each asset is broken into clean SEGMENTS,
+   * because a single asset can have several stories in one year:
+   *   • "Held from start"          — shares owned on 1 Jan and still held at year-end
+   *                                  (start = last-Dec price, end = this-Dec price)
+   *   • "Held from start · sold"   — shares owned on 1 Jan but sold during the year
+   *                                  (start = last-Dec price, end = your sell price)
+   *   • "Bought in <year>"         — shares bought this year and still held
+   *                                  (start = your buy price, end = this-Dec price)
+   *   • "Bought & sold <year>"     — bought and sold within the year
+   *                                  (start = buy price, end = sell price)
+   *   • "Income (div/interest)"    — dividends/interest earned that year (no price)
+   *
+   * WHY THE SEGMENTS ARE EXACT: every SALE in the data is already paired with its
+   * exact BUY in the "Closed" sheet (one row = one complete buy→sell lot), and
+   * shares still held are buy-only rows in the "Data" sheet. So each lot slots
+   * cleanly into exactly one segment with no guesswork about which shares sold.
+   *
+   * CURRENCY: prices are shown in each asset's NATIVE currency (SGD, USD, PLN…),
+   * so "shares × price change" ties out in that currency (the "Profit (native)"
+   * column). The final "Profit (<selected>)" column converts each boundary at the
+   * exchange rate of its own month — so it also captures the currency gain/loss.
+   * The gap between the two columns IS the FX effect (mirrors the Positions tab).
+   *
+   * SCALE GUARD: a few legacy lots were traded on a different price scale than
+   * their price-history column (e.g. an old cash line). We detect this per lot —
+   * if the price feed at the buy month disagrees with the actual price paid by
+   * more than ~3× — and drop that lot into "Other" rather than show a distorted
+   * mark-to-market.
+   *
+   * OTHER = (total year profit) − (sum of all itemised assets). It absorbs
+   * unpriced assets, cash, fees, and the guarded lots, and guarantees the table
+   * reconciles exactly to the bar in the chart above. Undated dividends from
+   * already-sold lots are spread evenly across the months held (chosen setting).
+   */
+  const getYearlyProfitBreakdown = (
+    year: number,
+    currency: string,
+  ): {
+    assets: {
+      ticker: string; name: string; nativeCurrency: string;
+      totalNative: number; totalConverted: number; totalFx: number;
+      retNative: number | null; retConverted: number | null;   // whole-asset % return (this year)
+      startValue: number; endValue: number;                    // native position value at each boundary
+      segments: {
+        label: string;
+        shares: number | null;      // null for the income line
+        startPrice: number | null; startTag: string;
+        endPrice: number | null;   endTag: string;
+        startValue: number | null; endValue: number | null;    // native position value (endValue − startValue = profitNative)
+        profitNative: number; profitConverted: number;
+        fxEffect: number;                         // FX slice of the converted profit
+        retNative: number | null;                 // % return in native currency
+        retConverted: number | null;              // % return in selected currency
+      }[];
+    }[];
+    other: number;
+    total: number;
+  } => {
+    if (!assetData || assetData.length === 0 || yearsData.length === 0) {
+      return { assets: [], other: 0, total: 0 };
+    }
+
+    // --- small local helpers (kept inside so the diff stays self-contained) ---
+
+    // The monthly price row that best represents the END of calendar year `y`.
+    // assetData is sorted oldest→newest, so the LAST row whose date starts with
+    // "y-" is December of that year (or the latest available month for the
+    // current, not-yet-finished year).
+    const yearEndRow = (y: number): AssetRow | null => {
+      let found: AssetRow | null = null;
+      for (const row of assetData) {
+        if (row.date.startsWith(`${y}-`)) found = row;
+      }
+      return found;
+    };
+
+    // The monthly price row for a given "YYYY-MM" month (used to grab the FX rate
+    // in the month a buy/sell/dividend happened). Falls back to the most recent
+    // earlier month if that exact month is missing.
+    const rowForYM = (ym: string): AssetRow | null => {
+      let carry: AssetRow | null = null;
+      for (const row of assetData) {
+        const rym = toYM(new Date(row.date));
+        if (rym === ym) return row;
+        if (rym < ym) carry = row;
+      }
+      return carry;
+    };
+
+    // Does the price feed contain any price for this ticker at all? If not, the
+    // asset is "not in quotes" and everything about it flows into "Other".
+    const isPriced = (ticker: string): boolean => {
+      for (const row of assetData) {
+        const p = Number(row[ticker]);
+        if (p && p > 0) return true;
+      }
+      return false;
+    };
+
+    // List of "YYYY-MM" months between two dates, inclusive — used to spread the
+    // lifetime dividends of a closed lot evenly across the months it was held.
+    const monthsInclusive = (startDate: string, endDate: string): string[] => {
+      const s = new Date(startDate);
+      const e = new Date(endDate);
+      if (isNaN(s.getTime()) || isNaN(e.getTime()) || s > e) return [];
+      const out: string[] = [];
+      let y = s.getFullYear();
+      let m = s.getMonth();
+      const ey = e.getFullYear();
+      const em = e.getMonth();
+      while (y < ey || (y === ey && m <= em)) {
+        out.push(`${y}-${String(m + 1).padStart(2, '0')}`);
+        m++;
+        if (m > 11) { m = 0; y++; }
+      }
+      return out;
+    };
+
+    // The native price of `ticker` in the monthly row for month `ym` (0 if none).
+    const priceAtYM = (ticker: string, ym: string): number => {
+      const row = rowForYM(ym);
+      if (!row) return 0;
+      const p = Number(row[ticker]);
+      return p > 0 ? p : 0;
+    };
+
+    // Convert a native-currency cash amount to `currency` using the FX rate that
+    // applied in month `ym` (falls back to year-end FX if the month is missing).
+    const cashAt = (ym: string, native: string, amount: number): number => {
+      const row = rowForYM(ym) || thisYearEndRow || prevYearEndRow;
+      if (!row) return amount;
+      return amount * getConversionRate(row, native, currency);
+    };
+
+    const prevYearEndRow = yearEndRow(year - 1); // ≈ 31 Dec of the previous year
+    const thisYearEndRow = yearEndRow(year);     // end of this year (or latest month)
+    const divConvRow = thisYearEndRow || prevYearEndRow; // FX used for spread dividends
+
+    // Collect every ticker that had any purchase or closed-lot activity.
+    const tickerSet = new Set<string>();
+    for (const t of transactionData) if (t.flow === FLOW_PURCHASE && t.ticker) tickerSet.add(t.ticker);
+    for (const c of closedData) if (c.ticker) tickerSet.add(c.ticker);
+
+    const assets: {
+      ticker: string; name: string; nativeCurrency: string;
+      totalNative: number; totalConverted: number; totalFx: number;
+      retNative: number | null; retConverted: number | null;
+      startValue: number; endValue: number;
+      segments: {
+        label: string; shares: number | null;
+        startPrice: number | null; startTag: string;
+        endPrice: number | null; endTag: string;
+        startValue: number | null; endValue: number | null;
+        profitNative: number; profitConverted: number;
+        fxEffect: number;
+        retNative: number | null; retConverted: number | null;
+      }[];
+    }[] = [];
+
+    for (const ticker of Array.from(tickerSet)) {
+      if (!isPriced(ticker)) continue; // unpriced assets → left for "Other"
+
+      const native = getAssetCurrency(ticker);
+      const openLots = transactionData.filter(t => t.ticker === ticker && t.flow === FLOW_PURCHASE);
+      const closedLots = closedData.filter(c => c.ticker === ticker);
+      const dividends = transactionData.filter(t => t.ticker === ticker && t.flow === FLOW_DIVIDEND);
+
+      // Native prices + FX at the two year boundaries.
+      const pPrev = prevYearEndRow ? Number(prevYearEndRow[ticker]) || 0 : 0; // 31 Dec Y−1
+      const pEnd = thisYearEndRow ? Number(thisYearEndRow[ticker]) || 0 : 0;  // 31 Dec Y / latest
+      const fxPrev = prevYearEndRow ? getConversionRate(prevYearEndRow, native, currency) : 1;
+      const fxEnd = thisYearEndRow ? getConversionRate(thisYearEndRow, native, currency) : 1;
+
+      // Scale guard: is a lot's traded per-share price consistent with the price
+      // feed at its buy month? (Guards against legacy scale mismatches.)
+      const consistent = (perShare: number, buyYM: string): boolean => {
+        const p = priceAtYM(ticker, buyYM);
+        if (!p || !perShare) return false;
+        const r = p / perShare;
+        return r >= 1 / 3 && r <= 3;
+      };
+
+      // Segment accumulators (all in native currency; *C = converted to `currency`).
+      const A = { sh: 0 };                                          // held from start, still held
+      const B = { sh: 0, procN: 0, procC: 0 };                      // held from start, sold in year
+      const C = { sh: 0, costN: 0, costC: 0 };                      // bought in year, still held
+      const D = { sh: 0, costN: 0, costC: 0, procN: 0, procC: 0 };  // bought & sold in year
+      let incN = 0, incC = 0;                                       // income (dividends/interest)
+
+      // --- Open lots (still held, buy-only) ---
+      for (const lot of openLots) {
+        const buyD = new Date(lot.date);
+        if (isNaN(buyD.getTime())) continue;
+        const buyYear = buyD.getFullYear();
+        if (buyYear > year) continue; // not bought yet
+        const perShare = lot.qty > 0 ? lot.amount / lot.qty : 0;
+        if (!consistent(perShare, toYM(buyD))) continue; // guarded → Other
+        if (buyYear < year) {
+          A.sh += lot.qty;
+        } else {
+          C.sh += lot.qty;
+          C.costN += lot.amount;
+          C.costC += lot.amount * getConversionRate(rowForYM(toYM(buyD)) || thisYearEndRow!, native, currency);
+        }
+      }
+
+      // --- Closed lots (complete buy→sell records) ---
+      for (const c of closedLots) {
+        const buyD = new Date(c.invDate);
+        const sellD = new Date(c.divDate);
+        if (isNaN(buyD.getTime()) || isNaN(sellD.getTime())) continue;
+        const buyYear = buyD.getFullYear();
+        const sellYear = sellD.getFullYear();
+        const perShare = c.sharesSold > 0 ? c.initialCost / c.sharesSold : 0;
+        const ok = consistent(perShare, toYM(buyD));
+
+        // Capital contribution to year Y (only if the lot was alive in Y and passes the guard).
+        if (ok && !(sellYear < year || buyYear > year)) {
+          if (buyYear < year && sellYear > year) {
+            A.sh += c.sharesSold;                                     // held all year
+          } else if (buyYear < year && sellYear === year) {
+            B.sh += c.sharesSold;                                     // opening, sold this year
+            B.procN += c.valueAfterFee;
+            B.procC += c.valueAfterFee * getConversionRate(rowForYM(toYM(sellD)) || thisYearEndRow!, native, currency);
+          } else if (buyYear === year && sellYear > year) {
+            C.sh += c.sharesSold;                                     // bought this year, still held
+            C.costN += c.initialCost;
+            C.costC += c.initialCost * getConversionRate(rowForYM(toYM(buyD)) || thisYearEndRow!, native, currency);
+          } else if (buyYear === year && sellYear === year) {
+            D.sh += c.sharesSold;                                     // bought & sold this year
+            D.costN += c.initialCost;
+            D.costC += c.initialCost * getConversionRate(rowForYM(toYM(buyD)) || thisYearEndRow!, native, currency);
+            D.procN += c.valueAfterFee;
+            D.procC += c.valueAfterFee * getConversionRate(rowForYM(toYM(sellD)) || thisYearEndRow!, native, currency);
+          }
+        }
+
+        // Dividends/interest for this sold lot: spread the lifetime total across
+        // the months held and take year Y's share (cash, so no scale guard needed).
+        if (c.cumDividend) {
+          const months = monthsInclusive(c.invDate, c.divDate);
+          if (months.length > 0) {
+            const k = months.filter(ym => ym.startsWith(`${year}-`)).length;
+            if (k > 0) {
+              const divNativeY = (c.cumDividend * k) / months.length;
+              incN += divNativeY;
+              incC += divConvRow ? divNativeY * getConversionRate(divConvRow, native, currency) : divNativeY;
+            }
+          }
+        }
+      }
+
+      // --- Dated dividends on current holdings (Data sheet) ---
+      for (const d of dividends) {
+        const dD = new Date(d.date);
+        if (isNaN(dD.getTime()) || dD.getFullYear() !== year) continue;
+        incN += d.amount;
+        incC += cashAt(toYM(dD), native, d.amount);
+      }
+
+      // --- Build the segment rows from the accumulators ---
+      // Helper: assemble one segment, deriving its % returns and its FX slice.
+      //  • baseNative / baseConverted = the capital that was "at work" for this
+      //    segment (start value for held shares, cash cost for bought shares).
+      //  • % return = profit ÷ that base, in each currency.
+      //  • fxEffect = the part of the converted profit due to the exchange rate
+      //    moving (converted profit − the native profit valued at the entry rate).
+      type Seg = typeof assets[number]['segments'][number];
+      const mkSeg = (
+        label: string, shares: number | null,
+        startPrice: number | null, startTag: string,
+        endPrice: number | null, endTag: string,
+        startValue: number | null, endValue: number | null,
+        profitNative: number, profitConverted: number,
+        baseNative: number, baseConverted: number,
+        fxStartRate: number, // rate to value native profit "locally" (no FX move)
+      ): Seg => ({
+        label, shares, startPrice, startTag, endPrice, endTag, startValue, endValue,
+        profitNative, profitConverted,
+        fxEffect: profitConverted - profitNative * fxStartRate,
+        retNative: Math.abs(baseNative) > 1e-9 ? (profitNative / baseNative) * 100 : null,
+        retConverted: Math.abs(baseConverted) > 1e-9 ? (profitConverted / baseConverted) * 100 : null,
+      });
+
+      const segments: Seg[] = [];
+      let baseNativeTot = 0, baseConvTot = 0; // capital base for the whole-asset % return
+      if (A.sh > 1e-9) {
+        const bN = A.sh * pPrev, bC = A.sh * pPrev * fxPrev;
+        baseNativeTot += bN; baseConvTot += bC;
+        segments.push(mkSeg('Held from start', A.sh, pPrev, `Dec ${year - 1}`, pEnd, `Dec ${year}`,
+          A.sh * pPrev, A.sh * pEnd,
+          A.sh * (pEnd - pPrev), A.sh * (pEnd * fxEnd - pPrev * fxPrev), bN, bC, fxPrev));
+      }
+      if (B.sh > 1e-9) {
+        const bN = B.sh * pPrev, bC = B.sh * pPrev * fxPrev;
+        baseNativeTot += bN; baseConvTot += bC;
+        segments.push(mkSeg('Held from start · sold', B.sh, pPrev, `Dec ${year - 1}`, B.procN / B.sh, 'sold',
+          B.sh * pPrev, B.procN,
+          B.procN - B.sh * pPrev, B.procC - B.sh * pPrev * fxPrev, bN, bC, fxPrev));
+      }
+      if (C.sh > 1e-9) {
+        const bN = C.costN, bC = C.costC;
+        baseNativeTot += bN; baseConvTot += bC;
+        segments.push(mkSeg(`Bought in ${year}`, C.sh, C.costN / C.sh, 'buy', pEnd, `Dec ${year}`,
+          C.costN, C.sh * pEnd,
+          C.sh * pEnd - C.costN, C.sh * pEnd * fxEnd - C.costC, bN, bC, C.costN > 0 ? C.costC / C.costN : fxEnd));
+      }
+      if (D.sh > 1e-9) {
+        const bN = D.costN, bC = D.costC;
+        baseNativeTot += bN; baseConvTot += bC;
+        segments.push(mkSeg(`Bought & sold ${year}`, D.sh, D.costN / D.sh, 'buy', D.procN / D.sh, 'sold',
+          D.costN, D.procN,
+          D.procN - D.costN, D.procC - D.costC, bN, bC, D.costN > 0 ? D.costC / D.costN : fxEnd));
+      }
+      if (Math.abs(incN) > 0.005 || Math.abs(incC) > 0.005) {
+        // Income has no capital base of its own (it's a yield on the holding), so
+        // leave its % and value blank; value it locally at the start-of-year rate for FX.
+        segments.push(mkSeg('Income (div/interest)', null, null, '', null, '', null, null, incN, incC, 0, 0, fxPrev));
+      }
+
+      if (segments.length === 0) continue;
+
+      const totalNative = segments.reduce((s, x) => s + x.profitNative, 0);
+      const totalConverted = segments.reduce((s, x) => s + x.profitConverted, 0);
+      const totalFx = segments.reduce((s, x) => s + x.fxEffect, 0);
+      const startValue = segments.reduce((s, x) => s + (x.startValue ?? 0), 0);
+      const endValue = segments.reduce((s, x) => s + (x.endValue ?? 0), 0);
+      const name = assetLookup.find(a => a.ticker === ticker)?.name || ticker;
+      assets.push({
+        ticker, name, nativeCurrency: native,
+        totalNative, totalConverted, totalFx,
+        retNative: Math.abs(baseNativeTot) > 1e-9 ? (totalNative / baseNativeTot) * 100 : null,
+        retConverted: Math.abs(baseConvTot) > 1e-9 ? (totalConverted / baseConvTot) * 100 : null,
+        startValue, endValue,
+        segments,
+      });
+    }
+
+    // Biggest contributor first (losers sink to the bottom).
+    assets.sort((a, b) => b.totalConverted - a.totalConverted);
+
+    const yearRow = yearsData.find(r => r.date.startsWith(`${year}`)) || null;
+    const sumConverted = assets.reduce((s, a) => s + a.totalConverted, 0);
+
+    // Value-consistent total profit in the selected currency — the SAME method the
+    // "Contributions and Profit by Year" chart now uses, so the table's total matches it:
+    //     profit = (end portfolio value − start portfolio value) − contributions
+    // with portfolio values converted at the period-END rate and contributions at the
+    // AVERAGE rate. (In PLN this is exactly the Years-sheet profit.) This replaces the old
+    // "PLN profit ÷ average rate" total, which mixed conversion methods and made "Other"
+    // implausibly large in non-PLN views.
+    const endRateOf = (row: YearsRow): number =>
+      currency === 'PLN' ? 1 : ({ USD: row.endUsdPln, EUR: row.endEurPln, CHF: row.endChfPln, SGD: row.endSgdPln } as { [k: string]: number })[currency] || 0;
+    const avgRateOf = (row: YearsRow): number =>
+      currency === 'PLN' ? 1 : ({ USD: row.avgUsdPln, EUR: row.avgEurPln, CHF: row.avgChfPln, SGD: row.avgSgdPln } as { [k: string]: number })[currency] || 0;
+
+    let total = 0;
+    if (yearRow) {
+      const er = endRateOf(yearRow), ar = avgRateOf(yearRow);
+      if (er && ar) {
+        const endValue = yearRow.endAmount / er;
+        const prevRow = yearsData.find(r => r.date.startsWith(`${year - 1}`)) || null;
+        const prevEr = prevRow ? endRateOf(prevRow) : 0;
+        const startValue = prevRow && prevEr ? prevRow.endAmount / prevEr : yearRow.startAmount / er;
+        const contributions = yearRow.contributions / ar;
+        total = (endValue - startValue) - contributions;
+      }
+    }
+
+    // Everything not itemised (unpriced/guarded assets, cash, fees, timing) = the residual.
+    const other = total - sumConverted;
+
+    return { assets, other, total };
   };
 
   /**
@@ -9048,10 +9462,10 @@ const PortfolioBacktester = () => {
                         <ResponsiveContainer width="100%" height={350}>
                           <BarChart
                             data={valueChartData}
-                            margin={{ top: 30, right: 5, left: -15, bottom: 5 }}
+                            margin={{ top: 30, right: 5, left: 5, bottom: 5 }}
                           >
                             <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v.toFixed(1)}M`} domain={[0, 'dataMax + 0.3']} />
+                            <YAxis hide domain={[0, 'dataMax + 0.3']} />
                             <Tooltip
                               formatter={(value: number, name: string) => {
                                 const label = name === 'contrCumulative' ? 'Contributions' : 'Profit';
@@ -9118,13 +9532,10 @@ const PortfolioBacktester = () => {
                     <ResponsiveContainer width="100%" height={350}>
                       <ComposedChart
                         data={cpChartData}
-                        margin={{ top: 30, right: 5, left: -15, bottom: 5 }}
+                        margin={{ top: 30, right: 5, left: 5, bottom: 5 }}
                       >
                         <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                        <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => {
-                          if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(0)}k`;
-                          return v.toFixed(0);
-                        }} />
+                        <YAxis hide />
                         <Tooltip
                           content={({ active, payload, label }) => {
                             if (!active || !payload || !payload.length) return null;
@@ -9146,29 +9557,22 @@ const PortfolioBacktester = () => {
                         {/* Negative profit (yellow) — renders below zero when loss occurs */}
                         {/* Must be FIRST in the stack so it extends downward from 0 */}
                         <Bar dataKey="profitNegative" stackId="cp" fill="#F5A623" name="profitNegative">
-                          {/* Custom label: placed at a fixed 20px below the bar baseline */}
+                          {/* Loss amount, centred INSIDE the yellow loss bar (below zero) */}
                           <LabelList
                             dataKey="profitNegative"
-                            content={(props: any) => {
-                              const { x, y, width, height, index } = props as { x: number; y: number; width: number; height: number; index: number };
-                              const entry = cpChartData[index];
-                              if (!entry || entry.profit >= 0) return null;
-                              const formatted = Math.abs(entry.profit) >= 1000
-                                ? `${(Math.abs(entry.profit) / 1000).toFixed(0)}k`
-                                : Math.abs(Math.round(entry.profit)).toLocaleString();
-                              return (
-                                <text
-                                  x={x + width / 2}
-                                  y={y + Math.abs(height) + 18}
-                                  textAnchor="middle"
-                                  style={{ fontSize: '15px', fill: '#ef4444', fontWeight: 700 }}
-                                >
-                                  ({formatted})
-                                </text>
-                              );
+                            position="center"
+                            formatter={(value: number) => {
+                              if (!value || value >= 0) return '';
+                              const a = Math.abs(value);
+                              return a >= 1000 ? `(${(a / 1000).toFixed(0)}k)` : `(${Math.round(a).toLocaleString()})`;
                             }}
+                            style={{ fontSize: '14px', fill: '#7f1d1d', fontWeight: 700 }}
                           />
                         </Bar>
+                        {/* Transparent spacer = the loss amount. It cancels the negative bar's
+                            downward offset so the black "contributions" bar below starts at 0
+                            (not below zero) and doesn't cover the yellow loss bar. */}
+                        <Bar dataKey="lossSpacer" stackId="cp" fill="transparent" legendType="none" isAnimationActive={false} />
                         {/* Middle bar: Contributions (black) */}
                         <Bar dataKey="contributions" stackId="cp" fill="#000000" name="contributions">
                           <LabelList
@@ -9182,7 +9586,11 @@ const PortfolioBacktester = () => {
                             style={{ fontSize: '13px', fill: '#fff', fontWeight: 600 }}
                           />
                         </Bar>
-                        {/* Top bar: Positive profit (yellow) — stacked above contributions */}
+                        {/* Top bar: Positive profit (yellow) — stacked above contributions.
+                            It also carries the growth-total label above the whole bar: this bar
+                            always sits at the top of the stack (its top edge = contributions +
+                            positive profit = the "labelTop"), so a top-positioned label clears the
+                            bar in every year, including losses (where its height is 0). */}
                         <Bar dataKey="profitPositive" stackId="cp" fill="#F5A623" name="profitPositive">
                           <LabelList
                             dataKey="profitPositive"
@@ -9194,31 +9602,269 @@ const PortfolioBacktester = () => {
                             }}
                             style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
                           />
-                        </Bar>
-                        {/* Invisible line used only to place the growth total label above each bar */}
-                        <Line
-                          dataKey="growthTotal"
-                          stroke="transparent"
-                          dot={false}
-                          activeDot={false}
-                          legendType="none"
-                          name="growthTotal"
-                        >
+                          {/* Growth total (contributions + profit) above the bar */}
                           <LabelList
-                            dataKey="growthTotal"
+                            dataKey="profitPositive"
                             position="top"
-                            formatter={(value: number) => {
+                            content={(props: any) => {
+                              const { x, y, width, index } = props as { x: number; y: number; width: number; index: number };
+                              const entry = cpChartData[index];
+                              if (!entry || typeof x !== 'number' || typeof y !== 'number' || typeof width !== 'number') return null;
                               const sym = CURRENCY_SYMBOLS[portfolioCurrency];
-                              if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(0)}k ${sym}`;
-                              return `${Math.round(value).toLocaleString()} ${sym}`;
+                              const v = entry.growthTotal;
+                              const label = Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k ${sym}` : `${Math.round(v).toLocaleString()} ${sym}`;
+                              return (
+                                <text x={x + width / 2} y={y - 10} textAnchor="middle" style={{ fontSize: '13px', fill: '#991b1b', fontWeight: 700 }}>
+                                  {label}
+                                </text>
+                              );
                             }}
-                            style={{ fontSize: '13px', fill: '#991b1b', fontWeight: 700 }}
-                            offset={18}
                           />
-                        </Line>
+                        </Bar>
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
+                    );
+                  })()}
+
+                  {/* === Profit Breakdown by Asset (single year, with year dropdown) === */}
+                  {/* A transparent worksheet: each asset is split into segments (held from */}
+                  {/* start, sold, bought this year, income) showing quantity, start price, */}
+                  {/* end price and profit. Prices are native; the last column converts to the */}
+                  {/* selected currency (the gap = FX effect). "Other" = unpriced/guarded */}
+                  {/* assets + cash/fees, so the Total always matches the chart's bar. */}
+                  {(() => {
+                    if (yearsData.length === 0) return null;
+
+                    // Build the list of selectable years (newest first) from the Years data.
+                    const allYears = Array.from(new Set(
+                      yearsData.map(r => parseInt(r.date.slice(0, 4), 10)).filter(y => !isNaN(y))
+                    )).sort((a, b) => b - a);
+                    if (allYears.length === 0) return null;
+
+                    // Default to the latest year unless the user picked one.
+                    const selectedYear = (breakdownYear != null && allYears.includes(breakdownYear))
+                      ? breakdownYear
+                      : allYears[0];
+
+                    const sym = CURRENCY_SYMBOLS[portfolioCurrency];
+                    const { assets, other, total } = getYearlyProfitBreakdown(selectedYear, portfolioCurrency);
+
+                    // --- Formatting helpers ---
+                    const nativeSym = (ccy: string) => CURRENCY_SYMBOLS[ccy] || ccy;
+                    const fmtC = (v: number) => `${v < 0 ? '−' : ''}${Math.round(Math.abs(v)).toLocaleString()} ${sym}`;
+                    const fmtN = (v: number, ccy: string) => `${v < 0 ? '−' : ''}${Math.round(Math.abs(v)).toLocaleString()} ${nativeSym(ccy)}`;
+                    const fmtPrice = (p: number) =>
+                      p >= 1000 ? p.toLocaleString(undefined, { maximumFractionDigits: 0 })
+                        : p >= 1 ? p.toFixed(2) : p.toFixed(4);
+                    const fmtQty = (q: number) =>
+                      q >= 1000 ? q.toLocaleString(undefined, { maximumFractionDigits: 0 })
+                        : q >= 1 ? q.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                          : q.toLocaleString(undefined, { maximumFractionDigits: 4 });
+                    const pctStr = (p: number | null) => (p == null ? '' : `${p >= 0 ? '+' : '−'}${Math.abs(p).toFixed(1)}%`);
+                    const share = (v: number) => (Math.abs(total) > 0.5 ? `${(v / total * 100).toFixed(1)}%` : '—');
+                    const colorOf = (v: number) => (v > 0.5 ? 'text-green-700' : v < -0.5 ? 'text-red-600' : 'text-gray-400');
+                    const fxAll = assets.reduce((s, a) => s + a.totalFx, 0);
+
+                    // How each currency the portfolio held moved against the SELECTED currency this
+                    // year — the driver behind the FX total. A positive % means the selected currency
+                    // weakened against that one (so foreign holdings gained from FX). Rates come from
+                    // the Years sheet (period-end snapshots); the year's start = the prior year-end.
+                    const fxMoves = (() => {
+                      const yr = yearsData.find(r => r.date.startsWith(`${selectedYear}`)) || null;
+                      const prevYr = yearsData.find(r => r.date.startsWith(`${selectedYear - 1}`)) || null;
+                      if (!yr) return [] as { ccy: string; pct: number }[];
+                      const endToPln = (row: YearsRow, ccy: string): number =>
+                        ccy === 'PLN' ? 1 : ({ USD: row.endUsdPln, EUR: row.endEurPln, CHF: row.endChfPln, SGD: row.endSgdPln } as { [k: string]: number })[ccy] || 0;
+                      const startToPln = (row: YearsRow, ccy: string): number =>
+                        ccy === 'PLN' ? 1 : ({ USD: row.startUsdPln, EUR: row.startEurPln, SGD: row.startSgdPln } as { [k: string]: number })[ccy] || endToPln(row, ccy);
+                      // Every currency that contributed this year (asset natives), plus PLN (the base of
+                      // "Other"), minus the currency we're already displaying in.
+                      const ccys = Array.from(new Set([...assets.map(a => a.nativeCurrency), 'PLN'])).filter(c => c !== portfolioCurrency);
+                      const out: { ccy: string; pct: number }[] = [];
+                      for (const c of ccys) {
+                        const endC = endToPln(yr, c), endD = endToPln(yr, portfolioCurrency);
+                        const startC = prevYr ? endToPln(prevYr, c) : startToPln(yr, c);
+                        const startD = prevYr ? endToPln(prevYr, portfolioCurrency) : startToPln(yr, portfolioCurrency);
+                        if (!endC || !endD || !startC || !startD) continue;
+                        const endRate = endC / endD;     // units of `c` per selected currency, year-end
+                        const startRate = startC / startD; // ... at year start
+                        if (!startRate) continue;
+                        out.push({ ccy: c, pct: (endRate / startRate - 1) * 100 });
+                      }
+                      return out.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+                    })();
+
+                    // A profit cell = big amount + small % return underneath (in the cell's colour).
+                    const profitCell = (amount: number, pct: number | null, isNative: boolean, ccy: string, bold?: boolean) => (
+                      <td className={`py-1.5 px-2 text-right tabular-nums ${bold ? 'font-semibold' : ''} ${colorOf(amount)}`}>
+                        <div>{isNative ? fmtN(amount, ccy) : fmtC(amount)}</div>
+                        {pct != null && <div style={{ fontSize: '10px' }} className="opacity-70">{pctStr(pct)}</div>}
+                      </td>
+                    );
+                    // An FX-effect cell (always in the selected currency; blank for same-currency assets).
+                    const fxCell = (v: number, bold?: boolean) => (
+                      <td className={`py-1.5 px-2 text-right tabular-nums ${bold ? 'font-semibold' : ''}`}>
+                        {Math.abs(v) < 0.5 ? <span className="text-gray-300">—</span> : <span className={colorOf(v)}>{fmtC(v)}</span>}
+                      </td>
+                    );
+                    // A price cell = the per-share price on top, and below it the position's
+                    // VALUE at that moment (shares × price, or the cash cost/proceeds). The
+                    // end value minus the start value equals Profit (native).
+                    const priceCell = (price: number | null, tag: string, value: number | null, ccy: string) => (
+                      <td className="py-1.5 px-2 text-right tabular-nums text-gray-700">
+                        {price != null && (<div>{fmtPrice(price)}<span className="text-gray-400 ml-1" style={{ fontSize: '10px' }}>{tag}</span></div>)}
+                        {value != null && (<div className="text-gray-400" style={{ fontSize: '10px' }}>{fmtN(value, ccy)}</div>)}
+                        {price == null && value == null && '—'}
+                      </td>
+                    );
+
+                    return (
+                      <div className="bg-white p-4 rounded-lg shadow mb-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                          <h3 className="text-md font-semibold text-gray-700">
+                            Profit Breakdown by Asset — {selectedYear}
+                          </h3>
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs text-gray-500">Year</label>
+                            <select
+                              value={selectedYear}
+                              onChange={(e) => setBreakdownYear(parseInt(e.target.value, 10))}
+                              className="px-2 py-1 rounded border border-gray-300 text-xs font-medium text-gray-700 bg-white hover:bg-gray-50"
+                            >
+                              {allYears.map(y => (
+                                <option key={y} value={y}>{y}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        <p className="text-xs text-gray-400 mb-3">
+                          Each shaded row is a whole asset (with a <b>Total</b> when it has several parts); the white
+                          rows below break it down. Prices are in the asset&apos;s own currency, with the position&apos;s
+                          <b> value</b> shown underneath — end value − start value = <b>Profit (native)</b>; the small %
+                          is the return on that capital. <b>FX effect</b> is the part of the {portfolioCurrency} profit
+                          from the exchange rate moving; <b>Profit ({sym})</b> is the bottom line, and <b>Share</b> = % of
+                          the year. Total profit is the change in portfolio value minus contributions (matching the
+                          chart above), and &quot;Other&quot; (unpriced assets, cash, fees) is whatever the itemised
+                          assets don&apos;t explain.
+                        </p>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs border-collapse">
+                            <thead>
+                              <tr className="text-gray-500 border-b border-gray-200">
+                                <th className="text-left font-medium py-2 pr-3">Asset</th>
+                                <th className="text-left font-medium py-2 px-2">Segment</th>
+                                <th className="text-right font-medium py-2 px-2">Qty</th>
+                                <th className="text-right font-medium py-2 px-2">Start price</th>
+                                <th className="text-right font-medium py-2 px-2">End price</th>
+                                <th className="text-right font-medium py-2 px-2">Profit (native)</th>
+                                <th className="text-right font-medium py-2 px-2">FX effect ({sym})</th>
+                                <th className="text-right font-medium py-2 px-2">Profit ({sym})</th>
+                                <th className="text-right font-medium py-2 pl-2">Share</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {assets.length === 0 ? (
+                                <tr>
+                                  <td colSpan={9} className="py-3 text-center text-gray-400">
+                                    No priced-asset activity in {selectedYear}.
+                                  </td>
+                                </tr>
+                              ) : assets.flatMap(a => {
+                                const multi = a.segments.length > 1;
+                                const trs: JSX.Element[] = [];
+                                // Whole-asset row is always styled prominently (shaded); the
+                                // white rows below it are only the breakdown of the total above.
+                                trs.push(
+                                  <tr key={`${a.ticker}-tot`} className="border-t border-gray-300 bg-gray-50">
+                                    <td className="py-2 pr-3 align-top">
+                                      <div className="font-semibold text-gray-800">{a.name}</div>
+                                      <div className="text-gray-400">{a.ticker} · {a.nativeCurrency}</div>
+                                    </td>
+                                    {multi ? (
+                                      <>
+                                        <td className="py-2 px-2 font-semibold text-gray-600">Total</td>
+                                        <td />
+                                        {priceCell(null, '', a.startValue, a.nativeCurrency)}
+                                        {priceCell(null, '', a.endValue, a.nativeCurrency)}
+                                        {profitCell(a.totalNative, a.retNative, true, a.nativeCurrency, true)}
+                                        {fxCell(a.totalFx, true)}
+                                        {profitCell(a.totalConverted, a.retConverted, false, a.nativeCurrency, true)}
+                                        <td className="py-2 pl-2 text-right tabular-nums text-gray-600 font-medium">{share(a.totalConverted)}</td>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <td className="py-2 px-2 text-gray-600 font-medium">{a.segments[0].label}</td>
+                                        <td className="py-2 px-2 text-right tabular-nums text-gray-700">{a.segments[0].shares == null ? '—' : fmtQty(a.segments[0].shares)}</td>
+                                        {priceCell(a.segments[0].startPrice, a.segments[0].startTag, a.segments[0].startValue, a.nativeCurrency)}
+                                        {priceCell(a.segments[0].endPrice, a.segments[0].endTag, a.segments[0].endValue, a.nativeCurrency)}
+                                        {profitCell(a.segments[0].profitNative, a.segments[0].retNative, true, a.nativeCurrency, true)}
+                                        {fxCell(a.segments[0].fxEffect, true)}
+                                        {profitCell(a.segments[0].profitConverted, a.segments[0].retConverted, false, a.nativeCurrency, true)}
+                                        <td className="py-2 pl-2 text-right tabular-nums text-gray-600 font-medium">{share(a.totalConverted)}</td>
+                                      </>
+                                    )}
+                                  </tr>
+                                );
+                                if (multi) {
+                                  a.segments.forEach((s, i) => trs.push(
+                                    <tr key={`${a.ticker}-${i}`} className="hover:bg-gray-50">
+                                      <td className="py-1.5 pr-3" />
+                                      <td className="py-1.5 px-2 pl-4 text-gray-500">{s.label}</td>
+                                      <td className="py-1.5 px-2 text-right tabular-nums text-gray-700">{s.shares == null ? '—' : fmtQty(s.shares)}</td>
+                                      {priceCell(s.startPrice, s.startTag, s.startValue, a.nativeCurrency)}
+                                      {priceCell(s.endPrice, s.endTag, s.endValue, a.nativeCurrency)}
+                                      {profitCell(s.profitNative, s.retNative, true, a.nativeCurrency)}
+                                      {fxCell(s.fxEffect)}
+                                      {profitCell(s.profitConverted, s.retConverted, false, a.nativeCurrency)}
+                                      <td className="py-1.5 pl-2 text-right tabular-nums text-gray-400">{share(s.profitConverted)}</td>
+                                    </tr>
+                                  ));
+                                }
+                                return trs;
+                              })}
+                              {/* Other = residual so the table reconciles to the chart's bar */}
+                              <tr className="bg-gray-50/60 border-t border-gray-200">
+                                <td className="py-2 pr-3 italic text-gray-500">Other</td>
+                                <td className="py-2 px-2 text-gray-400" colSpan={4}>cash, fees, assets not in the price feed</td>
+                                <td className="py-2 px-2 text-right text-gray-300">—</td>
+                                <td className="py-2 px-2 text-right text-gray-300">—</td>
+                                <td className={`py-2 px-2 text-right tabular-nums font-medium ${colorOf(other)}`}>{fmtC(other)}</td>
+                                <td className="py-2 pl-2 text-right tabular-nums text-gray-500">{share(other)}</td>
+                              </tr>
+                            </tbody>
+                            <tfoot>
+                              {/* Per-currency FX move this year — the driver behind the FX total below */}
+                              {fxMoves.length > 0 && (
+                                <tr className="border-t-2 border-gray-300">
+                                  <td className="pt-2 pr-2 text-right align-top text-gray-400" colSpan={6} style={{ fontSize: '11px' }}>
+                                    FX move vs {portfolioCurrency} this year:
+                                  </td>
+                                  <td className="pt-2 px-2 align-top" colSpan={3} style={{ fontSize: '11px' }}>
+                                    {fxMoves.map(m => (
+                                      <span
+                                        key={m.ccy}
+                                        className={`inline-block mr-3 tabular-nums ${m.pct > 0.05 ? 'text-green-700' : m.pct < -0.05 ? 'text-red-600' : 'text-gray-400'}`}
+                                        title={m.pct >= 0 ? `${portfolioCurrency} weakened vs ${m.ccy}` : `${portfolioCurrency} strengthened vs ${m.ccy}`}
+                                      >
+                                        {m.ccy}/{portfolioCurrency} {m.pct >= 0 ? '+' : '−'}{Math.abs(m.pct).toFixed(1)}%
+                                      </span>
+                                    ))}
+                                  </td>
+                                </tr>
+                              )}
+                              <tr className={fxMoves.length > 0 ? 'border-t border-gray-200' : 'border-t-2 border-gray-300'}>
+                                <td className="py-2 pr-3 font-bold text-gray-800" colSpan={5}>Total profit {selectedYear}</td>
+                                <td className="py-2 px-2 text-right text-gray-300">—</td>
+                                {fxCell(fxAll, true)}
+                                <td className={`py-2 px-2 text-right tabular-nums font-bold ${colorOf(total)}`}>{fmtC(total)}</td>
+                                <td className="py-2 pl-2 text-right text-gray-500">100%</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div>
                     );
                   })()}
 
@@ -9848,13 +10494,13 @@ const PortfolioBacktester = () => {
                               dataKey="Return PLN"
                               position="top"
                               formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#666' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Return PLN"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
                         )}
@@ -9864,13 +10510,13 @@ const PortfolioBacktester = () => {
                               dataKey="Return USD"
                               position="top"
                               formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#666' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Return USD"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
                         )}
@@ -9880,13 +10526,13 @@ const PortfolioBacktester = () => {
                               dataKey="Return SGD"
                               position="top"
                               formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#666' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Return SGD"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
                         )}
@@ -9916,13 +10562,13 @@ const PortfolioBacktester = () => {
                               dataKey="Growth PLN"
                               position="top"
                               formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#666' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Growth PLN"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
                         )}
@@ -9932,13 +10578,13 @@ const PortfolioBacktester = () => {
                               dataKey="Growth USD"
                               position="top"
                               formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#666' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Growth USD"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
                         )}
@@ -9948,13 +10594,13 @@ const PortfolioBacktester = () => {
                               dataKey="Growth SGD"
                               position="top"
                               formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#666' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Growth SGD"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                              style={{ fontSize: '11px', fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
                         )}
