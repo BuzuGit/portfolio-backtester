@@ -9631,6 +9631,21 @@ const PortfolioBacktester = () => {
                     const colorOf = (v: number) => (v > 0.5 ? 'text-green-700' : v < -0.5 ? 'text-red-600' : 'text-gray-400');
                     const fxAll = assets.reduce((s, a) => s + a.totalFx, 0);
 
+                    // Whole-portfolio currency effect for the year (accurate; includes the unpriced
+                    // holdings): total profit − what that profit would be with the exchange rate frozen
+                    // at the start of the year. In PLN it's 0 (base currency). Cheap: just reuses the
+                    // yearly totals. "ex-FX profit" (what you made from the assets, not the currency)
+                    // is then total − currencyEffect.
+                    const totalPln = getYearlyValueSeries('PLN').find(s => s.year === `${selectedYear}`)?.profit ?? 0;
+                    const prevYrRow = yearsData.find(r => r.date.startsWith(`${selectedYear - 1}`))
+                      || yearsData.find(r => r.date.startsWith(`${selectedYear}`)) || null;
+                    const startCtoPln = portfolioCurrency === 'PLN'
+                      ? 1
+                      : (prevYrRow ? yearsRowRate(prevYrRow, portfolioCurrency, 'end') : 0);
+                    const currencyEffect = (portfolioCurrency === 'PLN' || !startCtoPln)
+                      ? 0
+                      : total - totalPln / startCtoPln;
+
                     // How each currency the portfolio held moved against the SELECTED currency this
                     // year — the driver behind the FX total. A positive % means the selected currency
                     // weakened against that one (so foreign holdings gained from FX). Rates come from
@@ -9827,6 +9842,21 @@ const PortfolioBacktester = () => {
                                 <td className={`py-2 px-2 text-right tabular-nums font-bold ${colorOf(total)}`}>{fmtC(total)}</td>
                                 <td className="py-2 pl-2 text-right text-gray-500">100%</td>
                               </tr>
+                              {/* Whole-portfolio currency effect (incl. unpriced holdings), measured vs PLN.
+                                  Only shown in non-PLN views (in PLN it's 0). It's a different lens than the
+                                  per-asset FX-effect column, so it's a standalone note. */}
+                              {portfolioCurrency !== 'PLN' && Math.abs(currencyEffect) > 0.5 && (
+                                <tr>
+                                  <td className="pt-1 pr-2 text-right align-top text-gray-400" colSpan={5} style={{ fontSize: '11px' }}>
+                                    of which currency effect (whole portfolio vs PLN):
+                                  </td>
+                                  <td className="pt-1 px-2" colSpan={4} style={{ fontSize: '11px' }}>
+                                    <span className={`tabular-nums ${colorOf(currencyEffect)}`}>{fmtC(currencyEffect)}</span>
+                                    <span className="text-gray-400"> → ex-FX profit </span>
+                                    <span className={`tabular-nums ${colorOf(total - currencyEffect)}`}>{fmtC(total - currencyEffect)}</span>
+                                  </td>
+                                </tr>
+                              )}
                             </tfoot>
                           </table>
                         </div>
