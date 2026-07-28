@@ -147,6 +147,18 @@ Instead of writing CSS files, you add classes directly to elements:
 
 **Why it's great:** No context switching between files. See styling right where you see the element.
 
+**The house style (since July 2026):** The app used to wear Tailwind's factory-default colours — an indigo button here, a bright blue toggle there, a blue-to-indigo gradient behind everything. It worked, but it looked like a demo. It now follows one deliberate palette, and new UI should match it rather than reaching for whatever colour comes to hand:
+
+| Thing | What it wears |
+|---|---|
+| Page background | flat `bg-[#f1f2f4]` — a calm neutral grey, no gradient |
+| Cards | white, `rounded-xl`, `border-gray-200`, `shadow-sm` |
+| Selected / primary button | `bg-slate-800` with white text |
+| Unselected button or tab | `bg-gray-100 text-gray-600`, `text-sm font-medium` |
+| Table headers **and their totals rows** | `bg-gray-100` (`#f3f4f6`) |
+
+Three things deliberately kept their old colours, because there they mean something rather than decorate: the blue tint on a selected table row or a "Buy & Hold" column, green/red for gains and losses, and the little legend dots that must match the line they describe. **The rule of thumb: grey is for chrome, colour is for meaning.**
+
 ### Recharts (The Charts)
 A React library for drawing charts. We use:
 - `LineChart` - Shows portfolio value over time
@@ -198,6 +210,17 @@ A React library for drawing charts. We use:
 - Raw prices are meaningless to compare (IWDA at $106 vs CSPX at $500 — apples and oranges)
 - Normalizing makes the chart visually intuitive: both lines start at the same point on the sale date, and you can immediately see which grew more
 - The math: `normalizedPrice = comparisonPrice × (baseAssetPriceAtSaleDate / comparisonPriceAtSaleDate)`
+
+### Why is only the Positions tab's chart palette restyled?
+
+**Decision:** During the July 2026 restyle, move the Positions charts onto the shared `CHART_PALETTE` but deliberately leave the Graphs, Trend Following, Portfolio and Backtest charts on their original bright colours — for now.
+
+**Why:**
+- That was the scope actually asked for, and chart colours in the other tabs aren't decorative — they encode things like buy-and-hold vs strategy, and trend signals. Recolouring them is a *meaning* change that deserves its own deliberate pass, not a find-and-replace done in passing
+- Restyling all of them blind would have risked breaking the link between a line and its legend dot, which is the one thing a chart cannot afford to get wrong
+- The cost is honest and visible: the app is **knowingly half-restyled**. If you're reading this and wondering why the Graphs tab still has a neon green line in it, that's why — not an oversight
+
+**If you finish the job:** pull the colours from `CHART_PALETTE` rather than inventing new hexes, and re-run the palette validator for each chart's *actual* series count (see Lesson 14 — five colours can be made colour-blind safe, six cannot).
 
 ### Why use 'use client' for the main component?
 
@@ -393,6 +416,63 @@ with values at the period-end rate and contributions at the average rate. Now `g
 **How the numbers were pinned down:** the same standalone Node harness again. We printed, for every year, the chart's profit (`PLN ÷ avg`) beside the value-based profit (`Δvalue − contributions`). They disagreed wildly and in *both* directions — 2026 the chart was 3× too high, 2025 it was 6× too **low** — which is the fingerprint of a rate-mismatch rather than a simple scale error. A discrepancy that flips sign year to year is telling you the two quantities are measured on different rulers.
 
 **Lesson:** Never convert a "profit" or "return" figure directly into another currency by multiplying by one rate. Profit is a difference of values measured at different times; convert the *values* (each at its own moment's rate) and subtract. And treat the home-currency view with suspicion — it's exactly where multi-currency bugs go to hide, because there every rate is 1.
+
+### 14. Choosing Chart Colours Is Arithmetic, Not Taste
+
+**The brief:** "the Positions graphs don't match the rest of the app — make them more elegant." Easy to nod along to and impossible to verify. The old palette was Tailwind's greatest hits: neon green, hot blue, electric indigo, a purple. Next to the new slate-grey buttons they looked like a child's crayon box spilled onto a bank statement.
+
+**The trap I nearly fell into:** picking eight colours that *looked* tasteful and shipping them. The problem is that "looks fine to me" is a sample size of one, with one particular pair of eyes. Roughly 1 in 12 men has some form of colour-blindness, and a pie chart is the cruellest possible test — every slice is on screen at once, so *every* pair of colours has to survive, not just neighbouring ones.
+
+**What I did instead:** ran candidate palettes through a validator that scores each pair on five checks — lightness band, chroma floor, colour-blind separation (deutan/protan/tritan), a normal-vision floor, and contrast against the white card. The first attempt failed instantly:
+
+```
+[FAIL] Chroma floor   below floor (reads gray): #3d5a80, #2f7d72, #8c7b6b
+```
+
+Translation: my "elegantly muted" colours were so desaturated they'd read as three shades of mud. Elegance and legibility were pulling in opposite directions, and the tool said so in numbers instead of letting me find out from a confused user six months later.
+
+**The honest ceiling:** after brute-forcing thousands of combinations from a pool of two dozen candidate hues, a real limit emerged — **you cannot make six categorical colours all-pairs safe.** Not "I couldn't"; nobody can, and the design literature says so plainly. Five is achievable. Six isn't. So the final answer isn't one palette, it's a palette *plus an admission*:
+
+- **Asset classes (5 colours) — passes everything.** Worst pair: ΔE 9.6 for colour-blind viewers, 16.3 for everyone else, both above the floor.
+- **Currencies (6 colours) — cannot pass, and doesn't pretend to.** It leans on the fact that every bar already prints its currency code and every slice its percentage. Colour is the garnish there, not the label.
+
+**The bit that felt like cheating (but isn't):** because the colours now live in a single `CHART_PALETTE` constant at the top of the file, and both the currency bar chart and the currency pie read from it, they can never drift apart. The old code had the same colours typed out in two places; someone would eventually have changed one and not the other.
+
+**Lesson:** When a request is aesthetic ("more elegant"), find the part of it that's measurable and measure that part. You still make a taste judgement about *which* passing palette to use — but you never ship one that's quietly unreadable for a chunk of your audience. And when a constraint is genuinely impossible, say so out loud and name the thing that compensates for it, rather than quietly shipping something that fails a test nobody ran.
+
+### 15. The Comment That Wouldn't Compile (Twice)
+
+**The error:**
+
+```
+x Expected ',', got 'className'
+   5160 |     {/* Page background: flat, neutral light grey */}
+   5161 |     <div className="min-h-screen bg-[#f1f2f4] p-4">
+        :          ^^^^^^^^^
+```
+
+The caret points at line 5161. The mistake is on line 5160.
+
+**What happened:** `CLAUDE.md` asks for plain-English comments on all generated code, which is a good rule. So while changing the page background I added an explanatory comment — right after `return (`. JSX doesn't allow that. The slot immediately after `return (` must hold the root element itself; a `{/* … */}` there is a syntax error, and the parser only notices when it reaches the *next* line, which is why the error message accuses an innocent `<div>`.
+
+```jsx
+return (
+  {/* explanation */}        // breaks the build
+  <div className="...">
+```
+```jsx
+// explanation               <-- lives happily here
+return (
+  <div className="...">
+```
+
+Curiously, `{/* … */}` is perfectly legal *between* elements once you're inside a parent — which is exactly why the rule is easy to forget. The one forbidden spot looks like all the allowed ones.
+
+**The embarrassing part:** I did it twice in the same session, hours apart. The second time was in a `<tfoot>` deep inside a `.map()`, and by then I'd stopped thinking of it as a rule and started thinking of it as bad luck.
+
+**Why it cost almost nothing anyway:** the dev server was running the whole time. Both breakages surfaced in the terminal within seconds, were fixed in under a minute, and neither reached GitHub. That's not luck — it's what the feedback loop is *for*. A mistake caught in 5 seconds by a machine is not really a mistake; a mistake caught in 5 days by a user is.
+
+**Lesson:** Two of them, actually. First, when a compiler points at line N, the culprit is often line N−1 — parsers report where they *noticed*, not where you *erred*. Second, and more useful: repeating a mistake isn't a sign you need to try harder, it's a sign the rule hasn't been written down anywhere a future you will look. So it went into this file, which is the whole point of this file.
 
 ---
 
