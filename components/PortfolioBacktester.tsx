@@ -372,16 +372,44 @@ const yearsRowRate = (row: YearsRow, currency: string, which: 'end' | 'avg'): nu
   return map[currency] || 0;
 };
 
+// ---------------------------------------------------------------------------
+// CHART PALETTE (Positions tab)
+// ---------------------------------------------------------------------------
+// One muted, "heritage" palette shared by every Positions chart, so the graphs
+// feel like part of the same app as the slate-grey buttons instead of a set of
+// bright default web colors. Think of it as choosing a wardrobe: all the pieces
+// come from the same drawer, so anything you pull out matches.
+//
+// The eight hues were checked with a color-blindness / contrast validator: as a
+// running sequence every neighbouring pair is clearly distinguishable, and the
+// five asset-class colors are distinguishable from EVERY other one in that set
+// (which matters for a pie chart, where all slices are on screen at once).
+// The six currency colors can't fully clear that bar — no six-color set can —
+// so that chart keeps its text labels on each bar and % labels in each slice,
+// which is what carries the meaning if two colors ever look similar.
+const CHART_PALETTE = {
+  blue:      '#2f6fa8', // steel blue
+  terracotta:'#c25a2c', // burnt orange
+  teal:      '#0d8a78', // deep teal
+  gold:      '#c8952a', // antique gold
+  rose:      '#c06a94', // dusty rose
+  olive:     '#557f33', // olive green
+  violet:    '#5b45a8', // muted violet
+  wine:      '#8a3f52', // deep wine
+} as const;
+
 // Asset class colors for the breakdown chart and table color dots
 const ASSET_CLASS_COLORS: Record<string, string> = {
-  'Fixed Income': '#22c55e', 'Equities': '#ef4444', 'Crypto': '#111827', 'Alternatives': '#a855f7',
-  'Metals & Crypto': '#b45309', // amber-700 — gold-ish to represent the physical + crypto nature
+  'Fixed Income': CHART_PALETTE.olive, 'Equities': CHART_PALETTE.wine,
+  'Crypto': CHART_PALETTE.rose, 'Alternatives': CHART_PALETTE.violet,
+  'Metals & Crypto': CHART_PALETTE.gold, // gold-ish to represent the physical + crypto nature
 };
 
 // Colors for the by-currency bar chart — one distinct color per native currency
 const CURRENCY_COLORS: Record<string, string> = {
-  PLN: '#f59e0b', USD: '#3b82f6', SGD: '#10b981', EUR: '#8b5cf6', CHF: '#f97316',
-  'M&C': '#b45309', // matches the Metals & Crypto asset class color
+  PLN: CHART_PALETTE.wine, USD: CHART_PALETTE.blue, SGD: CHART_PALETTE.teal,
+  EUR: CHART_PALETTE.violet, CHF: CHART_PALETTE.terracotta,
+  'M&C': CHART_PALETTE.gold, // matches the Metals & Crypto asset class color
 };
 
 // "Group Metals & Crypto" feature: assets whose raw asset class is 'Other' (Gold + Crypto in this
@@ -4962,7 +4990,7 @@ const PortfolioBacktester = () => {
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assets' ? null : 'assets')}
             className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
-              openFilterDropdown === 'assets' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+              openFilterDropdown === 'assets' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
             }`}
           >
             <span className="font-medium">Assets:</span>
@@ -5009,7 +5037,7 @@ const PortfolioBacktester = () => {
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetClass' ? null : 'assetClass')}
             className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
-              openFilterDropdown === 'assetClass' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+              openFilterDropdown === 'assetClass' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
             }`}
           >
             <span className="font-medium">Class:</span>
@@ -5056,7 +5084,7 @@ const PortfolioBacktester = () => {
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'currency' ? null : 'currency')}
             className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
-              openFilterDropdown === 'currency' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+              openFilterDropdown === 'currency' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
             }`}
           >
             <span className="font-medium">Currency:</span>
@@ -5103,7 +5131,7 @@ const PortfolioBacktester = () => {
             <button
               onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetSubcategory' ? null : 'assetSubcategory')}
               className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
-                openFilterDropdown === 'assetSubcategory' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+                openFilterDropdown === 'assetSubcategory' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
               }`}
             >
               <span className="font-medium">Subcategory:</span>
@@ -5156,17 +5184,19 @@ const PortfolioBacktester = () => {
   // RENDER THE UI
   // ----------------------------------------
 
+  // Page background: flat, neutral light grey so the white cards stand out cleanly
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 p-4">
+    <div className="min-h-screen bg-[#f1f2f4] p-4">
       <div className="max-w-6xl mx-auto">
-        <div className="bg-white rounded-lg shadow-lg p-4 mb-4">
+        {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy) */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4">
 
           {/* Data Status Section - compact single row */}
-          <div className="mb-4 px-4 py-2 bg-gray-300 rounded-lg flex items-center justify-between">
+          <div className="mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
             <div className="flex items-center gap-3">
               <h2 className="text-lg font-semibold text-gray-700">Data</h2>
               <span className={`text-sm ${
-                loadingMessage.includes('Loaded') ? 'text-green-600' :
+                loadingMessage.includes('Loaded') ? 'text-gray-900' :
                 loadingMessage.includes('Error') ? 'text-red-600' :
                 'text-gray-600'
               }`}>
@@ -5176,7 +5206,7 @@ const PortfolioBacktester = () => {
             <button
               onClick={loadDataFromSheet}
               disabled={isLoading}
-              className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold flex items-center gap-2 disabled:opacity-50 text-sm"
+              className="px-3 py-1.5 bg-slate-800 text-white rounded-lg hover:bg-slate-700 font-semibold flex items-center gap-2 disabled:opacity-50 text-sm"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
               {isLoading ? 'Loading...' : 'Refresh Data'}
@@ -5189,90 +5219,90 @@ const PortfolioBacktester = () => {
             <div className="mb-6 flex gap-2 flex-wrap">
               <button
                 onClick={() => setActiveView('backtest')}
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'backtest'
-                    ? 'bg-indigo-600 text-white'           // Active: highlighted
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'  // Inactive: muted
+                    ? 'bg-slate-800 text-white'           // Active: highlighted
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'  // Inactive: muted
                 }`}
               >
                 Backtest
               </button>
               <button
                 onClick={() => setActiveView('monthlyPrices')}
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'monthlyPrices'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
                 Monthly
               </button>
               <button
                 onClick={() => setActiveView('annualReturns')}
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'annualReturns'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
                 Annual
               </button>
               <button
                 onClick={() => setActiveView('bestToWorst')}
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'bestToWorst'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
                 Best To Worst
               </button>
               <button
                 onClick={() => setActiveView('graphs')}
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'graphs'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
                 Graphs
               </button>
               <button
                 onClick={() => setActiveView('trendFollowing')}
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'trendFollowing'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
                 Trend Following
               </button>
               <button
                 onClick={() => setActiveView('correlationMatrix')}
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'correlationMatrix'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
                 Correlations
               </button>
               <button
                 onClick={() => setActiveView('portfolio')}
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'portfolio'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
                 Portfolio
               </button>
               <button
                 onClick={() => setActiveView('positions')}
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'positions'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
                 Positions
@@ -5546,7 +5576,7 @@ const PortfolioBacktester = () => {
                 {/* Run Backtest Button */}
                 <button
                   onClick={runBacktest}
-                  className="mt-4 w-full py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700"
+                  className="mt-4 w-full py-2 bg-slate-800 text-white font-semibold rounded-lg hover:bg-slate-700"
                 >
                   Run Backtest
                 </button>
@@ -5991,7 +6021,7 @@ const PortfolioBacktester = () => {
                         onClick={() => setAnnualViewMode('returns')}
                         className={`px-3 py-1.5 text-sm font-medium rounded-l-lg border transition-colors ${
                           annualViewMode === 'returns'
-                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            ? 'bg-slate-800 text-white border-slate-800'
                             : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
                         }`}
                       >
@@ -6001,7 +6031,7 @@ const PortfolioBacktester = () => {
                         onClick={() => setAnnualViewMode('prices')}
                         className={`px-3 py-1.5 text-sm font-medium rounded-r-lg border border-l-0 transition-colors ${
                           annualViewMode === 'prices'
-                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            ? 'bg-slate-800 text-white border-slate-800'
                             : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
                         }`}
                       >
@@ -6013,7 +6043,7 @@ const PortfolioBacktester = () => {
                       <button
                         onClick={() => setYearsDropdownOpen(!yearsDropdownOpen)}
                         className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
-                          yearsDropdownOpen ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+                          yearsDropdownOpen ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
                         }`}
                       >
                         <span className="font-medium">Years:</span>
@@ -6226,7 +6256,7 @@ const PortfolioBacktester = () => {
                       <thead>
                         <tr className="border-b-2 border-gray-200">
                           {/* Asset Name column - sticky both top and left (corner cell, highest z-index) */}
-                          <th className="text-left py-2 px-2 sticky top-0 left-0 z-30 min-w-[150px]" style={{ backgroundColor: '#e5e7eb' }}>
+                          <th className="text-left py-2 px-2 sticky top-0 left-0 z-30 min-w-[150px]" style={{ backgroundColor: '#f3f4f6' }}>
                             Asset
                           </th>
                           {/* Year columns - oldest to newest, clickable for sorting (filtered by selected years) */}
@@ -6234,7 +6264,7 @@ const PortfolioBacktester = () => {
                             <th
                               key={year}
                               className={getSortableHeaderClass(year, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
-                              style={{ backgroundColor: annualReturnsSortColumn === year ? '#bfdbfe' : '#e5e7eb' }}
+                              style={{ backgroundColor: annualReturnsSortColumn === year ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === year ? null : year)}
                             >
                               {year}
@@ -6243,7 +6273,7 @@ const PortfolioBacktester = () => {
                           {/* Period column - shows data history length */}
                           <th
                             className={getSortableHeaderClass('Period', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'Period' ? '#bfdbfe' : '#e5e7eb' }}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'Period' ? '#bfdbfe' : '#f3f4f6' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Period' ? null : 'Period')}
                           >
                             Period
@@ -6251,7 +6281,7 @@ const PortfolioBacktester = () => {
                           {/* CAGR column - compound annual growth rate */}
                           <th
                             className={getSortableHeaderClass('CAGR', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'CAGR' ? '#bfdbfe' : '#e5e7eb' }}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'CAGR' ? '#bfdbfe' : '#f3f4f6' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CAGR' ? null : 'CAGR')}
                           >
                             CAGR
@@ -6259,7 +6289,7 @@ const PortfolioBacktester = () => {
                           {/* Volatility column - annualized std dev of monthly returns */}
                           <th
                             className={getSortableHeaderClass('Vol', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[50px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'Vol' ? '#bfdbfe' : '#e5e7eb' }}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'Vol' ? '#bfdbfe' : '#f3f4f6' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Vol' ? null : 'Vol')}
                           >
                             Vol
@@ -6267,7 +6297,7 @@ const PortfolioBacktester = () => {
                           {/* Sharpe Ratio column - risk-adjusted return */}
                           <th
                             className={getSortableHeaderClass('Sharpe', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'Sharpe' ? '#bfdbfe' : '#e5e7eb' }}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'Sharpe' ? '#bfdbfe' : '#f3f4f6' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Sharpe' ? null : 'Sharpe')}
                           >
                             Sharpe
@@ -6275,7 +6305,7 @@ const PortfolioBacktester = () => {
                           {/* Max Drawdown column - worst peak-to-trough decline */}
                           <th
                             className={getSortableHeaderClass('MaxDD', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'MaxDD' ? '#bfdbfe' : '#e5e7eb' }}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'MaxDD' ? '#bfdbfe' : '#f3f4f6' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'MaxDD' ? null : 'MaxDD')}
                           >
                             Max DD
@@ -6283,7 +6313,7 @@ const PortfolioBacktester = () => {
                           {/* DD Duration column - longest drawdown duration */}
                           <th
                             className={getSortableHeaderClass('DDDur', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'DDDur' ? '#bfdbfe' : '#e5e7eb' }}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'DDDur' ? '#bfdbfe' : '#f3f4f6' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'DDDur' ? null : 'DDDur')}
                           >
                             DD Dur
@@ -6291,21 +6321,21 @@ const PortfolioBacktester = () => {
                           {/* Current Drawdown column - distance from ATH */}
                           <th
                             className={getSortableHeaderClass('CurrDD', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'CurrDD' ? '#bfdbfe' : '#e5e7eb' }}
+                            style={{ backgroundColor: annualReturnsSortColumn === 'CurrDD' ? '#bfdbfe' : '#f3f4f6' }}
                             onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CurrDD' ? null : 'CurrDD')}
                           >
                             Curr DD
                           </th>
                           {/* Ticker column - placed after Curr DD */}
-                          <th className="text-left py-2 px-2 sticky top-0 z-20" style={{ backgroundColor: '#e5e7eb' }}>Ticker</th>
+                          <th className="text-left py-2 px-2 sticky top-0 z-20" style={{ backgroundColor: '#f3f4f6' }}>Ticker</th>
                           {/* Empty separator column */}
-                          <th className="py-2 px-1 w-2 sticky top-0 z-20" style={{ backgroundColor: '#e5e7eb' }}></th>
+                          <th className="py-2 px-1 w-2 sticky top-0 z-20" style={{ backgroundColor: '#f3f4f6' }}></th>
                           {/* Period return columns (1Y-5Y) */}
                           {['1Y', '2Y', '3Y', '4Y', '5Y'].map(period => (
                             <th
                               key={period}
                               className={getSortableHeaderClass(period, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[50px]')}
-                              style={{ backgroundColor: annualReturnsSortColumn === period ? '#bfdbfe' : '#e5e7eb' }}
+                              style={{ backgroundColor: annualReturnsSortColumn === period ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === period ? null : period)}
                             >
                               {period}
@@ -6597,7 +6627,7 @@ const PortfolioBacktester = () => {
                           setSelectedRankingYear(parseInt(e.target.value));
                           setBestToWorstMode('year');
                         }}
-                        className={`px-3 py-1.5 text-sm border rounded-lg ${isYearMode ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+                        className={`px-3 py-1.5 text-sm border rounded-lg ${isYearMode ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
                       >
                         {years.slice().reverse().map(year => (
                           <option key={year} value={year}>{year}</option>
@@ -6612,7 +6642,7 @@ const PortfolioBacktester = () => {
                           onClick={() => setBestToWorstMode(period)}
                           className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
                             bestToWorstMode === period
-                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              ? 'bg-slate-800 text-white border-slate-800'
                               : 'bg-white border-gray-300 hover:bg-gray-100'
                           }`}
                         >
@@ -6638,12 +6668,12 @@ const PortfolioBacktester = () => {
                         <table className="w-full text-xs">
                           <thead>
                             <tr className="border-b border-gray-200">
-                              <th className="py-1 px-1 bg-gray-200 w-24"></th>
-                              <th className="text-right py-1 px-2 bg-gray-200 w-16">{returnColumnHeader}</th>
-                              <th className="text-left py-1 px-2 bg-gray-200">Asset</th>
-                              <th className="text-left py-1 px-2 bg-gray-200 w-16">Ticker</th>
-                              <th className="text-center py-1 px-2 bg-gray-200 w-12">Ccy</th>
-                              <th className="text-right py-1 px-2 bg-gray-200 w-20">PLN Return</th>
+                              <th className="py-1 px-1 bg-gray-100 w-24"></th>
+                              <th className="text-right py-1 px-2 bg-gray-100 w-16">{returnColumnHeader}</th>
+                              <th className="text-left py-1 px-2 bg-gray-100">Asset</th>
+                              <th className="text-left py-1 px-2 bg-gray-100 w-16">Ticker</th>
+                              <th className="text-center py-1 px-2 bg-gray-100 w-12">Ccy</th>
+                              <th className="text-right py-1 px-2 bg-gray-100 w-20">PLN Return</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -6765,7 +6795,7 @@ const PortfolioBacktester = () => {
                     onClick={() => setMonthlyViewMode('prices')}
                     className={`px-3 py-1.5 text-sm font-medium rounded-l-lg border transition-colors ${
                       monthlyViewMode === 'prices'
-                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        ? 'bg-slate-800 text-white border-slate-800'
                         : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
                     }`}
                   >
@@ -6775,7 +6805,7 @@ const PortfolioBacktester = () => {
                     onClick={() => setMonthlyViewMode('returns')}
                     className={`px-3 py-1.5 text-sm font-medium rounded-r-lg border border-l-0 transition-colors ${
                       monthlyViewMode === 'returns'
-                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        ? 'bg-slate-800 text-white border-slate-800'
                         : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
                     }`}
                   >
@@ -6971,7 +7001,7 @@ const PortfolioBacktester = () => {
                             {/* Asset Name - sticky left column, sortable */}
                             <th
                               className="sticky left-0 z-10 text-left py-1 px-1 min-w-[160px] border-r border-gray-200 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'name' ? '#bfdbfe' : '#e5e7eb' }}
+                              style={{ backgroundColor: monthlySortColumn === 'name' ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'name' ? null : 'name')}
                             >
                               Asset
@@ -6981,7 +7011,7 @@ const PortfolioBacktester = () => {
                               <th
                                 key={idx}
                                 className="text-right py-1 px-1 whitespace-nowrap cursor-pointer select-none"
-                                style={{ backgroundColor: monthlySortColumn === `month-${idx}` ? '#bfdbfe' : '#e5e7eb' }}
+                                style={{ backgroundColor: monthlySortColumn === `month-${idx}` ? '#bfdbfe' : '#f3f4f6' }}
                                 onClick={() => setMonthlySortColumn(monthlySortColumn === `month-${idx}` ? null : `month-${idx}`)}
                               >
                                 {month}
@@ -6990,7 +7020,7 @@ const PortfolioBacktester = () => {
                             {/* 10m SMA column, sortable */}
                             <th
                               className="text-right py-1 px-1 whitespace-nowrap border-l border-gray-200 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'sma10' ? '#bfdbfe' : '#e5e7eb' }}
+                              style={{ backgroundColor: monthlySortColumn === 'sma10' ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'sma10' ? null : 'sma10')}
                             >
                               10mSMA
@@ -6998,7 +7028,7 @@ const PortfolioBacktester = () => {
                             {/* Signal column, sortable */}
                             <th
                               className="text-center py-1 px-1 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'signal' ? '#bfdbfe' : '#e5e7eb' }}
+                              style={{ backgroundColor: monthlySortColumn === 'signal' ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'signal' ? null : 'signal')}
                             >
                               Signal
@@ -7006,7 +7036,7 @@ const PortfolioBacktester = () => {
                             {/* Ticker column, sortable */}
                             <th
                               className="text-left py-1 px-1 border-l border-gray-200 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'ticker' ? '#bfdbfe' : '#e5e7eb' }}
+                              style={{ backgroundColor: monthlySortColumn === 'ticker' ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'ticker' ? null : 'ticker')}
                             >
                               Ticker
@@ -7014,7 +7044,7 @@ const PortfolioBacktester = () => {
                             {/* 12-month return column, sortable */}
                             <th
                               className="text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'ret12m' ? '#bfdbfe' : '#e5e7eb' }}
+                              style={{ backgroundColor: monthlySortColumn === 'ret12m' ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'ret12m' ? null : 'ret12m')}
                             >
                               12M Ret
@@ -7022,7 +7052,7 @@ const PortfolioBacktester = () => {
                             {/* 12-month drawdown column, sortable */}
                             <th
                               className="text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'dd12m' ? '#bfdbfe' : '#e5e7eb' }}
+                              style={{ backgroundColor: monthlySortColumn === 'dd12m' ? '#bfdbfe' : '#f3f4f6' }}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'dd12m' ? null : 'dd12m')}
                             >
                               12M DD
@@ -7339,7 +7369,7 @@ const PortfolioBacktester = () => {
                                     onClick={() => setMonthlyDisplayCurrency(ccy)}
                                     className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
                                       monthlyDisplayCurrency === ccy
-                                        ? 'bg-indigo-600 text-white border-indigo-600'
+                                        ? 'bg-slate-800 text-white border-slate-800'
                                         : 'bg-white border-gray-300 hover:bg-gray-100'
                                     }`}
                                   >
@@ -7355,7 +7385,7 @@ const PortfolioBacktester = () => {
                                     onClick={() => setMonthlyChartPeriod(p)}
                                     className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
                                       monthlyChartPeriod === p
-                                        ? 'bg-indigo-600 text-white border-indigo-600'
+                                        ? 'bg-slate-800 text-white border-slate-800'
                                         : 'bg-white border-gray-300 hover:bg-gray-100'
                                     }`}
                                   >
@@ -7739,7 +7769,7 @@ const PortfolioBacktester = () => {
                                     onClick={() => setReturnsChartPeriod(p)}
                                     className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
                                       returnsChartPeriod === p
-                                        ? 'bg-blue-500 text-white border-blue-500'
+                                        ? 'bg-slate-800 text-white border-slate-800'
                                         : 'bg-white border-gray-300 hover:bg-gray-100'
                                     }`}
                                   >
@@ -7747,7 +7777,8 @@ const PortfolioBacktester = () => {
                                   </button>
                                 ))}
                               </div>
-                              <ResponsiveContainer width="100%" height={200}>
+                              {/* height 300 = 50% taller than the original 200 for easier reading */}
+                              <ResponsiveContainer width="100%" height={300}>
                                 <BarChart data={returnsData} margin={{ top: 20, right: 10, left: -5, bottom: 15 }}>
                                   <CartesianGrid strokeDasharray="3 3" />
                                   <XAxis
@@ -8327,7 +8358,7 @@ const PortfolioBacktester = () => {
                           onClick={() => setGraphsPeriod(value as typeof graphsPeriod)}
                           className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
                             graphsPeriod === value
-                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              ? 'bg-slate-800 text-white border-slate-800'
                               : 'bg-white border-gray-300 hover:bg-gray-100'
                           }`}
                         >
@@ -9416,7 +9447,7 @@ const PortfolioBacktester = () => {
                         key={c}
                         onClick={() => setPortfolioCurrency(c)}
                         className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                          portfolioCurrency === c ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          portfolioCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                         }`}
                       >{c}</button>
                     ))}
@@ -10148,7 +10179,7 @@ const PortfolioBacktester = () => {
                             <span className="text-xs text-gray-500 mr-1">Currency:</span>
                             {(['PLN', 'USD', 'SGD'] as const).map(c => (
                               <button key={c} onClick={() => setDailyNavCurrency(c)}
-                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavCurrency === c ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                               >{c}</button>
                             ))}
                           </div>
@@ -10156,7 +10187,7 @@ const PortfolioBacktester = () => {
                             <span className="text-xs text-gray-500 mr-1">Period:</span>
                             {(['1Y', '3Y', '5Y', 'Max'] as const).map(p => (
                               <button key={p} onClick={() => setDailyNavPeriod(p)}
-                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavPeriod === p ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavPeriod === p ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                               >{p}</button>
                             ))}
                           </div>
@@ -10338,7 +10369,7 @@ const PortfolioBacktester = () => {
                             <span className="text-xs text-gray-500 mr-1">Period:</span>
                             {(['1Y', '3Y', '5Y', 'Max'] as const).map(p => (
                               <button key={p} onClick={() => setDdPeriod(p)}
-                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${ddPeriod === p ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${ddPeriod === p ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                               >{p}</button>
                             ))}
                           </div>
@@ -10634,7 +10665,7 @@ const PortfolioBacktester = () => {
                       <button
                         onClick={() => setClosedOpenFilterDropdown(closedOpenFilterDropdown === 'assets' ? null : 'assets')}
                         className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
-                          closedOpenFilterDropdown === 'assets' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+                          closedOpenFilterDropdown === 'assets' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
                         }`}
                       >
                         <span className="font-medium">Assets:</span>
@@ -11015,12 +11046,12 @@ const PortfolioBacktester = () => {
                             <table className="w-full text-xs border-collapse">
                               <thead>
                                 <tr className="border-b border-gray-200">
-                                  <th className="text-left py-2 px-2 bg-gray-200">Asset Class</th>
-                                  <th className="text-right py-2 px-2 bg-gray-200">Invested {effectiveCcy}</th>
-                                  <th className="text-right py-2 px-2 bg-gray-200">Current Value {effectiveCcy}</th>
-                                  <th className="text-right py-2 px-2 bg-gray-200">Total PnL {effectiveCcy}</th>
-                                  <th className="text-right py-2 px-2 bg-gray-200">Return %</th>
-                                  <th className="text-right py-2 px-2 bg-gray-200">Weight</th>
+                                  <th className="text-left py-2 px-2 bg-gray-100">Asset Class</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100">Invested {effectiveCcy}</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100">Current Value {effectiveCcy}</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100">Total PnL {effectiveCcy}</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100">Return %</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100">Weight</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -11080,7 +11111,9 @@ const PortfolioBacktester = () => {
                           <div style={{ width: 220, height: 200, flexShrink: 0 }}>
                             <ResponsiveContainer width="100%" height="100%">
                               <PieChart>
+                                {/* isAnimationActive={false} = draw instantly instead of sweeping in on tab open */}
                                 <Pie
+                                  isAnimationActive={false}
                                   data={assetClassRollup}
                                   dataKey="weight"
                                   nameKey="assetClass"
@@ -11175,7 +11208,9 @@ const PortfolioBacktester = () => {
                           <div style={{ width: 220, height: 200, flexShrink: 0 }}>
                             <ResponsiveContainer width="100%" height="100%">
                               <PieChart>
+                                {/* isAnimationActive={false} = draw instantly instead of sweeping in on tab open */}
                                 <Pie
+                                  isAnimationActive={false}
                                   data={activeCurrencyData}
                                   dataKey="currentValue"
                                   nameKey="currency"
@@ -11249,7 +11284,12 @@ const PortfolioBacktester = () => {
                       const maxAccountValue = Math.max(...accountRollup.map(r => r.currentValue), 0.01);
                       const totalAccountValue = accountRollup.reduce((s, r) => s + r.currentValue, 0);
 
-                      const ACCOUNT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
+                      // Same shared palette as the asset-class / currency charts, in the
+                      // order that keeps neighbouring accounts easiest to tell apart.
+                      const ACCOUNT_COLORS = [
+                        CHART_PALETTE.blue, CHART_PALETTE.terracotta, CHART_PALETTE.teal, CHART_PALETTE.gold,
+                        CHART_PALETTE.rose, CHART_PALETTE.olive, CHART_PALETTE.violet, CHART_PALETTE.wine,
+                      ];
 
                       return (
                         <div className="bg-white p-4 rounded-lg shadow mb-4">
@@ -11305,7 +11345,9 @@ const PortfolioBacktester = () => {
                             <div style={{ width: 220, height: 200, flexShrink: 0 }}>
                               <ResponsiveContainer width="100%" height="100%">
                                 <PieChart>
+                                  {/* isAnimationActive={false} = draw instantly instead of sweeping in on tab open */}
                                   <Pie
+                                    isAnimationActive={false}
                                     data={accountRollup}
                                     dataKey="currentValue"
                                     nameKey="account"
@@ -11375,20 +11417,20 @@ const PortfolioBacktester = () => {
                           <table className="w-full text-xs border-collapse">
                             <thead>
                               <tr className="border-b border-gray-200">
-                                <th className="text-left py-2 px-2 bg-gray-200">Asset Name</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Time Held</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Avg Buy</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Price</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">PnL %</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Qty</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Total Invested</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Current Value</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Total PnL</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">XIRR</th>
-                                <th className="text-right py-2 px-2 bg-gray-200" style={{ width: 70 }}>Weight</th>
-                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">Invested {posCcyLabel}</th>}
-                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">Current {posCcyLabel}</th>}
-                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-200">PnL {posCcyLabel}</th>}
+                                <th className="text-left py-2 px-2 bg-gray-100">Asset Name</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Time Held</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Avg Buy</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Price</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">PnL %</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Qty</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Total Invested</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Current Value</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Total PnL</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">XIRR</th>
+                                <th className="text-right py-2 px-2 bg-gray-100" style={{ width: 70 }}>Weight</th>
+                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-100">Invested {posCcyLabel}</th>}
+                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-100">Current {posCcyLabel}</th>}
+                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-100">PnL {posCcyLabel}</th>}
                               </tr>
                             </thead>
                             <tbody>
@@ -11475,16 +11517,16 @@ const PortfolioBacktester = () => {
                           <table className="w-full text-xs border-collapse">
                             <thead>
                               <tr className="border-b border-gray-200">
-                                <th className="text-left py-2 px-2 bg-gray-200">Asset Name</th>
-                                <th className="text-right py-2 px-2 bg-gray-200"># Txns</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">First Buy</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Last Sale</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Time Held</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Total Invested</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Total Final Value</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">Total PnL</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">PnL %</th>
-                                <th className="text-right py-2 px-2 bg-gray-200">XIRR</th>
+                                <th className="text-left py-2 px-2 bg-gray-100">Asset Name</th>
+                                <th className="text-right py-2 px-2 bg-gray-100"># Txns</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">First Buy</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Last Sale</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Time Held</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Total Invested</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Total Final Value</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">Total PnL</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">PnL %</th>
+                                <th className="text-right py-2 px-2 bg-gray-100">XIRR</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -11838,7 +11880,7 @@ const PortfolioBacktester = () => {
                         <button
                           onClick={() => setOpenSinceInvested(!openSinceInvested)}
                           className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                            openSinceInvested ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 hover:bg-gray-100'
+                            openSinceInvested ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-gray-300 hover:bg-gray-100'
                           }`}
                         >
                           Since Invested
@@ -12011,7 +12053,7 @@ const PortfolioBacktester = () => {
 
                           const priceBubbleDefs: BubbleDef[] = [];
                           if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#000000', label: lastPrice.toFixed(2) });
-                          if (lastCompPrice != null && openInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: '#F59E0B', label: lastCompPrice.toFixed(2) });
+                          if (lastCompPrice != null && openInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: CHART_PALETTE.gold, label: lastCompPrice.toFixed(2) });
                           if (lastAvgBuyPrice != null && openShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#22c55e', label: lastAvgBuyPrice.toFixed(2) });
                           const OpenPriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
 
@@ -12026,21 +12068,21 @@ const PortfolioBacktester = () => {
                                 <Customized component={OpenPriceBubbles} />
                                 <Line type="monotone" dataKey="price" name={openSelectedTicker} stroke="#000000" strokeWidth={2} dot={false} connectNulls />
                                 {openInvestedInto && comparisonData.length > 0 && (
-                                  <Line type="monotone" dataKey="compPrice" name={openInvestedInto} stroke="#F59E0B" strokeWidth={2} dot={false} strokeDasharray="5 3" connectNulls />
+                                  <Line type="monotone" dataKey="compPrice" name={openInvestedInto} stroke={CHART_PALETTE.gold} strokeWidth={2} dot={false} strokeDasharray="5 3" connectNulls />
                                 )}
                                 {openShowAvgBuy && (
-                                  <Line type="stepAfter" dataKey="avgBuyPrice" name="Avg Buy (Div Adj)" stroke="#22c55e" strokeWidth={1.5} dot={false} strokeDasharray="6 3" connectNulls />
+                                  <Line type="stepAfter" dataKey="avgBuyPrice" name="Avg Buy (Div Adj)" stroke={CHART_PALETTE.olive} strokeWidth={1.5} dot={false} strokeDasharray="6 3" connectNulls />
                                 )}
                                 {maxPricePoint && (
-                                  <ReferenceDot x={maxPricePoint.date} y={maxPricePoint.price} r={9} fill="#3b82f6" stroke="#fff" strokeWidth={2}
+                                  <ReferenceDot x={maxPricePoint.date} y={maxPricePoint.price} r={9} fill={CHART_PALETTE.blue} stroke="#fff" strokeWidth={2}
                                     label={{ value: maxPricePoint.price.toFixed(2), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                 )}
                                 {minPricePoint && (
-                                  <ReferenceDot x={minPricePoint.date} y={minPricePoint.price} r={9} fill="#eab308" stroke="#fff" strokeWidth={2}
+                                  <ReferenceDot x={minPricePoint.date} y={minPricePoint.price} r={9} fill={CHART_PALETTE.rose} stroke="#fff" strokeWidth={2}
                                     label={{ value: minPricePoint.price.toFixed(2), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                 )}
                                 {buyDots.map((dot, i) => (
-                                  <ReferenceDot key={`buy-${i}`} x={dot.date} y={dot.price} r={6} fill="#22c55e" stroke="#fff" strokeWidth={2} />
+                                  <ReferenceDot key={`buy-${i}`} x={dot.date} y={dot.price} r={6} fill={CHART_PALETTE.olive} stroke="#fff" strokeWidth={2} />
                                 ))}
                               </LineChart>
                             </ResponsiveContainer>
@@ -12093,7 +12135,7 @@ const PortfolioBacktester = () => {
                           const lastCapRow = capitalChartData[capitalChartData.length - 1];
                           const capitalBubbleDefs: BubbleDef[] = [];
                           if (lastCapRow) {
-                            capitalBubbleDefs.push({ value: lastCapRow.marketValue, color: '#4F46E5', label: lastCapRow.marketValue.toLocaleString() });
+                            capitalBubbleDefs.push({ value: lastCapRow.marketValue, color: CHART_PALETTE.blue, label: lastCapRow.marketValue.toLocaleString() });
                             capitalBubbleDefs.push({ value: lastCapRow.investedCapital, color: '#000000', label: lastCapRow.investedCapital.toLocaleString() });
                           }
                           const OpenCapitalBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, capitalBubbleDefs);
@@ -12108,7 +12150,7 @@ const PortfolioBacktester = () => {
                                 <Legend />
                                 <Customized component={OpenCapitalBubbles} />
                                 <Area type="stepAfter" dataKey="investedCapital" name="Invested" stroke="#000000" fill="#000000" fillOpacity={0.08} strokeWidth={1.5} strokeDasharray="6 3" />
-                                <Area type="monotone" dataKey="marketValue" name="Market Value" stroke="#4F46E5" fill="#4F46E5" fillOpacity={0.2} strokeWidth={2} />
+                                <Area type="monotone" dataKey="marketValue" name="Market Value" stroke={CHART_PALETTE.blue} fill={CHART_PALETTE.blue} fillOpacity={0.2} strokeWidth={2} />
                                 {maxMVPoint && (
                                   <ReferenceDot x={maxMVPoint.date} y={maxMVPoint.marketValue} r={6} fill="#22c55e" stroke="#fff" strokeWidth={2}
                                     label={{ value: maxMVPoint.marketValue.toLocaleString(), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
@@ -12520,7 +12562,7 @@ const PortfolioBacktester = () => {
                           onClick={() => setClosedSinceInvested(!closedSinceInvested)}
                           className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
                             closedSinceInvested
-                              ? 'bg-blue-500 text-white border-blue-500'
+                              ? 'bg-slate-800 text-white border-slate-800'
                               : 'bg-white border-gray-300 hover:bg-gray-100'
                           }`}
                         >
@@ -12532,7 +12574,7 @@ const PortfolioBacktester = () => {
                           onClick={() => setClosedUntilSold(!closedUntilSold)}
                           className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
                             closedUntilSold
-                              ? 'bg-blue-500 text-white border-blue-500'
+                              ? 'bg-slate-800 text-white border-slate-800'
                               : 'bg-white border-gray-300 hover:bg-gray-100'
                           }`}
                         >
@@ -12774,7 +12816,7 @@ const PortfolioBacktester = () => {
                           const priceBubbleDefs: BubbleDef[] = [];
                           if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#000000', label: lastPrice.toFixed(2) });
                           // Only show comparison bubble when the comparison line is actually visible
-                          if (lastCompPrice != null && closedInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: '#F59E0B', label: lastCompPrice.toFixed(2) });
+                          if (lastCompPrice != null && closedInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: CHART_PALETTE.gold, label: lastCompPrice.toFixed(2) });
                           if (lastAvgBuyPrice != null && closedShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#22c55e', label: lastAvgBuyPrice.toFixed(2) });
                           if (lastAvgSellPrice != null && closedShowAvgSell) priceBubbleDefs.push({ value: lastAvgSellPrice, color: '#ef4444', label: lastAvgSellPrice.toFixed(2) });
                           const PriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
@@ -12811,14 +12853,14 @@ const PortfolioBacktester = () => {
                                 type="monotone"
                                 dataKey="compPrice"
                                 name={closedInvestedInto}
-                                stroke="#F59E0B"
+                                stroke={CHART_PALETTE.gold}
                                 strokeWidth={2}
                                 dot={false}
                                 strokeDasharray="5 3"
                                 connectNulls
                               />
                             )}
-                            {/* Dashed green line showing FIFO average buy price over time.
+                            {/* Dashed olive line showing FIFO average buy price over time.
                                 Steps up/down when new shares are bought or old ones sold.
                                 Stops at last sale date. Only shown when toggle is enabled. */}
                             {closedShowAvgBuy && (
@@ -12826,14 +12868,14 @@ const PortfolioBacktester = () => {
                                 type="stepAfter"
                                 dataKey="avgBuyPrice"
                                 name="Avg Buy Price"
-                                stroke="#22c55e"
+                                stroke={CHART_PALETTE.olive}
                                 strokeWidth={1.5}
                                 dot={false}
                                 strokeDasharray="6 3"
                                 connectNulls
                               />
                             )}
-                            {/* Dashed red line showing cumulative weighted avg sell price.
+                            {/* Dashed wine line showing cumulative weighted avg sell price.
                                 Starts at first sale date and continues to end of chart.
                                 Only shown when toggle is enabled. */}
                             {closedShowAvgSell && (
@@ -12841,7 +12883,7 @@ const PortfolioBacktester = () => {
                                 type="stepAfter"
                                 dataKey="avgSellPrice"
                                 name="Avg Sell Price"
-                                stroke="#ef4444"
+                                stroke={CHART_PALETTE.wine}
                                 strokeWidth={1.5}
                                 dot={false}
                                 strokeDasharray="6 3"
@@ -12851,13 +12893,13 @@ const PortfolioBacktester = () => {
                             {/* Max/min price dots render FIRST (behind) so buy/sell dots
                                appear on top when they overlap. Larger radius (r=9) creates
                                a visible ring around any overlapping buy/sell dot (r=6). */}
-                            {/* Blue dot at highest price */}
+                            {/* Steel-blue dot at highest price */}
                             {maxPricePoint && (
                               <ReferenceDot
                                 x={maxPricePoint.date}
                                 y={maxPricePoint.price}
                                 r={9}
-                                fill="#3b82f6"
+                                fill={CHART_PALETTE.blue}
                                 stroke="#fff"
                                 strokeWidth={2}
                                 label={{
@@ -12869,13 +12911,13 @@ const PortfolioBacktester = () => {
                                 }}
                               />
                             )}
-                            {/* Yellow dot at lowest price */}
+                            {/* Dusty-rose dot at lowest price */}
                             {minPricePoint && (
                               <ReferenceDot
                                 x={minPricePoint.date}
                                 y={minPricePoint.price}
                                 r={9}
-                                fill="#eab308"
+                                fill={CHART_PALETTE.rose}
                                 stroke="#fff"
                                 strokeWidth={2}
                                 label={{
@@ -12887,26 +12929,26 @@ const PortfolioBacktester = () => {
                                 }}
                               />
                             )}
-                            {/* Green dots for buy months (on top of max/min) */}
+                            {/* Buy-month dots (on top of max/min) — olive, matching the Avg Buy line */}
                             {buyDots.map((dot, i) => (
                               <ReferenceDot
                                 key={`buy-${i}`}
                                 x={dot.date}
                                 y={dot.price}
                                 r={6}
-                                fill="#22c55e"
+                                fill={CHART_PALETTE.olive}
                                 stroke="#fff"
                                 strokeWidth={2}
                               />
                             ))}
-                            {/* Red dots for sell months (on top of max/min) */}
+                            {/* Sell-month dots (on top of max/min) — wine, matching the Avg Sell line */}
                             {sellDots.map((dot, i) => (
                               <ReferenceDot
                                 key={`sell-${i}`}
                                 x={dot.date}
                                 y={dot.price}
                                 r={6}
-                                fill="#ef4444"
+                                fill={CHART_PALETTE.wine}
                                 stroke="#fff"
                                 strokeWidth={2}
                               />
@@ -12984,7 +13026,7 @@ const PortfolioBacktester = () => {
 
                           // Build bubble defs and delegate to shared renderer
                           const capitalBubbleDefs: BubbleDef[] = [];
-                          if (lastMV != null) capitalBubbleDefs.push({ value: lastMV, color: '#4F46E5', label: lastMV.toLocaleString() });
+                          if (lastMV != null) capitalBubbleDefs.push({ value: lastMV, color: CHART_PALETTE.blue, label: lastMV.toLocaleString() });
                           if (lastInvested != null) capitalBubbleDefs.push({ value: lastInvested, color: '#000000', label: lastInvested.toLocaleString() });
                           const CapitalBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, capitalBubbleDefs);
 
@@ -13016,8 +13058,8 @@ const PortfolioBacktester = () => {
                               type="monotone"
                               dataKey="marketValue"
                               name="Market Value"
-                              stroke="#4F46E5"
-                              fill="#4F46E5"
+                              stroke={CHART_PALETTE.blue}
+                              fill={CHART_PALETTE.blue}
                               fillOpacity={0.2}
                               strokeWidth={2}
                             />
