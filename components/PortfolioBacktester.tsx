@@ -11090,8 +11090,10 @@ const PortfolioBacktester = () => {
                                   const totalInv = assetClassRollup.reduce((s, r) => s + r.invested, 0);
                                   const totalCur = assetClassRollup.reduce((s, r) => s + r.currentValue, 0);
                                   const totalPnL = assetClassRollup.reduce((s, r) => s + r.pnl, 0);
+                                  // Totals row: same light grey as the header - the thick top
+                                  // border and bold text are what make it stand out, not a darker fill
                                   return (
-                                    <tr className="border-t-2 border-gray-300 font-semibold bg-gray-200">
+                                    <tr className="border-t-2 border-gray-300 font-semibold bg-gray-100">
                                       <td className="py-2 px-2 text-gray-700 font-mono">{assetClassRollup.length} Classes</td>
                                       <td className="text-right py-2 px-2 font-mono">{totalInv.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                       <td className="text-right py-2 px-2 font-mono">{totalCur.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
@@ -11491,8 +11493,10 @@ const PortfolioBacktester = () => {
                                 const totalInvestedCcy = filteredOpenData.reduce((sum, r) => sum + r.investedConverted, 0);
                                 const totalCurrentCcy = filteredOpenData.reduce((sum, r) => sum + r.currentValueConverted, 0);
                                 const totalPnLCcy = filteredOpenData.reduce((sum, r) => sum + r.totalPnLConverted, 0);
+                                // Totals row: same light grey as the header - the thick top
+                                // border and bold text are what make it stand out, not a darker fill
                                 return (
-                                  <tr className="border-t-2 border-gray-300 font-semibold bg-gray-200">
+                                  <tr className="border-t-2 border-gray-300 font-semibold bg-gray-100">
                                     <td className="py-2 px-2 text-gray-700 font-mono">{filteredOpenData.length} Holdings</td>
                                     <td colSpan={10}></td>
                                     {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{totalInvestedCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
