@@ -222,6 +222,77 @@ A React library for drawing charts. We use:
 
 **If you finish the job:** pull the colours from `CHART_PALETTE` rather than inventing new hexes, and re-run the palette validator for each chart's *actual* series count (see Lesson 14 — five colours can be made colour-blind safe, six cannot).
 
+### Why shorting "just worked" once we allowed a minus sign
+
+**Decision:** Support leverage and shorting by simply allowing **negative weights** (200% CSPX / -100% IB01) rather than building a separate margin-account model.
+
+**Why:** This is the nicest thing that happened in this whole project, and it's worth understanding *why* it was nice.
+
+The backtest engine never actually thought in percentages. On day one it converts your weights into **shares** — `shares = allocation ÷ price` — and from then on it only ever computes `shares × price`. Percentages are just the user interface.
+
+And a negative share count *is* a short position. That's not a metaphor; that's the definition. If you hold -10,428 units of IB01 and IB01 goes up a zloty, you're 10,428 zlotys poorer, which is exactly what the multiplication produces. So the engine could already short — nobody had ever handed it a negative number.
+
+The actual blockers were embarrassingly mundane:
+
+1. **You couldn't type a minus sign.** The weight box was a controlled input running `parseFloat(value) || 0`. Type `-`, that's not a number yet, `parseFloat` returns `NaN`, `|| 0` turns it into `0`, React writes `0` back into the box, and your keystroke vanishes. You could never reach the `1` of `-100`. Fixed with a "draft" state that holds the raw text while you're mid-type (see Lesson 15).
+2. **The auto-balancer clamped at zero** — `Math.max(0, 100 - others)` — so the balancing leg could never go negative.
+
+**The lesson:** when a feature looks big, check whether the *engine* already supports it and only the *edges* don't. Here, roughly 90% of "add shorting" was three lines of input plumbing. Data models that store the physically real quantity (shares) instead of the presentational one (percent) tend to get this kind of generality for free. Storing percentages and reconstructing values would have needed a genuine rewrite.
+
+### Why financing cost is a cash "tab" and not a haircut on returns
+
+**Decision:** The per-leg `costPct` accrues into a running `accruedCost` variable — a cash balance — which is subtracted from portfolio value and reset to zero at each rebalance.
+
+**Why:** The tempting shortcut is to shave the cost off the portfolio's return each month. That's wrong, and wrong in a way that gets *worse* the more leverage you use.
+
+Borrow cost isn't charged on your money — it's charged on the **borrowed notional**. In a 200/-100 portfolio your equity is 1,000,000 but the short leg is also 1,000,000, so at 50bps you owe ~5,000/year. In a 700/-600 portfolio your equity is still 1,000,000 but you're borrowing 6,000,000 — six times the bill. A percentage-of-portfolio haircut would charge both the same. Modelling it as cash owed on the actual notional is the only version that scales correctly.
+
+Three details that make it hold together:
+- **Charged on `Math.abs(notional)`**, so the same field works in both directions: on a short leg it's your borrow spread; on a long leg you can type `-0.07` and it becomes the ETF's expense ratio.
+- **Measured at the *previous* month's price**, because that's the position you actually held through the month just gone.
+- **Reset to zero at each rebalance**, because rebalancing re-strikes every position against the net value — which already had the tab deducted. The debt is settled by the act of rebalancing, so carrying it forward would double-count it.
+
+Verified against hand arithmetic: `1,000,000 × 0.5% × 31/365 = 425`, and the table's first financing row says `-425`.
+
+### Why "Never" was added to the rebalance dropdown, and what it revealed
+
+**Decision:** Add a fourth rebalance option, `never` — buy the target weights once and never touch them.
+
+**Why:** With leverage, "how often do you rebalance?" stops being a minor housekeeping setting and becomes the single biggest lever in the whole simulation. `Never` is the control case that makes that visible: it answers "what if I just take the leverage once and let it ride?"
+
+The implementation was one dropdown option. The frequency check is an if/else chain that sets `shouldRebalance = true`, so a value matching none of the branches simply never rebalances. (Two comments were added at the decision sites so the next reader knows that's *intended* and not an accident waiting to be "fixed".)
+
+**What it showed** — same 200% CSPX / -100% IB01 portfolio, same 16.6 years, only the rebalance setting changed:
+
+| Rebalance | CAGR | Vol | Max DD |
+|---|---|---|---|
+| Monthly | 24.39% | 28.40% | -42.40% |
+| Quarterly | 23.80% | 28.49% | -43.02% |
+| Yearly | 24.01% | 29.17% | -45.47% |
+| **Never** | **18.06%** | **19.80%** | **-26.30%** |
+
+Never isn't a slightly different answer — it's a different portfolio. Six points of CAGR and twenty points of drawdown separate it from its rebalanced twin.
+
+**Why:** the leverage silently decays. The share count is frozen, but the equity underneath it grows, so the ratio falls:
+
+```
+2009: 200%  →  2013: 140%  →  2019: 119%  →  2026: 109%
+```
+
+By the end you're barely leveraged at all. You didn't sell anything; the denominator just caught up with you. That's why both the return and the risk land between the 1× and 2× cases.
+
+**The trap:** this is a bull market talking. Prices rose over this window, which de-levers you *gently*. In a falling market the identical mechanic runs the other way — losses shrink the equity, the ratio climbs, and "never rebalance" becomes the most dangerous setting rather than the safest. Don't read the table above as "Never is safer." Read it as "Never means your leverage is whatever the market decides it is."
+
+### Why a wiped-out portfolio freezes at zero
+
+**Decision:** If a leveraged portfolio's equity reaches zero, close all positions, hold the value at zero forever, and show a red banner naming the date.
+
+**Why:** An unlevered portfolio cannot go to zero — you'd need every holding to become worthless simultaneously. A leveraged one can, and in our data a 7× S&P portfolio does exactly that on 2020-03-31.
+
+Without a guard the arithmetic keeps going and produces nonsense: a negative portfolio value that "recovers" in April, a CAGR that takes the root of a negative number, and division by zero seeding `NaN` through every downstream statistic. But the deeper point is that the un-guarded version isn't just ugly, it's **false**. A real broker liquidates you at zero equity. There is no scenario where you ride a negative balance back to profit. Letting the maths run would have invented returns that no human could have earned.
+
+This is the general shape of the thing: a number that's mathematically computable but financially impossible is still a bug.
+
 ### Why use 'use client' for the main component?
 
 **Decision:** Mark PortfolioBacktester as a client component.
@@ -473,6 +544,34 @@ Curiously, `{/* … */}` is perfectly legal *between* elements once you're insid
 **Why it cost almost nothing anyway:** the dev server was running the whole time. Both breakages surfaced in the terminal within seconds, were fixed in under a minute, and neither reached GitHub. That's not luck — it's what the feedback loop is *for*. A mistake caught in 5 seconds by a machine is not really a mistake; a mistake caught in 5 days by a user is.
 
 **Lesson:** Two of them, actually. First, when a compiler points at line N, the culprit is often line N−1 — parsers report where they *noticed*, not where you *erred*. Second, and more useful: repeating a mistake isn't a sign you need to try harder, it's a sign the rule hasn't been written down anywhere a future you will look. So it went into this file, which is the whole point of this file.
+
+### 16. The Input Box That Ate Your Minus Sign
+
+**The bug:** With shorting added, you still couldn't type `-100` into a weight box. Not "it showed the wrong number" — you physically could not get the character in.
+
+**Why:** The box was a *controlled* input, meaning React owns what's displayed and overwrites it on every keystroke:
+
+```jsx
+value={asset.weight}
+onChange={(e) => updateAsset(..., parseFloat(e.target.value) || 0)}
+```
+
+Follow one keystroke through. You type `-`. That goes to `parseFloat("-")`, which is `NaN`, because `-` on its own genuinely isn't a number. `NaN || 0` is `0`. So `0` gets stored, React re-renders, and the box now reads `0`. Your minus sign is gone before you can type the `1`. The field was a trap that only sprang on values that pass through an invalid intermediate state — and *every* negative number does.
+
+**The fix:** keep the half-typed text somewhere separate from the parsed number:
+
+```jsx
+value={numDrafts[key] ?? String(asset.weight)}   // show what you're typing…
+onChange={(e) => { saveDraft(e.target.value);    // …remember the raw text
+                   store(parseFloat(...) || 0) }} // …but store a valid number
+onBlur={() => clearDraft(key)}                    // …then tidy up on exit
+```
+
+Now `-` survives on screen while `0` sits in the model, so the backtest always has something valid to run and you can finish typing.
+
+**The general shape:** a controlled input has *two* states pretending to be one — what the user is composing, and what the app has committed. They're the same thing only while the input is valid. Any field where a valid value must pass through an invalid prefix has this bug lying in wait: negative numbers (`-`), decimals (`1.`), scientific notation (`1e`). If you can't type it, that's why.
+
+**The tell:** it wasn't caught by TypeScript, and it wasn't caught by reading the code — `parseFloat(x) || 0` looks like sensible defensive programming. It was caught by *typing a single character into the running app and reading back what the box said*. Some bugs only exist in the gap between keystrokes, and the only instrument that finds them is a finger on a key.
 
 ---
 
