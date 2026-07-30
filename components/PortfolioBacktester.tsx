@@ -2074,7 +2074,11 @@ const PortfolioBacktester = () => {
   ) => {
     setNumDrafts(prev => ({ ...prev, [`${portfolioId}:${assetIndex}:${field}`]: raw }));
     const parsed = parseFloat(raw);
-    updateAsset(portfolioId, assetIndex, field, isNaN(parsed) ? 0 : parsed);
+    // Number.isFinite (not !isNaN) — it rejects Infinity as well as NaN. Typing something like
+    // "1e400" parses to Infinity, which sails past the liquidation guard (Infinity is not <= 0)
+    // and then turns the whole backtest into NaN when the long and short legs cancel. Anything
+    // that isn't a real number becomes 0, i.e. "no adjustment".
+    updateAsset(portfolioId, assetIndex, field, Number.isFinite(parsed) ? parsed : 0);
   };
 
   /** Drops the draft when a box loses focus, so it goes back to showing the tidy stored number. */
