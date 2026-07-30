@@ -213,7 +213,14 @@ function renderEdgeBubbles(
 // A single asset in a portfolio (e.g., "SPY at 60% weight")
 interface PortfolioAsset {
   asset: string;   // Asset name (e.g., "SPY", "BND")
-  weight: number;  // Percentage weight (e.g., 60 for 60%)
+  weight: number;  // Percentage weight (e.g., 60 for 60%). NEGATIVE = a short position
+                   // (e.g., -100 means you sold 100% of capital worth of this asset short,
+                   // which is how you finance leverage: 200% CSPX + -100% IB01).
+  costPct?: number; // Optional annual carry adjustment for THIS leg, as a % of the leg's
+                    // absolute notional. Signed: NEGATIVE = a cost you pay, POSITIVE = income
+                    // you receive. Examples: -0.5 on a short leg = 50bps borrow spread on top
+                    // of the shorted instrument's own return; -0.07 on a long ETF = its expense
+                    // ratio. Leave blank/0 and nothing changes.
 }
 
 // A complete portfolio configuration
@@ -258,6 +265,7 @@ interface BacktestResult {
   portfolio: Portfolio;
   returns: ReturnPoint[];
   stats: PortfolioStats;
+  wipedOutDate?: string | null;  // Date a leveraged portfolio hit zero equity, or null if it survived
 }
 
 // Monthly returns organized by year
@@ -279,6 +287,9 @@ interface RebalancingRow {
   portfolioValue: number;
   momPct: number | null;                       // Month-over-month return %; null for first row
   isRebalanced: boolean;                       // True if rebalancing happened this month
+  accruedCost: number;                         // Financing/carry accrued since the last rebalance
+                                               // (negative = money owed). 0 when no leg has a cost.
+  isWipedOut: boolean;                         // True once a leveraged portfolio has been liquidated
 }
 
 // Annual return data for a single asset in a specific year
@@ -494,6 +505,13 @@ const PortfolioBacktester = () => {
   const [portfolios, setPortfolios] = useState<Portfolio[]>([
     { id: 1, name: 'Portfolio 1', assets: [], color: '#000000', nameManuallyEdited: false, inflationAdj: '', baseCurrency: '' }
   ]);
+
+  // Raw text the user is currently typing into the weight / cost boxes, keyed by "portfolioId:assetIndex:field".
+  // WHY THIS EXISTS: those boxes are "controlled" — React overwrites them with the stored number on every
+  // keystroke. The instant you type a lone "-" (or "1." ), that isn't a valid number yet, so it would snap
+  // back to 0 and you could never finish typing "-100". Keeping the raw text here lets the half-typed value
+  // sit on screen while the parsed number goes into the portfolio. Cleared when the box loses focus.
+  const [numDrafts, setNumDrafts] = useState<{ [key: string]: string }>({});
 
   // Backtest parameters
   const [startingCapital, setStartingCapital] = useState(1000000);      // How much $ to start with
@@ -1821,9 +1839,13 @@ const PortfolioBacktester = () => {
    * e.g., [SPY 60%, BND 40%] -> "SPY60-BND40"
    */
   const generatePortfolioName = (assets: PortfolioAsset[], inflationAdj?: string, baseCurrency?: string): string => {
-    const validAssets = assets.filter(a => a.asset && a.weight > 0);
+    // Include shorts (negative weights) in the name too — only a zero weight is "not in the portfolio"
+    const validAssets = assets.filter(a => a.asset && a.weight !== 0);
     if (validAssets.length === 0) return 'Portfolio';
-    const baseName = validAssets.map(a => `${a.asset}${Math.round(a.weight)}`).join('-');
+    // If any leg is short, join with " / " instead of "-", otherwise "CSPX200-IB01-100" is unreadable
+    // (you can't tell the separator from the minus sign). All-long portfolios keep the original "-" style.
+    const hasShort = validAssets.some(a => a.weight < 0);
+    const baseName = validAssets.map(a => `${a.asset}${Math.round(a.weight)}`).join(hasShort ? ' / ' : '-');
     // Build suffixes: currency (if set) and inflation adjustment (if set)
     const suffixes: string[] = [];
     if (baseCurrency) suffixes.push(baseCurrency);
@@ -1877,6 +1899,7 @@ const PortfolioBacktester = () => {
    */
   const addAssetToPortfolio = (portfolioId: number) => {
     const firstAvailableAsset = availableAssetsFiltered[0] || '';
+    setNumDrafts({});  // row indices shift when the list grows — see removeAsset
 
     const updatedPortfolios = portfolios.map(p => {
       if (p.id === portfolioId) {
@@ -1905,7 +1928,9 @@ const PortfolioBacktester = () => {
 
     // Sum up weights of all assets except the first one
     const otherAssetsWeight = assets.slice(1).reduce((sum, a) => sum + (a.weight || 0), 0);
-    const firstAssetWeight = Math.max(0, 100 - otherAssetsWeight);
+    // NOTE: no longer clamped at 0 — with shorting enabled the balancing asset is allowed to go
+    // negative (e.g. type 200% into slot 2 and slot 1 becomes -100%, i.e. the financing leg).
+    const firstAssetWeight = 100 - otherAssetsWeight;
 
     const newAssets = [...assets];
     newAssets[0] = { ...newAssets[0], weight: firstAssetWeight };
@@ -2010,7 +2035,7 @@ const PortfolioBacktester = () => {
   /**
    * Updates a specific field of an asset in a portfolio
    */
-  const updateAsset = (portfolioId: number, assetIndex: number, field: 'asset' | 'weight', value: string | number) => {
+  const updateAsset = (portfolioId: number, assetIndex: number, field: 'asset' | 'weight' | 'costPct', value: string | number) => {
     const updatedPortfolios = portfolios.map(p => {
       if (p.id === portfolioId) {
         let newAssets = [...p.assets];
@@ -2034,9 +2059,40 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Handles typing in the Weight / Cost boxes, which have to accept negative numbers.
+   *
+   * Two things happen on every keystroke:
+   *  1. The raw text is stashed in `numDrafts` so a half-finished entry like "-" or "1." stays on
+   *     screen instead of being snapped back to a number (see the numDrafts comment above).
+   *  2. The parsed number is written into the portfolio, so the backtest always has a valid value.
+   */
+  const handleNumericAssetInput = (
+    portfolioId: number,
+    assetIndex: number,
+    field: 'weight' | 'costPct',
+    raw: string
+  ) => {
+    setNumDrafts(prev => ({ ...prev, [`${portfolioId}:${assetIndex}:${field}`]: raw }));
+    const parsed = parseFloat(raw);
+    updateAsset(portfolioId, assetIndex, field, isNaN(parsed) ? 0 : parsed);
+  };
+
+  /** Drops the draft when a box loses focus, so it goes back to showing the tidy stored number. */
+  const clearNumDraft = (portfolioId: number, assetIndex: number, field: 'weight' | 'costPct') => {
+    setNumDrafts(prev => {
+      const next = { ...prev };
+      delete next[`${portfolioId}:${assetIndex}:${field}`];
+      return next;
+    });
+  };
+
+  /**
    * Removes an asset from a portfolio
    */
   const removeAsset = (portfolioId: number, assetIndex: number) => {
+    // Drafts are keyed by row index, so removing a row would make them point at the wrong asset.
+    // Simplest correct fix: throw them all away — the stored numbers are the source of truth anyway.
+    setNumDrafts({});
     const updatedPortfolios = portfolios.map(p => {
       if (p.id === portfolioId) {
         let newAssets = p.assets.filter((_, i) => i !== assetIndex);
@@ -2061,6 +2117,11 @@ const PortfolioBacktester = () => {
    */
   const getTotalWeight = (portfolio: Portfolio): number => {
     return portfolio.assets.reduce((sum, a) => sum + (a.weight || 0), 0);
+  };
+
+  /** True if any leg of this portfolio carries a financing/expense adjustment. */
+  const hasCostLeg = (portfolio: Portfolio): boolean => {
+    return portfolio.assets.some(a => !!a.costPct);
   };
 
   // ----------------------------------------
@@ -2131,6 +2192,13 @@ const PortfolioBacktester = () => {
     let runningMax = startingCapital;  // Track highest value (for drawdown)
     let lastRebalanceDate = new Date(filteredData[0].date);
 
+    // Running financing/carry tab since the last rebalance. Negative = money we owe.
+    // Think of it as the unpaid interest sitting on your margin account: it grows every month
+    // and gets settled (reset to zero) whenever we re-strike the positions at a rebalance.
+    let accruedCost = 0;
+    // Once a leveraged portfolio's equity hits zero the broker liquidates you — there's no coming back.
+    let isWipedOut = false;
+
     // Process each date in the data
     for (let i = 0; i < filteredData.length; i++) {
       const row = filteredData[i];
@@ -2143,6 +2211,8 @@ const PortfolioBacktester = () => {
           (currentDate.getFullYear() - lastRebalanceDate.getFullYear()) * 12 +
           (currentDate.getMonth() - lastRebalanceDate.getMonth());
 
+        // 'never' deliberately matches none of these, so shouldRebalance stays false for the whole
+        // run — the day-one share counts are held to the end and the weights drift freely.
         if (rebalanceFreq === 'monthly' && monthsSinceRebalance >= 1) {
           shouldRebalance = true;
         } else if (rebalanceFreq === 'quarterly' && monthsSinceRebalance >= 3) {
@@ -2152,8 +2222,30 @@ const PortfolioBacktester = () => {
         }
       }
 
+      // --- Accrue financing / carry for the period that just elapsed ---
+      // Charged on each leg's ABSOLUTE notional measured at the START of the period (i.e. last
+      // month's prices, since that's what we actually held through it), pro-rated by real calendar
+      // days. Abs notional is the right base for both directions: a -100% short of 1,000,000 costs
+      // you the spread on 1,000,000, and a 200% long of 2,000,000 pays its expense ratio on 2,000,000.
+      if (i > 0 && !isWipedOut) {
+        const prevRow = filteredData[i - 1];
+        const days = (currentDate.getTime() - new Date(prevRow.date).getTime()) / 86400000;
+        if (days > 0) {
+          portfolio.assets.forEach(({ asset, costPct }) => {
+            if (!costPct || !assetShares[asset]) return;
+            const prevPrice = Number(prevRow[asset]) *
+              getConversionRate(prevRow, getAssetCurrency(asset), portfolio.baseCurrency);
+            if (!prevPrice || prevPrice <= 0) return;
+            const notional = Math.abs(assetShares[asset] * prevPrice);
+            accruedCost += notional * (costPct / 100) * (days / 365);
+          });
+        }
+      }
+
       // Calculate current portfolio value (nominal — before inflation adjustment)
-      // Each asset's value = shares × price, converted to base currency
+      // Each asset's value = shares × price, converted to base currency.
+      // Short legs carry NEGATIVE shares, so they subtract here — which is exactly what a short
+      // position does to your account: if the shorted asset rises, you lose.
       let nominalValue = 0;
       portfolio.assets.forEach(({ asset }) => {
         const currentPrice = Number(row[asset]);
@@ -2164,6 +2256,20 @@ const PortfolioBacktester = () => {
           nominalValue += assetShares[asset] * adjustedPrice;
         }
       });
+
+      // Subtract the unpaid financing tab (accruedCost is negative when it's a cost)
+      nominalValue += accruedCost;
+
+      // --- Liquidation guard ---
+      // Unlike an unlevered portfolio, a leveraged one CAN lose more than everything. A real broker
+      // closes you out at zero equity rather than letting the account run negative and "recover",
+      // so once we hit zero we freeze there: positions closed, tab wiped, value stays at 0.
+      if (isWipedOut || nominalValue <= 0) {
+        isWipedOut = true;
+        nominalValue = 0;
+        accruedCost = 0;
+        portfolio.assets.forEach(({ asset }) => { assetShares[asset] = 0; });
+      }
 
       // Rebalance uses NOMINAL value (we rebalance real shares, not inflation-adjusted ones)
       if (shouldRebalance && nominalValue > 0) {
@@ -2178,6 +2284,9 @@ const PortfolioBacktester = () => {
           }
         });
         lastRebalanceDate = currentDate;
+        // Positions were just re-struck against the NET value (which already had the tab deducted),
+        // so the financing is settled — start the next period from zero.
+        accruedCost = 0;
       }
 
       // Apply CPI inflation adjustment if selected
@@ -2233,8 +2342,10 @@ const PortfolioBacktester = () => {
     let yearNumber = 0;  // Tracks how many withdrawals have occurred (for inflation compounding)
 
     for (let i = 1; i < returns.length; i++) {
-      // Scale the withdrawal-adjusted value by the same daily ratio as the original portfolio
-      const dailyRatio = returns[i].value / returns[i - 1].value;
+      // Scale the withdrawal-adjusted value by the same daily ratio as the original portfolio.
+      // Guard: a wiped-out leveraged portfolio sits at zero, and 0/0 would be NaN — treat it as
+      // "no growth" so the withdrawal simulation just drains to zero instead of showing NaN.
+      const dailyRatio = returns[i - 1].value > 0 ? returns[i].value / returns[i - 1].value : 1;
       withdrawalValue = withdrawalValue * dailyRatio;
 
       // Check if 12 months have passed since the last withdrawal
@@ -2290,8 +2401,8 @@ const PortfolioBacktester = () => {
     let yearStartOriginal = returns[0].value;  // Original portfolio value at year start (for calculating return %)
 
     for (let i = 1; i < returns.length; i++) {
-      // Scale by same daily ratio as original portfolio
-      const dailyRatio = returns[i].value / returns[i - 1].value;
+      // Scale by same daily ratio as original portfolio (same zero guard as calculateWithdrawalReturns)
+      const dailyRatio = returns[i - 1].value > 0 ? returns[i].value / returns[i - 1].value : 1;
       portfolioValue = portfolioValue * dailyRatio;
 
       // Check if 12 months have passed since the last withdrawal
@@ -2303,7 +2414,9 @@ const PortfolioBacktester = () => {
       if (monthsSinceLast >= 12) {
         // Calculate return % for this year using the original portfolio's growth
         const originalValueNow = returns[i].value;
-        const yearReturnPct = ((originalValueNow - yearStartOriginal) / yearStartOriginal) * 100;
+        const yearReturnPct = yearStartOriginal > 0
+          ? ((originalValueNow - yearStartOriginal) / yearStartOriginal) * 100
+          : 0;  // guard: wiped-out portfolio has a zero base, which would divide to NaN
 
         // Pre-withdrawal value (after growth, before taking money out)
         const preWithdrawalValue = portfolioValue;
@@ -2370,6 +2483,10 @@ const PortfolioBacktester = () => {
     const rows: RebalancingRow[] = [];
     let lastRebalanceDate = new Date(filteredData[0].date);
     let prevValue: number | null = null;
+    // Same financing tab and liquidation flag as calculatePortfolioReturns — kept in step so the
+    // table's Value column matches the chart line exactly.
+    let accruedCost = 0;
+    let isWipedOut = false;
 
     for (let i = 0; i < filteredData.length; i++) {
       const row = filteredData[i];
@@ -2381,9 +2498,26 @@ const PortfolioBacktester = () => {
         const monthsSince =
           (currentDate.getFullYear() - lastRebalanceDate.getFullYear()) * 12 +
           (currentDate.getMonth() - lastRebalanceDate.getMonth());
+        // 'never' matches nothing here either — see calculatePortfolioReturns for the reasoning.
+        // Note this also means the financing tab is never settled, so it runs as one long accrual.
         if (rebalanceFreq === 'monthly' && monthsSince >= 1) shouldRebalance = true;
         else if (rebalanceFreq === 'quarterly' && monthsSince >= 3) shouldRebalance = true;
         else if (rebalanceFreq === 'yearly' && monthsSince >= 12) shouldRebalance = true;
+      }
+
+      // Accrue this period's financing on last month's notional (mirrors calculatePortfolioReturns)
+      if (i > 0 && !isWipedOut) {
+        const prevRow = filteredData[i - 1];
+        const days = (currentDate.getTime() - new Date(prevRow.date).getTime()) / 86400000;
+        if (days > 0) {
+          portfolio.assets.forEach(({ asset, costPct }) => {
+            if (!costPct || !assetShares[asset]) return;
+            const prevPrice = Number(prevRow[asset]) *
+              getConversionRate(prevRow, getAssetCurrency(asset), portfolio.baseCurrency);
+            if (!prevPrice || prevPrice <= 0) return;
+            accruedCost += Math.abs(assetShares[asset] * prevPrice) * (costPct / 100) * (days / 365);
+          });
+        }
       }
 
       // Compute currency-adjusted prices and total portfolio value
@@ -2400,7 +2534,18 @@ const PortfolioBacktester = () => {
         }
       });
 
-      // Compute actual (drifted) weights
+      // Deduct the unpaid financing tab, then apply the same liquidation guard as the main engine
+      portfolioValue += accruedCost;
+      if (isWipedOut || portfolioValue <= 0) {
+        isWipedOut = true;
+        portfolioValue = 0;
+        accruedCost = 0;
+        portfolio.assets.forEach(({ asset }) => { assetShares[asset] = 0; });
+      }
+
+      // Compute actual (drifted) weights.
+      // Short legs come out negative here (e.g. -100%) because their shares are negative —
+      // that's correct and is how you read the leverage at a glance.
       const assetWeights: { [asset: string]: number } = {};
       portfolio.assets.forEach(({ asset }) => {
         if (portfolioValue > 0 && assetShares[asset] && assetPrices[asset] > 0) {
@@ -2429,6 +2574,8 @@ const PortfolioBacktester = () => {
         portfolioValue,
         momPct,
         isRebalanced: shouldRebalance,
+        accruedCost,
+        isWipedOut,
       });
 
       // Rebalance shares AFTER recording the row (so weights show pre-rebalance drift)
@@ -2440,6 +2587,7 @@ const PortfolioBacktester = () => {
           }
         });
         lastRebalanceDate = currentDate;
+        accruedCost = 0;  // financing settled by the re-strike, same as in calculatePortfolioReturns
       }
 
       prevValue = portfolioValue;
@@ -2476,15 +2624,21 @@ const PortfolioBacktester = () => {
     // Formula: (EndValue/StartValue)^(1/years) - 1
     const cagr = years > 0 ? (Math.pow(endValue / startValue, 1 / years) - 1) * 100 : 0;
 
-    // Calculate periodic returns for volatility
+    // Calculate periodic returns for volatility.
+    // The `> 0` guard matters only for wiped-out leveraged portfolios: once the value is frozen at
+    // zero, dividing by it would give Infinity/NaN and poison every statistic below. Skipping those
+    // dead months leaves the stats describing the portfolio's actual life. For any portfolio that
+    // never hits zero (i.e. every portfolio before this feature existed) nothing changes.
     const periodicReturns: number[] = [];
     for (let i = 1; i < returns.length; i++) {
-      periodicReturns.push((returns[i].value - returns[i - 1].value) / returns[i - 1].value);
+      if (returns[i - 1].value > 0) {
+        periodicReturns.push((returns[i].value - returns[i - 1].value) / returns[i - 1].value);
+      }
     }
 
     // Volatility: standard deviation of returns, annualized
-    const mean = periodicReturns.reduce((sum, r) => sum + r, 0) / periodicReturns.length;
-    const variance = periodicReturns.map(r => Math.pow(r - mean, 2)).reduce((sum, sq) => sum + sq, 0) / periodicReturns.length;
+    const mean = periodicReturns.length > 0 ? periodicReturns.reduce((sum, r) => sum + r, 0) / periodicReturns.length : 0;
+    const variance = periodicReturns.length > 0 ? periodicReturns.map(r => Math.pow(r - mean, 2)).reduce((sum, sq) => sum + sq, 0) / periodicReturns.length : 0;
     const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;  // Annualized (assuming monthly data)
 
     // Maximum drawdown: worst peak-to-trough decline
@@ -4820,7 +4974,10 @@ const PortfolioBacktester = () => {
     const results = portfolios.map(portfolio => {
       const returns = calculatePortfolioReturns(portfolio, assetData);
       const stats = calculateStatistics(returns, portfolio);
-      return { portfolio, returns: returns!, stats: stats! };
+      // A value of zero can only come from the liquidation guard in calculatePortfolioReturns
+      // (a normal portfolio always has some value left), so the first zero is the wipeout date.
+      const wipedOutDate = returns?.find(r => r.value <= 0)?.date ?? null;
+      return { portfolio, returns: returns!, stats: stats!, wipedOutDate };
     }).filter(r => r.returns !== null);  // Filter out invalid portfolios
 
     if (results.length === 0) {
@@ -5392,6 +5549,10 @@ const PortfolioBacktester = () => {
                       <option value="monthly">Monthly</option>
                       <option value="quarterly">Quarterly</option>
                       <option value="yearly">Yearly</option>
+                      {/* "Never" = buy the target weights once on day one and never touch them again.
+                          With leverage this is the "take the leverage once and let it ride" case:
+                          the leverage ratio then floats freely instead of being reset. */}
+                      <option value="never">Never (buy &amp; hold)</option>
                     </select>
                   </div>
 
@@ -5451,6 +5612,11 @@ const PortfolioBacktester = () => {
                   {portfolios.map(portfolio => {
                     const totalWeight = getTotalWeight(portfolio);
                     const isValid = Math.abs(totalWeight - 100) < 0.01;
+                    // Leverage read-out. Net still has to be 100% (that's your own money), but the
+                    // long and short legs tell you how much market you're really standing on top of.
+                    const longExposure = portfolio.assets.reduce((s, a) => s + Math.max(0, a.weight || 0), 0);
+                    const shortExposure = portfolio.assets.reduce((s, a) => s + Math.min(0, a.weight || 0), 0);
+                    const isLevered = shortExposure < 0;
 
                     return (
                       <div key={portfolio.id} className="border-2 border-gray-200 rounded-lg p-3">
@@ -5474,7 +5640,21 @@ const PortfolioBacktester = () => {
 
                         {/* Asset List */}
                         <div className="space-y-2 mb-2">
-                          {portfolio.assets.map((asset, idx) => (
+                          {/* Column labels — only worth the space once there's at least one asset */}
+                          {portfolio.assets.length > 0 && (
+                            <div className="flex gap-1 items-center text-[10px] text-gray-400 leading-none">
+                              <span className="flex-1 min-w-0">Asset</span>
+                              <span className="w-14 shrink-0 text-center" title="Weight %. Negative = short (e.g. -100 finances a 200% long).">Wgt %</span>
+                              <span className="w-14 shrink-0 text-center" title="Annual carry on this leg's notional. Negative = a cost you pay (e.g. -0.5 = 50bps borrow spread on a short, or an ETF expense ratio on a long). Positive = income.">Cost %</span>
+                              <span className="w-3 shrink-0" />
+                            </div>
+                          )}
+                          {portfolio.assets.map((asset, idx) => {
+                            // Keys into numDrafts — the raw text the user may be part-way through typing
+                            const wKey = `${portfolio.id}:${idx}:weight`;
+                            const cKey = `${portfolio.id}:${idx}:costPct`;
+                            const isShort = (asset.weight || 0) < 0;
+                            return (
                             <div key={idx} className="flex gap-1 items-center">
                               {/* Asset Selector - min-w-0 allows shrinking, flex-1 fills remaining space */}
                               <select
@@ -5487,13 +5667,29 @@ const PortfolioBacktester = () => {
                                   <option key={a} value={a}>{getAssetDisplayName(a)}</option>
                                 ))}
                               </select>
-                              {/* Weight Input */}
+                              {/* Weight Input — type="text" (not "number") so a lone "-" can be typed;
+                                  the draft mechanism keeps it on screen until a full number is entered.
+                                  Short legs go red so leverage is obvious at a glance. */}
                               <input
-                                type="number"
-                                value={asset.weight}
-                                onChange={(e) => updateAsset(portfolio.id, idx, 'weight', parseFloat(e.target.value) || 0)}
+                                type="text"
+                                inputMode="decimal"
+                                value={numDrafts[wKey] ?? String(asset.weight)}
+                                onChange={(e) => handleNumericAssetInput(portfolio.id, idx, 'weight', e.target.value)}
+                                onBlur={() => clearNumDraft(portfolio.id, idx, 'weight')}
                                 placeholder="%"
-                                className="w-12 px-1 py-1 text-xs border border-gray-300 rounded shrink-0"
+                                title="Weight %. Negative = short this asset (e.g. 200 CSPX / -100 IB01)."
+                                className={`w-14 px-1 py-1 text-xs border rounded shrink-0 text-right ${isShort ? 'border-red-300 text-red-600 font-semibold' : 'border-gray-300'}`}
+                              />
+                              {/* Cost Input — optional annual carry on this leg */}
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={numDrafts[cKey] ?? (asset.costPct ? String(asset.costPct) : '')}
+                                onChange={(e) => handleNumericAssetInput(portfolio.id, idx, 'costPct', e.target.value)}
+                                onBlur={() => clearNumDraft(portfolio.id, idx, 'costPct')}
+                                placeholder="—"
+                                title="Annual carry on this leg, as % of its notional. Negative = you pay (e.g. -0.5 for a 50bps borrow spread). Leave empty for none."
+                                className={`w-14 px-1 py-1 text-xs border rounded shrink-0 text-right ${asset.costPct ? 'border-amber-300 text-amber-700' : 'border-gray-200 text-gray-500'}`}
                               />
                               {/* Remove Asset */}
                               <button
@@ -5503,7 +5699,8 @@ const PortfolioBacktester = () => {
                                 <Trash2 className="w-3 h-3" />
                               </button>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
 
                         {/* Add Asset Button */}
@@ -5518,6 +5715,14 @@ const PortfolioBacktester = () => {
                         <div className="mt-2 flex items-center justify-between">
                           <div className={`text-xs font-medium ${isValid ? 'text-green-600' : 'text-red-600'}`}>
                             Total: {totalWeight.toFixed(0)}% {isValid ? '✓' : '(need 100%)'}
+                            {isLevered && (
+                              <div
+                                className="text-[10px] font-normal text-gray-500 mt-0.5"
+                                title="Net weight is still 100% (your own capital). Gross is how much market the portfolio actually holds; leverage = long exposure per unit of capital."
+                              >
+                                Long {longExposure.toFixed(0)}% / Short {Math.abs(shortExposure).toFixed(0)}% · {(longExposure / 100).toFixed(1)}× levered
+                              </div>
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
                             {/* Base Currency selector — converts all assets to the chosen currency */}
@@ -5588,6 +5793,17 @@ const PortfolioBacktester = () => {
           {backtestResults && activeView === 'backtest' && (
             <div className="mt-6">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Results</h2>
+
+              {/* Liquidation warning — only appears when a leveraged portfolio ran out of equity */}
+              {backtestResults.some(r => r.wipedOutDate) && (
+                <div className="mb-4 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-xs text-red-700">
+                  <span className="font-semibold">Wiped out: </span>
+                  {backtestResults.filter(r => r.wipedOutDate).map(r => `${r.portfolio.name} (${r.wipedOutDate})`).join(', ')}
+                  {' — '}leverage took the equity to zero on that date. A real broker would have
+                  liquidated the account there, so the portfolio is closed out and held at zero from
+                  then on: its return is −100% and the other statistics describe only the period it was alive.
+                </div>
+              )}
 
               {/* Statistics Table */}
               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
@@ -5926,6 +6142,9 @@ const PortfolioBacktester = () => {
                   const assets = selectedResult.portfolio.assets;
                   // Currency symbol for this portfolio's rebalancing detail
                   const rSym = CURRENCY_SYMBOLS[selectedResult.portfolio.baseCurrency] || '$';
+                  // Only show the financing column when some leg actually carries a cost —
+                  // otherwise it'd be a column of zeros on every existing portfolio.
+                  const showCostCol = hasCostLeg(selectedResult.portfolio);
 
                   if (rebalancingRows.length === 0) {
                     return <div className="text-center py-4 text-gray-500">Not enough data for rebalancing detail.</div>;
@@ -5946,6 +6165,10 @@ const PortfolioBacktester = () => {
                                 <th className="text-right py-2 px-2">{asset} Wt%</th>
                               </React.Fragment>
                             ))}
+                            {/* Financing accrued since the last rebalance (already inside Value) */}
+                            {showCostCol && (
+                              <th className="text-right py-2 px-2" title="Financing / carry accrued since the last rebalance. Already deducted from Value; resets to zero each rebalance.">Fin. ({rSym})</th>
+                            )}
                             <th className="text-right py-2 px-2">Value ({rSym})</th>
                             <th className="text-right py-2 px-2">MoM %</th>
                           </tr>
@@ -5975,7 +6198,12 @@ const PortfolioBacktester = () => {
                                   </td>
                                 </React.Fragment>
                               ))}
-                              <td className="text-right py-1 px-2 font-semibold">
+                              {showCostCol && (
+                                <td className={`text-right py-1 px-2 ${row.accruedCost < 0 ? 'text-amber-700' : 'text-gray-400'}`}>
+                                  {row.accruedCost ? `${rSym}${row.accruedCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'}
+                                </td>
+                              )}
+                              <td className={`text-right py-1 px-2 font-semibold ${row.isWipedOut ? 'text-red-600' : ''}`}>
                                 {rSym}{row.portfolioValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                               </td>
                               <td className={`text-right py-1 px-2 ${row.momPct === null ? '' : row.momPct >= 0 ? 'text-green-700' : 'text-red-600'}`}>
