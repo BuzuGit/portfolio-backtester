@@ -573,6 +573,19 @@ Now `-` survives on screen while `0` sits in the model, so the backtest always h
 
 **The tell:** it wasn't caught by TypeScript, and it wasn't caught by reading the code — `parseFloat(x) || 0` looks like sensible defensive programming. It was caught by *typing a single character into the running app and reading back what the box said*. Some bugs only exist in the gap between keystrokes, and the only instrument that finds them is a finger on a key.
 
+**The sequel, found in review:** the replacement guard was `isNaN(parsed) ? 0 : parsed` — and **`isNaN(Infinity)` is `false`**. So typing `1e400` into the cost box let `Infinity` through into the engine, where it did something worse than crash:
+
+1. The financing tab became `+Infinity`.
+2. The liquidation guard tests `value <= 0`. `Infinity` is not `<= 0`, so the one safety net in the whole feature politely stood aside.
+3. Rebalancing gave both legs infinite share counts.
+4. Next month the long leg was `+Infinity` and the short leg `-Infinity`, and **`Infinity + (-Infinity)` is `NaN`**. That single `NaN` then flowed into every statistic on the page — 266 of them.
+
+Fixed by using `Number.isFinite(parsed)`, which rejects `Infinity` *and* `NaN` in one go. `isNaN` asks "is this the NaN value?"; `Number.isFinite` asks "is this an actual number I can do arithmetic with?" — which is the question you almost always mean.
+
+**Two lessons worth more than the fix.** First: `isNaN` is not a validity check, and neither is `!== NaN`, and neither is `|| 0`. If you are about to multiply user input by something, `Number.isFinite` is the guard you want.
+
+Second, and the reason this is written down: the liquidation guard was *tested* — a 7x portfolio correctly blew up on 2020-03-31. It just happened to be tested only from the direction it was designed for. A guard that catches "too small" says nothing about "too large", and `<= 0` quietly treats infinity as perfectly healthy. **When you write a bound, ask what the other end of the number line does to it.**
+
 ---
 
 ## How Good Engineers Think
