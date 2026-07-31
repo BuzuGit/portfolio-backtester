@@ -107,6 +107,58 @@ const DateAxisTick = ({ x, y, payload }: { x: number; y: number; payload: { valu
   );
 };
 
+/** One row of the Price History data, as far as the Shares Held tooltip cares about it. */
+type SharesTooltipRow = {
+  date: string;
+  shares?: number;
+  avgBuyPrice?: number;
+  investedCapital?: number;
+};
+
+/**
+ * Custom tooltip for the "Shares Held" bar chart, shared by the Open and Closed sections.
+ *
+ * WHY A CUSTOM ONE: the default Recharts tooltip can only show series that are actually
+ * drawn, and the only drawn series here is the bar (shares). Average buy price and invested
+ * capital ride along in the same data row without being plotted, so we reach into
+ * payload[0].payload — the whole row behind the hovered bar — and print them ourselves.
+ *
+ * That's the point of the chart: hover two adjacent months around a purchase or a sale and
+ * you can read straight off whether the trade pulled your average cost up or down.
+ */
+const SharesHeldTooltip = ({ active, payload }: { active?: boolean; payload?: { payload: SharesTooltipRow }[] }) => {
+  if (!active || !payload || payload.length === 0) return null;
+  const row = payload[0].payload;
+  if (!row) return null;
+
+  // Shares can be fractional (crypto, accumulating ETFs), prices need cents, and capital
+  // reads better as a round number with thousand separators.
+  const fmtShares = (n?: number) =>
+    n == null ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  const fmtPrice = (n?: number) =>
+    n == null ? '—' : n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtCapital = (n?: number) =>
+    n == null ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+
+  return (
+    <div className="bg-white border border-gray-300 rounded shadow-sm px-3 py-2 text-xs">
+      <div className="font-semibold text-gray-700 mb-1">{row.date}</div>
+      <div className="flex justify-between gap-4">
+        <span className="text-gray-500">Shares held</span>
+        <span className="font-medium text-gray-900">{fmtShares(row.shares)}</span>
+      </div>
+      <div className="flex justify-between gap-4">
+        <span className="text-gray-500">Avg buy price</span>
+        <span className="font-medium text-gray-900">{fmtPrice(row.avgBuyPrice)}</span>
+      </div>
+      <div className="flex justify-between gap-4">
+        <span className="text-gray-500">Invested</span>
+        <span className="font-medium text-gray-900">{fmtCapital(row.investedCapital)}</span>
+      </div>
+    </div>
+  );
+};
+
 // ============================================
 // TYPE DEFINITIONS
 // ============================================
@@ -1144,7 +1196,7 @@ const PortfolioBacktester = () => {
    * - sellDots: array of {date, price} for red sell markers
    */
   const getClosedChartData = (ticker: string) => {
-    if (!assetData) return { chartData: [] as { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number }[], buyDots: [] as { date: string; price: number }[], sellDots: [] as { date: string; price: number }[] };
+    if (!assetData) return { chartData: [] as { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number; shares: number }[], buyDots: [] as { date: string; price: number }[], sellDots: [] as { date: string; price: number }[] };
 
     const transactions = getFilteredClosedTransactions(ticker);
 
@@ -1201,6 +1253,15 @@ const PortfolioBacktester = () => {
     const fifoLots: { shares: number; price: number }[] = [];
     // Map of YYYY-MM → average buy price (only for months where we hold shares)
     const avgPriceByMonth = new Map<string, number>();
+    // Map of YYYY-MM → how many shares were held after that month's events.
+    // Kept separate from avgPriceByMonth because this one is recorded even when the
+    // count is ZERO — a month where you sold everything is exactly the month the
+    // "Shares Held" bar chart most needs to show dropping to the floor.
+    const sharesByMonth = new Map<string, number>();
+    // Map of YYYY-MM → cost basis of the lots still held (shares × their own buy price).
+    // Same definition getClosedCapitalChartData uses, so the bar tooltip agrees with the
+    // Invested Capital chart further down the page.
+    const investedByMonth = new Map<string, number>();
 
     for (const evt of costEvents) {
       if (evt.type === 'buy') {
@@ -1224,11 +1285,15 @@ const PortfolioBacktester = () => {
       // Use epsilon comparison to avoid floating-point dust (e.g. 1.77e-15 instead of 0)
       // that can accumulate from repeated subtraction of fractional share counts.
       const totalShares = fifoLots.reduce((s, lot) => s + lot.shares, 0);
+      const totalInvested = fifoLots.reduce((s, lot) => s + lot.shares * lot.price, 0);
       if (totalShares > 1e-9) {
-        const weightedSum = fifoLots.reduce((s, lot) => s + lot.shares * lot.price, 0);
-        avgPriceByMonth.set(evt.ym, weightedSum / totalShares);
+        avgPriceByMonth.set(evt.ym, totalInvested / totalShares);
       }
       // If totalShares is 0 (all sold), we stop — don't set a value for this month
+      // Share count and cost basis ARE recorded unconditionally (snapped to a clean 0 below
+      // the epsilon, so leftover floating-point dust doesn't render as a hairline bar).
+      sharesByMonth.set(evt.ym, totalShares > 1e-9 ? totalShares : 0);
+      investedByMonth.set(evt.ym, totalShares > 1e-9 ? totalInvested : 0);
     }
 
     // If all shares were sold in the final month, remove that month's avg price entry.
@@ -1273,12 +1338,17 @@ const PortfolioBacktester = () => {
     const firstSaleYM = sortedSaleDates.length > 0 ? toYM(new Date(sortedSaleDates[0])) : '';
 
     // Now build chart data, carrying the avg prices forward through months
-    const chartData: { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number }[] = [];
+    const chartData: { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number; shares: number; investedCapital: number }[] = [];
     const buyDots: { date: string; price: number }[] = [];
     const sellDots: { date: string; price: number }[] = [];
 
     let currentAvgPrice: number | undefined = undefined;
     let currentAvgSellPrice: number | undefined = undefined;
+    // Shares held and cost basis, carried forward month to month. Both start at 0 so that
+    // months shown BEFORE the first purchase (visible when "Since Invested" is off)
+    // correctly read as "you owned none of this yet".
+    let currentShares = 0;
+    let currentInvested = 0;
 
     // Pre-compute filter boundaries once (instead of inside the loop)
     const graphStartsYM = closedGraphStarts ? toYM(new Date(closedGraphStarts)) : '';
@@ -1309,6 +1379,13 @@ const PortfolioBacktester = () => {
       if (avgSellPriceByMonth.has(rowYM)) {
         currentAvgSellPrice = avgSellPriceByMonth.get(rowYM);
       }
+      // Update the share count and cost basis if shares were bought or sold this month
+      if (sharesByMonth.has(rowYM)) {
+        currentShares = sharesByMonth.get(rowYM)!;
+      }
+      if (investedByMonth.has(rowYM)) {
+        currentInvested = investedByMonth.get(rowYM)!;
+      }
 
       // Only show avg buy price line between first buy and last sale
       const showAvgBuy = currentAvgPrice !== undefined && rowYM >= (firstBuyYM || '') && rowYM <= (lastSaleYM || '');
@@ -1320,6 +1397,8 @@ const PortfolioBacktester = () => {
         price,
         avgBuyPrice: showAvgBuy ? currentAvgPrice : undefined,
         avgSellPrice: showAvgSell ? currentAvgSellPrice : undefined,
+        shares: currentShares,
+        investedCapital: currentInvested,
       });
 
       // Mark buy/sell months with dots
@@ -1659,7 +1738,7 @@ const PortfolioBacktester = () => {
    * - Chart extends to the latest available data month (no "Until Sold" cutoff)
    */
   const getOpenChartData = (ticker: string) => {
-    if (!assetData) return { chartData: [] as { date: string; price: number; avgBuyPrice?: number }[], buyDots: [] as { date: string; price: number }[] };
+    if (!assetData) return { chartData: [] as { date: string; price: number; avgBuyPrice?: number; shares: number }[], buyDots: [] as { date: string; price: number }[] };
 
     const purchases = getFilteredOpenPurchases(ticker);
     const dividends = getOpenDividends(ticker);
@@ -1681,6 +1760,15 @@ const PortfolioBacktester = () => {
     let cumDividends = 0;
     let cumShares = 0;
     const adjAvgByMonth = new Map<string, number>();
+    // Map of YYYY-MM → shares held after that month's events, for the "Shares Held" bar chart.
+    // An open position is by definition one with no sales at all (see computeOpenTickers),
+    // so this only ever climbs — it's a picture of accumulation.
+    const sharesByMonth = new Map<string, number>();
+    // Map of YYYY-MM → capital invested so far. Deliberately the GROSS cost (cumCost), not the
+    // dividend-adjusted figure, so the bar tooltip matches the Invested Capital chart below,
+    // which uses the same definition. Note the avg buy price beside it IS dividend-adjusted,
+    // so invested ÷ shares won't exactly equal it whenever dividends have been received.
+    const investedByMonth = new Map<string, number>();
 
     for (const evt of costEvents) {
       if (evt.type === 'buy') {
@@ -1693,12 +1781,18 @@ const PortfolioBacktester = () => {
       if (cumShares > 1e-9) {
         adjAvgByMonth.set(evt.ym, (cumCost - cumDividends) / cumShares);
       }
+      sharesByMonth.set(evt.ym, cumShares > 1e-9 ? cumShares : 0);
+      investedByMonth.set(evt.ym, cumCost);
     }
 
     // Build chart data, carrying the avg price forward through months
-    const chartData: { date: string; price: number; avgBuyPrice?: number }[] = [];
+    const chartData: { date: string; price: number; avgBuyPrice?: number; shares: number; investedCapital: number }[] = [];
     const buyDots: { date: string; price: number }[] = [];
     let currentAvg: number | undefined = undefined;
+    // Shares held and capital invested, carried forward. Both start at 0 so months before the
+    // first purchase read as zero.
+    let currentShares = 0;
+    let currentInvested = 0;
 
     const graphStartsYM = openGraphStarts ? toYM(new Date(openGraphStarts)) : '';
     const graphEndsYM = openGraphEnds ? toYM(new Date(openGraphEnds)) : '';
@@ -1719,6 +1813,13 @@ const PortfolioBacktester = () => {
       if (adjAvgByMonth.has(rowYM)) {
         currentAvg = adjAvgByMonth.get(rowYM);
       }
+      // Update the share count and invested capital if shares were bought this month
+      if (sharesByMonth.has(rowYM)) {
+        currentShares = sharesByMonth.get(rowYM)!;
+      }
+      if (investedByMonth.has(rowYM)) {
+        currentInvested = investedByMonth.get(rowYM)!;
+      }
 
       // Only show avg buy price line from first buy onward
       const showAvg = currentAvg !== undefined && rowYM >= firstBuyYM;
@@ -1727,6 +1828,8 @@ const PortfolioBacktester = () => {
         date: row.date,
         price,
         avgBuyPrice: showAvg ? currentAvg : undefined,
+        shares: currentShares,
+        investedCapital: currentInvested,
       });
 
       // Mark buy months with green dots
@@ -12344,6 +12447,32 @@ const PortfolioBacktester = () => {
                           <span>Min price</span>
                         </div>
                       </div>
+
+                      {/* --- Shares Held bar chart ---
+                         Fed mergedChartData — the EXACT array the price line above plots — so it
+                         inherits every filter (Since Invested, Graph Starts/Ends, transaction
+                         checkboxes) and its X axis cannot drift out of step with the line.
+                         It must be mergedChartData and not chartData: when a comparison asset is
+                         selected, merging can ADD months that the base asset doesn't have, and
+                         feeding the raw chartData here would leave the bars short of the line.
+                         Those extra months carry no `shares` value, so no bar is drawn for them —
+                         which is right, since they're months outside this position's own history.
+                         Margins and YAxis width are copied from the line chart so each bar sits
+                         directly under its matching point on the price line. */}
+                      {chartData.length > 0 && (
+                        <div className="mt-4">
+                          <h5 className="text-xs font-semibold text-gray-600 mb-1 px-2">Shares Held</h5>
+                          <ResponsiveContainer width="100%" height={150}>
+                            <BarChart data={mergedChartData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
+                              <YAxis tick={{ fontSize: 9 }} width={40} domain={[0, 'auto']} />
+                              <Tooltip content={<SharesHeldTooltip />} cursor={{ fill: 'rgba(0,0,0,0.06)' }} />
+                              <Bar dataKey="shares" name="Shares" fill="#000000" isAnimationActive={false} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
                     </div>
 
                     {/* --- Invested Capital Charts --- */}
@@ -13218,6 +13347,32 @@ const PortfolioBacktester = () => {
                           <span>Min price</span>
                         </div>
                       </div>
+
+                      {/* --- Shares Held bar chart ---
+                         Fed mergedChartData — the EXACT array the price line above plots — so the X
+                         axis is shared by construction and every filter (Since Invested, Until Sold,
+                         Graph Starts/Ends, transaction checkboxes) applies to both at once.
+                         It must be mergedChartData and not chartData: with "Until Sold" on AND a
+                         comparison asset selected, the comparison line runs past the sale date, so
+                         merging adds months that chartData lacks — feeding chartData here left the
+                         bars 10 months short of the line. Those extra months carry no `shares`
+                         value so no bar is drawn, which is correct: you held nothing after selling.
+                         For a closed position the bars step up on purchases and fall to zero in the
+                         month the last shares were sold. */}
+                      {chartData.length > 0 && (
+                        <div className="mt-4">
+                          <h5 className="text-xs font-semibold text-gray-600 mb-1 px-2">Shares Held</h5>
+                          <ResponsiveContainer width="100%" height={150}>
+                            <BarChart data={mergedChartData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
+                              <YAxis tick={{ fontSize: 9 }} width={40} domain={[0, 'auto']} />
+                              <Tooltip content={<SharesHeldTooltip />} cursor={{ fill: 'rgba(0,0,0,0.06)' }} />
+                              <Bar dataKey="shares" name="Shares" fill="#000000" isAnimationActive={false} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
                     </div>
 
                     {/* --- Invested Capital Charts --- */}
