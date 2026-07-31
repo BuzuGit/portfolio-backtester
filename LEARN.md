@@ -602,6 +602,27 @@ Fix: plot `mergedChartData` in both. The extra months carry no `shares` value, s
 
 **How it was caught:** not by clicking around, but by reading the function that produced the array and asking "can this ever return something different?" Line 86 answered yes. Testing confirmed it in about a minute. Reading beats poking when the failure needs two switches flipped at once.
 
+### 18. The Table That Found a Typo Nobody Was Looking For
+
+**What happened:** the Transaction History table went in, I ran the usual sanity check on the numbers, and one row refused to add up:
+
+```
+IWDA, bought 2020-03-12    price 99.78 x 200 shares = 19,956
+                           recorded cost             =  9,984
+```
+
+Off by a factor of exactly 2.000. Working backwards, the real price was 49.89 — which slots neatly into that week's sequence (53.20 → **49.89** → 46.05) during the COVID crash, while 99.78 would mean the price doubled overnight and halved again four days later. A mistyped cell in the source spreadsheet, sitting there since 2020.
+
+An audit of all 138 closed rows — does `price × qty + commission` reconcile with recorded cost, and `price × qty − commission` with recorded proceeds — found **one** buy-side mismatch and **zero** sell-side. An isolated slip, not a systematic problem.
+
+**Why the app never got it wrong.** Every calculation derives cost per share from `initialCost ÷ shares`, never from the `buyPrice` column. So the FIFO average, returns, CAGR, XIRR and the new cumulative columns were all computed from the correct 49.89 the whole time. The bad number could only ever be *displayed*, never *compounded*.
+
+That wasn't luck, and it's the transferable idea: **when two fields encode the same fact, pick the one the rest of the system depends on and derive everything from that.** Cost is what the money actually did; price is a human-entered annotation of it. Derive from the fact, display the annotation.
+
+**And the accidental feature.** This error had been invisible for years, sitting in a table that grouped transactions into round trips. It became obvious the moment the same data was laid out chronologically, because the wrong number now sat *between its own neighbours* — 53.20, 99.78, 46.05 — and nothing about a doubling and halving looks plausible in a crash.
+
+A view whose numbers reconcile is also a view that audits. Ordering data the way it happened, rather than the way it's stored, is one of the cheapest ways to make errors announce themselves. The table shipped and immediately did a job nobody had asked it to do.
+
 ---
 
 ## How Good Engineers Think
