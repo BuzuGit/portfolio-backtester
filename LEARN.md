@@ -586,6 +586,22 @@ Fixed by using `Number.isFinite(parsed)`, which rejects `Infinity` *and* `NaN` i
 
 Second, and the reason this is written down: the liquidation guard was *tested* — a 7x portfolio correctly blew up on 2020-03-31. It just happened to be tested only from the direction it was designed for. A guard that catches "too small" says nothing about "too large", and `<= 0` quietly treats infinity as perfectly healthy. **When you write a bound, ask what the other end of the number line does to it.**
 
+### 17. Two Charts That Must Line Up Should Eat From One Plate
+
+**The task:** add a "Shares Held" bar chart under the Price History line in the Positions tab, sharing its X axis — so toggling "Since Invested" or "Until Sold" moves both together.
+
+**The good decision:** don't build a second series. The share count was *already* being computed inside `getClosedChartData` and `getOpenChartData` — the FIFO loop calculated it every month and threw it away. Adding one `shares` field to the rows the price line already plots meant the bar chart wasn't merely *configured* to match; it was reading the same rows. Every filter came along for free, because there was only ever one filtered array.
+
+**The near-miss.** I fed the bar chart `chartData`, tested it, and the axes matched. They matched in every combination I tried. Then I read `mergeComparisonData` and noticed it can *append* rows: when you pick a comparison asset, months the comparison has but the base asset lacks get pushed onto the merged array. The line chart plots `mergedChartData`; I was plotting `chartData`.
+
+Usually those are the same. But turn on "Until Sold" *and* pick a comparison asset, and the comparison line runs past your sale date — line chart 200 months, bar chart 190. The bars visibly stop short of the line, which is precisely the one thing the feature existed to prevent.
+
+Fix: plot `mergedChartData` in both. The extra months carry no `shares` value, so no bar is drawn — correct, since you held nothing then.
+
+**The lesson.** "Same data" and "same array" are not the same claim. `chartData` and `mergedChartData` were *usually equal*, and usually-equal is the most expensive kind of wrong: it survives every casual test and fails in the one configuration a user will eventually hit. When two views must agree, don't feed them equivalent inputs — feed them the *identical* input, and make that identity structural rather than something you have to keep remembering.
+
+**How it was caught:** not by clicking around, but by reading the function that produced the array and asking "can this ever return something different?" Line 86 answered yes. Testing confirmed it in about a minute. Reading beats poking when the failure needs two switches flipped at once.
+
 ---
 
 ## How Good Engineers Think
