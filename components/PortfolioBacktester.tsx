@@ -1187,6 +1187,114 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Flattens closed positions into a chronological list of INDIVIDUAL trades.
+   *
+   * WHY THIS EXISTS: a row in the closed-positions data is a round trip — one record holding
+   * both the purchase and the matching sale ("bought 100 on this date, sold them on that one").
+   * That's the right shape for measuring a completed investment, but it's the wrong shape for
+   * answering "what did I actually do, in what order?". Here each round trip is split back into
+   * the two real-world events it represents, and the whole lot is sorted by date.
+   *
+   * Commission in bps ("basis points", where 1 bp = 0.01%) is measured against the GROSS value
+   * of that trade — price × quantity, before commission. That's the standard way brokers quote
+   * it, and it makes a big trade and a small one directly comparable: 10 bps is 10 bps whether
+   * you traded 1,000 or 1,000,000.
+   */
+  const getClosedTradeEvents = (ticker: string) => {
+    const transactions = getFilteredClosedTransactions(ticker);
+    const events: {
+      date: string;
+      type: 'buy' | 'sell';
+      price: number;
+      quantity: number;
+      commission: number;
+      commissionBps: number;
+      amount: number;              // what left your pocket on a buy, what came back on a sell
+      costPerShare: number;        // internal: what this lot really cost per share, for the FIFO pass
+      cumQuantity: number;         // shares still held AFTER this trade
+      cumAvgPrice: number | null;  // avg cost of those remaining shares; null when holding none
+      cumCost: number;             // what those remaining shares originally COST you
+    }[] = [];
+
+    for (const t of transactions) {
+      // The purchase leg. initialCost already includes the buy commission.
+      const buyGross = t.buyPrice * t.sharesSold;
+      events.push({
+        date: t.invDate,
+        type: 'buy',
+        price: t.buyPrice,
+        quantity: t.sharesSold,
+        commission: t.buyCommission,
+        commissionBps: buyGross > 0 ? (t.buyCommission / buyGross) * 10000 : 0,
+        amount: t.initialCost,
+        // Derived from initialCost rather than the buyPrice column on purpose — it includes the
+        // commission, and it stays right even if a price cell in the sheet is mistyped.
+        costPerShare: t.sharesSold > 0 ? t.initialCost / t.sharesSold : t.buyPrice,
+        cumQuantity: 0,
+        cumAvgPrice: null,
+        cumCost: 0,
+      });
+      // The sale leg. valueAfterFee is the proceeds with the sell commission already deducted.
+      const sellGross = t.sellPrice * t.sharesSold;
+      events.push({
+        date: t.divDate,
+        type: 'sell',
+        price: t.sellPrice,
+        quantity: t.sharesSold,
+        commission: t.sellCommission,
+        commissionBps: sellGross > 0 ? (t.sellCommission / sellGross) * 10000 : 0,
+        amount: t.valueAfterFee,
+        costPerShare: 0,  // a sale doesn't have a cost basis of its own
+        cumQuantity: 0,
+        cumAvgPrice: null,
+        cumCost: 0,
+      });
+    }
+
+    // Chronological; a buy and a sell landing on the same date list the buy first,
+    // matching the ordering the FIFO cost-basis calculations use elsewhere in this file.
+    events.sort((a, b) => a.date.localeCompare(b.date) || (a.type === 'buy' ? -1 : 1));
+
+    // ---- Second pass: running position and running average cost ----
+    // Same FIFO ("first in, first out") lot accounting the charts use, so the number in this
+    // column matches the dashed avg-buy line and the Shares Held tooltip for the same month.
+    //
+    // Why a sale can MOVE the average: FIFO retires your oldest lots first. Sell early cheap
+    // shares and the expensive ones are what's left, so the average jumps up — it isn't a bug,
+    // it's the arithmetic of which shares actually left.
+    const lots: { shares: number; price: number }[] = [];
+    for (const e of events) {
+      if (e.type === 'buy') {
+        lots.push({ shares: e.quantity, price: e.costPerShare });
+      } else {
+        let toSell = e.quantity;
+        while (toSell > 0 && lots.length > 0) {
+          if (lots[0].shares <= toSell) {
+            toSell -= lots[0].shares;
+            lots.shift();          // whole lot consumed
+          } else {
+            lots[0].shares -= toSell;
+            toSell = 0;
+          }
+        }
+      }
+      const totalShares = lots.reduce((s, l) => s + l.shares, 0);
+      const totalCost = lots.reduce((s, l) => s + l.shares * l.price, 0);
+      // Epsilon guard: repeated subtraction of fractional shares leaves floating-point dust,
+      // and we'd rather show a clean 0 than 0.0000000002.
+      e.cumQuantity = totalShares > 1e-9 ? totalShares : 0;
+      e.cumAvgPrice = totalShares > 1e-9 ? totalCost / totalShares : null;
+      // Cumulative cost falls out of the same FIFO queue for free: because a sale removes whole
+      // LOTS, what's left is priced at what those shares originally cost. So a sale reduces this
+      // by the purchase cost of the shares that left — NOT by what you sold them for. Sell at a
+      // profit and this drops by less than the sale value; the difference is your realised gain.
+      e.cumCost = totalShares > 1e-9 ? totalCost : 0;
+    }
+
+    return events;
+  };
+
+  /**
    * Builds chart data for the performance line chart in the Closed tab.
    * Uses monthly price data for the selected ticker and identifies buy/sell months.
    *
@@ -12615,6 +12723,10 @@ const PortfolioBacktester = () => {
                 const stats = getClosedDashboardStats(closedSelectedTicker);
                 const { chartData, buyDots, sellDots } = getClosedChartData(closedSelectedTicker);
                 const capitalChartData = getClosedCapitalChartData(closedSelectedTicker);
+                // Individual buy/sell events in date order, for the Transaction History table.
+                // Uses the FILTERED transactions, so it stays in step with the charts above it
+                // when rows are unchecked in the Transactions table.
+                const tradeEvents = getClosedTradeEvents(closedSelectedTicker);
 
                 // Pre-compute the zero-crossing fraction for the PnL gradient once,
                 // rather than computing it twice inline within the SVG gradient defs.
@@ -13371,6 +13483,70 @@ const PortfolioBacktester = () => {
                               <Bar dataKey="shares" name="Shares" fill="#000000" isAnimationActive={false} />
                             </BarChart>
                           </ResponsiveContainer>
+                        </div>
+                      )}
+
+                      {/* --- Transaction History table ---
+                         The bars above show the shape of the position; this shows the individual
+                         trades that created each step. Buys are tinted green, sells red, and rows
+                         are in date order rather than grouped into round trips. */}
+                      {tradeEvents.length > 0 && (
+                        <div className="mt-6">
+                          <h5 className="text-xs font-semibold text-gray-600 mb-2 px-2">Transaction History</h5>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="border-b-2 border-gray-200">
+                                  <th className="text-left py-1.5 px-2 bg-gray-50">Date</th>
+                                  <th className="text-left py-1.5 px-2 bg-gray-50">Type</th>
+                                  <th className="text-right py-1.5 px-2 bg-gray-50">Price</th>
+                                  <th className="text-right py-1.5 px-2 bg-gray-50">Quantity</th>
+                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="Shares still held after this trade (running position).">Cum. Quantity</th>
+                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="Average cost of the shares still held after this trade, FIFO. A sale can move it, because FIFO retires your oldest lots first.">Cum. Avg Price</th>
+                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="Commission paid, with its size in basis points of the gross trade value (price × quantity). 1 bp = 0.01%.">Commission</th>
+                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="Buy: total cost including commission. Sell: proceeds after commission.">Cost / Sale Value</th>
+                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="What the shares you still hold originally cost. A sale reduces this by the purchase cost of the shares sold, not by the sale proceeds.">Cum. Cost</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {tradeEvents.map((e, idx) => (
+                                  <tr
+                                    key={`${e.date}-${e.type}-${idx}`}
+                                    className={`border-b border-gray-100 ${e.type === 'buy' ? 'bg-green-50' : 'bg-red-50'}`}
+                                  >
+                                    <td className="py-1.5 px-2 font-mono">{e.date}</td>
+                                    <td className={`py-1.5 px-2 font-medium ${e.type === 'buy' ? 'text-green-700' : 'text-red-700'}`}>
+                                      {e.type === 'buy' ? 'Buy' : 'Sell'}
+                                    </td>
+                                    <td className="text-right py-1.5 px-2 font-mono">
+                                      {e.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="text-right py-1.5 px-2">
+                                      {e.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                                    </td>
+                                    <td className="text-right py-1.5 px-2 font-medium">
+                                      {e.cumQuantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                                    </td>
+                                    <td className="text-right py-1.5 px-2 font-mono font-medium">
+                                      {e.cumAvgPrice != null
+                                        ? e.cumAvgPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                        : '—'}
+                                    </td>
+                                    <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
+                                      {e.commission.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                      <span className="text-gray-500"> ({e.commissionBps.toFixed(0)}bps)</span>
+                                    </td>
+                                    <td className="text-right py-1.5 px-2 font-mono font-medium">
+                                      {e.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    </td>
+                                    <td className="text-right py-1.5 px-2 font-mono font-medium">
+                                      {e.cumCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       )}
                     </div>
