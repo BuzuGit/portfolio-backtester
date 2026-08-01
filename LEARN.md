@@ -623,6 +623,34 @@ That wasn't luck, and it's the transferable idea: **when two fields encode the s
 
 A view whose numbers reconcile is also a view that audits. Ordering data the way it happened, rather than the way it's stored, is one of the cheapest ways to make errors announce themselves. The table shipped and immediately did a job nobody had asked it to do.
 
+### 19. You Cannot Draw a Box Around a Table Row
+
+**The ask:** outline the still-held rows in the Transaction History table so live holdings stand apart from finished trades.
+
+**The obvious answer, which is wrong:**
+
+```jsx
+<tr className="outline outline-1 outline-black">   // renders as a line above and below
+```
+
+**Why.** In a `border-collapse: collapse` table — which Tailwind's reset turns on by default — a `<tr>` is not a real box. It's a grouping the browser paints *through*, with the cells owning the actual geometry. An `outline` on it lands on the horizontal edges and nothing else, so you get two stripes rather than a rectangle.
+
+**What works** is to border the cells and let them assemble the box between them:
+
+```jsx
+const box  = held ? ' border-y border-black' : '';  // every cell: top + bottom
+const boxL = held ? ' border-l border-black' : '';  // first cell only: left edge
+const boxR = held ? ' border-r border-black' : '';  // last cell only: right edge
+```
+
+Deliberately no `border-x` on the middle cells — that would draw a vertical line between every column and give you ten little boxes instead of one long one.
+
+**The wider point:** `<tr>`, `<thead>` and `<tbody>` are weaker styling targets than they look. Backgrounds on them often work; borders, outlines, rounded corners and transforms frequently don't, because with collapsed borders the cells win. When a row-level style doesn't render, push it down to the cells rather than fighting it.
+
+**How it was checked:** by reading `getComputedStyle` on the first, middle and last cells and asserting all four edges were black with `borderLeftWidth === '0px'` in the middle — not by looking at it. Screenshots don't work on this page anyway (see [[project_preview_verify_workflow]]), but computed styles are the better instrument regardless: they answer "is the left edge actually painted" rather than "does that look boxed to me".
+
+**A verification trap worth knowing:** while checking, the console showed a JSX syntax error and the server logs showed `GET / 500`. Both were *stale* — thrown seconds earlier while a scripted edit had the file briefly mid-surgery, and followed further down by `✓ Compiled` and `GET / 200`. `read_console_messages` accumulates across navigations, so a fixed failure keeps looking like a live one. Read to the *end* of the log before believing an error, and confirm against the current build rather than the loudest message.
+
 ---
 
 ## How Good Engineers Think

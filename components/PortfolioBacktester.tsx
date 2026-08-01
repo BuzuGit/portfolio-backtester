@@ -159,6 +159,176 @@ const SharesHeldTooltip = ({ active, payload }: { active?: boolean; payload?: { 
   );
 };
 
+/**
+ * One individual trade in a position's history — a single buy or a single sell.
+ *
+ * The source sheets store COMPLETED investments as round trips (one record holding both a
+ * purchase and its matching sale), which is the wrong shape for "what did I do, in what order".
+ * A TradeEvent is one half of that: a real thing that happened on a real day. The cumulative
+ * fields are filled in afterwards by a FIFO pass over the whole sorted list.
+ */
+type TradeEvent = {
+  date: string;
+  type: 'buy' | 'sell';
+  price: number;
+  quantity: number;
+  commission: number;
+  commissionBps: number;
+  amount: number;              // what left your pocket on a buy, what came back on a sell
+  costPerShare: number;        // internal: what this lot really cost per share, for the FIFO pass
+  cumQuantity: number;         // shares still held AFTER this trade
+  cumAvgPrice: number | null;  // avg cost of those remaining shares; null when holding none
+  cumCost: number;             // what those remaining shares originally COST you
+  pnlBasis: number;            // internal: net value this sale actually returned (0 for buys)
+  realisedPnl: number | null;  // profit/loss this SALE booked; null on a buy (nothing realised)
+  cumRealisedPnl: number;      // running total of realised profit/loss up to and including this row
+  stillHeld: boolean;          // true for a purchase whose shares you have NOT sold — outlined in the table
+};
+
+/**
+ * Runs FIFO ("first in, first out") lot accounting over a sorted list of trades and fills in
+ * every cumulative field in place. Shared by the Open and Closed views so both tell the same story.
+ *
+ * FIFO means a sale retires your OLDEST shares first. That has two visible consequences the
+ * table is designed to show: selling can push your average cost UP (because the cheap early
+ * shares are the ones that left), and the cumulative cost falls by what the shares originally
+ * COST rather than by what you sold them for — the difference being your realised profit.
+ */
+const applyFifoRunningTotals = (events: TradeEvent[]) => {
+  const lots: { shares: number; price: number }[] = [];
+  let runningPnl = 0;
+
+  for (const e of events) {
+    // Snapshot the cost basis before this trade touches the queue, so a sale can tell us
+    // exactly how much original cost walked out of the door with the shares.
+    const costBefore = lots.reduce((s, l) => s + l.shares * l.price, 0);
+
+    if (e.type === 'buy') {
+      lots.push({ shares: e.quantity, price: e.costPerShare });
+    } else {
+      let toSell = e.quantity;
+      while (toSell > 0 && lots.length > 0) {
+        if (lots[0].shares <= toSell) {
+          toSell -= lots[0].shares;
+          lots.shift();          // whole lot consumed
+        } else {
+          lots[0].shares -= toSell;
+          toSell = 0;
+        }
+      }
+    }
+
+    const totalShares = lots.reduce((s, l) => s + l.shares, 0);
+    const totalCost = lots.reduce((s, l) => s + l.shares * l.price, 0);
+
+    // Realised profit/loss: what the sale brought in, minus what those particular shares cost.
+    // A buy realises nothing — it converts cash into shares, it doesn't settle a result.
+    if (e.type === 'sell') {
+      const costReleased = costBefore - totalCost;
+      e.realisedPnl = e.pnlBasis - costReleased;
+      runningPnl += e.realisedPnl;
+    }
+    e.cumRealisedPnl = runningPnl;
+
+    // Epsilon guard: repeated subtraction of fractional shares leaves floating-point dust,
+    // and we'd rather show a clean 0 than 0.0000000002.
+    e.cumQuantity = totalShares > 1e-9 ? totalShares : 0;
+    e.cumAvgPrice = totalShares > 1e-9 ? totalCost / totalShares : null;
+    e.cumCost = totalShares > 1e-9 ? totalCost : 0;
+  }
+};
+
+/**
+ * The Transaction History table, shared by the Open and Closed position views.
+ *
+ * Deliberately ONE component rather than two copies: these two tables must always agree, and
+ * the surest way to make two things agree is to have only one of them.
+ */
+const TradeHistoryTable = ({ events }: { events: TradeEvent[] }) => (
+  <div className="mt-6">
+    <h5 className="text-xs font-semibold text-gray-600 mb-2 px-2">Transaction History</h5>
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b-2 border-gray-200">
+            <th className="text-left py-1.5 px-2 bg-gray-50">Date</th>
+            <th className="text-left py-1.5 px-2 bg-gray-50">Type</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50">Price</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50">Quantity</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50" title="Shares still held after this trade (running position).">Cum. Quantity</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50" title="Average cost of the shares still held after this trade, FIFO. A sale can move it, because FIFO retires your oldest lots first.">Cum. Avg Price</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50" title="Commission paid, with its size in basis points of the gross trade value (price × quantity). 1 bp = 0.01%.">Commission</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50" title="Buy: total cost including commission. Sell: proceeds after commission.">Cost / Sale Value</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50" title="What the shares you still hold originally cost. A sale reduces this by the purchase cost of the shares sold, not by the sale proceeds.">Cum. Cost</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50" title="Running total of realised profit/loss, with this sale's own contribution in brackets. Realised = what the sale returned (including dividends received and any tax paid) less the original cost of the shares sold. Buys realise nothing, so the total is carried forward in grey. The final row equals this position's total profit.">Cum. PnL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((e, idx) => {
+            // Draw a still-held row as a closed RECTANGLE. In a border-collapse table an
+            // `outline` on the <tr> only paints the horizontal edges, giving a line above and
+            // below rather than a box. The reliable way is to border the CELLS instead:
+            // top+bottom on every cell, left on the first, right on the last.
+            const box  = e.stillHeld ? ' border-y border-black' : '';
+            const boxL = e.stillHeld ? ' border-l border-black' : '';
+            const boxR = e.stillHeld ? ' border-r border-black' : '';
+            return (
+            <tr
+              key={`${e.date}-${e.type}-${idx}`}
+              className={`border-b border-gray-100 ${e.type === 'buy' ? 'bg-green-50' : 'bg-red-50'}`}
+            >
+              <td className={`py-1.5 px-2 font-mono${box}${boxL}`}>{e.date}</td>
+              <td className={`py-1.5 px-2 font-medium ${e.type === 'buy' ? 'text-green-700' : 'text-red-700'}${box}`}>
+                {e.type === 'buy' ? 'Buy' : 'Sell'}
+              </td>
+              <td className={`text-right py-1.5 px-2 font-mono${box}`}>
+                {e.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </td>
+              <td className={`text-right py-1.5 px-2${box}`}>
+                {e.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+              </td>
+              <td className={`text-right py-1.5 px-2 font-medium${box}`}>
+                {e.cumQuantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+              </td>
+              <td className={`text-right py-1.5 px-2 font-mono font-medium${box}`}>
+                {e.cumAvgPrice != null
+                  ? e.cumAvgPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                  : '—'}
+              </td>
+              <td className={`text-right py-1.5 px-2 font-mono whitespace-nowrap${box}`}>
+                {e.commission.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                <span className="text-gray-500"> ({e.commissionBps.toFixed(0)}bps)</span>
+              </td>
+              <td className={`text-right py-1.5 px-2 font-mono font-medium${box}`}>
+                {e.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+              </td>
+              <td className={`text-right py-1.5 px-2 font-mono font-medium${box}`}>
+                {e.cumCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </td>
+              {/* Running realised P&L. On a sale it's coloured and carries this sale's own
+                  contribution in brackets; on a buy the same total is carried forward in grey,
+                  so the column never has holes to scan past. */}
+              <td className={`text-right py-1.5 px-2 font-mono whitespace-nowrap ${
+                e.realisedPnl == null
+                  ? 'text-gray-400'
+                  : e.cumRealisedPnl >= 0 ? 'text-green-700 font-medium' : 'text-red-600 font-medium'
+              }${box}${boxR}`}>
+                {e.cumRealisedPnl >= 0 ? '+' : ''}{e.cumRealisedPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                {e.realisedPnl != null && (
+                  <span className={e.realisedPnl >= 0 ? 'text-green-600' : 'text-red-500'}>
+                    {' '}({e.realisedPnl >= 0 ? '+' : ''}{e.realisedPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })})
+                  </span>
+                )}
+              </td>
+            </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>
+);
+
 // ============================================
 // TYPE DEFINITIONS
 // ============================================
@@ -1200,23 +1370,9 @@ const PortfolioBacktester = () => {
    * it, and it makes a big trade and a small one directly comparable: 10 bps is 10 bps whether
    * you traded 1,000 or 1,000,000.
    */
-  const getClosedTradeEvents = (ticker: string) => {
-    const transactions = getFilteredClosedTransactions(ticker);
-    const events: {
-      date: string;
-      type: 'buy' | 'sell';
-      price: number;
-      quantity: number;
-      commission: number;
-      commissionBps: number;
-      amount: number;              // what left your pocket on a buy, what came back on a sell
-      costPerShare: number;        // internal: what this lot really cost per share, for the FIFO pass
-      cumQuantity: number;         // shares still held AFTER this trade
-      cumAvgPrice: number | null;  // avg cost of those remaining shares; null when holding none
-      cumCost: number;             // what those remaining shares originally COST you
-    }[] = [];
-
-    for (const t of transactions) {
+  const roundTripToEvents = (t: ClosedPositionRow): TradeEvent[] => {
+    const events: TradeEvent[] = [];
+    {
       // The purchase leg. initialCost already includes the buy commission.
       const buyGross = t.buyPrice * t.sharesSold;
       events.push({
@@ -1233,6 +1389,10 @@ const PortfolioBacktester = () => {
         cumQuantity: 0,
         cumAvgPrice: null,
         cumCost: 0,
+        pnlBasis: 0,       // buying realises nothing — you've swapped cash for shares, not booked a result
+        realisedPnl: null,
+        cumRealisedPnl: 0,
+        stillHeld: false,  // this lot was bought AND sold, so none of it remains
       });
       // The sale leg. valueAfterFee is the proceeds with the sell commission already deducted.
       const sellGross = t.sellPrice * t.sharesSold;
@@ -1248,49 +1408,72 @@ const PortfolioBacktester = () => {
         cumQuantity: 0,
         cumAvgPrice: null,
         cumCost: 0,
+        // finalNetValue, not valueAfterFee: it also folds in dividends received and tax paid,
+        // which is how profit is defined everywhere else in this app. Using it means the running
+        // total lands exactly on the "Profit of +X" headline at the top of this section.
+        // For the ~92% of rows with no dividends or tax the two figures are identical anyway.
+        pnlBasis: t.finalNetValue,
+        realisedPnl: null,
+        cumRealisedPnl: 0,
+        stillHeld: false,
       });
     }
+    return events;
+  };
 
-    // Chronological; a buy and a sell landing on the same date list the buy first,
-    // matching the ordering the FIFO cost-basis calculations use elsewhere in this file.
+  /** Chronological order; a buy and a sell on the same date list the buy first, matching the
+   *  ordering the FIFO cost-basis calculations use everywhere else in this file. */
+  const sortTradeEvents = (events: TradeEvent[]) =>
     events.sort((a, b) => a.date.localeCompare(b.date) || (a.type === 'buy' ? -1 : 1));
 
-    // ---- Second pass: running position and running average cost ----
-    // Same FIFO ("first in, first out") lot accounting the charts use, so the number in this
-    // column matches the dashed avg-buy line and the Shares Held tooltip for the same month.
-    //
-    // Why a sale can MOVE the average: FIFO retires your oldest lots first. Sell early cheap
-    // shares and the expensive ones are what's left, so the average jumps up — it isn't a bug,
-    // it's the arithmetic of which shares actually left.
-    const lots: { shares: number; price: number }[] = [];
-    for (const e of events) {
-      if (e.type === 'buy') {
-        lots.push({ shares: e.quantity, price: e.costPerShare });
-      } else {
-        let toSell = e.quantity;
-        while (toSell > 0 && lots.length > 0) {
-          if (lots[0].shares <= toSell) {
-            toSell -= lots[0].shares;
-            lots.shift();          // whole lot consumed
-          } else {
-            lots[0].shares -= toSell;
-            toSell = 0;
-          }
-        }
-      }
-      const totalShares = lots.reduce((s, l) => s + l.shares, 0);
-      const totalCost = lots.reduce((s, l) => s + l.shares * l.price, 0);
-      // Epsilon guard: repeated subtraction of fractional shares leaves floating-point dust,
-      // and we'd rather show a clean 0 than 0.0000000002.
-      e.cumQuantity = totalShares > 1e-9 ? totalShares : 0;
-      e.cumAvgPrice = totalShares > 1e-9 ? totalCost / totalShares : null;
-      // Cumulative cost falls out of the same FIFO queue for free: because a sale removes whole
-      // LOTS, what's left is priced at what those shares originally cost. So a sale reduces this
-      // by the purchase cost of the shares that left — NOT by what you sold them for. Sell at a
-      // profit and this drops by less than the sale value; the difference is your realised gain.
-      e.cumCost = totalShares > 1e-9 ? totalCost : 0;
-    }
+  /** Trade history for a CLOSED position: every round trip, split back into real events. */
+  const getClosedTradeEvents = (ticker: string): TradeEvent[] => {
+    const events = getFilteredClosedTransactions(ticker).flatMap(roundTripToEvents);
+    sortTradeEvents(events);
+    applyFifoRunningTotals(events);
+    return events;
+  };
 
+  /**
+   * Trade history for an OPEN position: the shares you still hold PLUS every completed round
+   * trip you have ever done in the same asset.
+   *
+   * WHY BOTH: the two live in different sheets. Shares you still hold sit in the transactions
+   * sheet as purchases with no matching sale; anything bought and later sold has moved out into
+   * the closed-positions sheet. Neither on its own is the story of the asset — you can hold
+   * Ethereum today and also have traded it round-trip three years ago.
+   *
+   * They cannot double-count: a lot only appears in the closed sheet once it has been fully
+   * sold, at which point it is no longer among your open purchases. Verified on the real data.
+   */
+  const getOpenTradeEvents = (ticker: string): TradeEvent[] => {
+    // Past completed trades in this same asset — all of them. The open position's transaction
+    // checkboxes filter your CURRENT holdings, not your history.
+    const historical = closedData.filter(r => r.ticker === ticker).flatMap(roundTripToEvents);
+
+    // Purchases still open. The transactions sheet has no price column, so derive it: `amount`
+    // is the all-in cost, so stripping the commission back out gives the per-share price paid.
+    const current: TradeEvent[] = getFilteredOpenPurchases(ticker).map(t => ({
+      date: t.date,
+      type: 'buy' as const,
+      price: t.qty > 0 ? (t.amount - t.commAbs) / t.qty : 0,
+      quantity: t.qty,
+      commission: t.commAbs,
+      commissionBps: t.commBps,   // the sheet reports this directly
+      amount: t.amount,
+      costPerShare: t.qty > 0 ? t.amount / t.qty : 0,
+      cumQuantity: 0,
+      cumAvgPrice: null,
+      cumCost: 0,
+      pnlBasis: 0,
+      realisedPnl: null,
+      cumRealisedPnl: 0,
+      stillHeld: true,   // never sold — this is what you are holding right now
+    }));
+
+    const events = [...historical, ...current];
+    sortTradeEvents(events);
+    applyFifoRunningTotals(events);
     return events;
   };
 
@@ -12032,6 +12215,9 @@ const PortfolioBacktester = () => {
                 const stats = getOpenDashboardStats(openSelectedTicker);
                 const { chartData, buyDots } = getOpenChartData(openSelectedTicker);
                 const capitalChartData = getOpenCapitalChartData(openSelectedTicker);
+                // Full trade history for this asset: shares still held PLUS any completed round
+                // trips in the same asset from years past. See getOpenTradeEvents.
+                const tradeEvents = getOpenTradeEvents(openSelectedTicker);
                 const currentPrice = getCurrentPrice(openSelectedTicker);
                 const todayStr = new Date().toISOString().split('T')[0];
 
@@ -12580,6 +12766,23 @@ const PortfolioBacktester = () => {
                             </BarChart>
                           </ResponsiveContainer>
                         </div>
+                      )}
+
+                      {/* --- Transaction History table ---
+                         Same shared component as the Closed view, but fed the asset's FULL history:
+                         the shares you still hold AND any round trips you completed in it years ago.
+                         Rows you still hold carry a black outline, so what's live stands apart from
+                         what's already finished. */}
+                      {tradeEvents.length > 0 && (
+                        <>
+                          <TradeHistoryTable events={tradeEvents} />
+                          {tradeEvents.some(e => !e.stillHeld) && (
+                            <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 px-2">
+                              <span className="inline-block w-4 h-3 bg-green-50 border border-black"></span>
+                              <span>Outlined rows are shares you still hold; the rest are closed trades in this asset.</span>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
 
@@ -13488,67 +13691,9 @@ const PortfolioBacktester = () => {
 
                       {/* --- Transaction History table ---
                          The bars above show the shape of the position; this shows the individual
-                         trades that created each step. Buys are tinted green, sells red, and rows
-                         are in date order rather than grouped into round trips. */}
-                      {tradeEvents.length > 0 && (
-                        <div className="mt-6">
-                          <h5 className="text-xs font-semibold text-gray-600 mb-2 px-2">Transaction History</h5>
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-xs">
-                              <thead>
-                                <tr className="border-b-2 border-gray-200">
-                                  <th className="text-left py-1.5 px-2 bg-gray-50">Date</th>
-                                  <th className="text-left py-1.5 px-2 bg-gray-50">Type</th>
-                                  <th className="text-right py-1.5 px-2 bg-gray-50">Price</th>
-                                  <th className="text-right py-1.5 px-2 bg-gray-50">Quantity</th>
-                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="Shares still held after this trade (running position).">Cum. Quantity</th>
-                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="Average cost of the shares still held after this trade, FIFO. A sale can move it, because FIFO retires your oldest lots first.">Cum. Avg Price</th>
-                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="Commission paid, with its size in basis points of the gross trade value (price × quantity). 1 bp = 0.01%.">Commission</th>
-                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="Buy: total cost including commission. Sell: proceeds after commission.">Cost / Sale Value</th>
-                                  <th className="text-right py-1.5 px-2 bg-gray-50" title="What the shares you still hold originally cost. A sale reduces this by the purchase cost of the shares sold, not by the sale proceeds.">Cum. Cost</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {tradeEvents.map((e, idx) => (
-                                  <tr
-                                    key={`${e.date}-${e.type}-${idx}`}
-                                    className={`border-b border-gray-100 ${e.type === 'buy' ? 'bg-green-50' : 'bg-red-50'}`}
-                                  >
-                                    <td className="py-1.5 px-2 font-mono">{e.date}</td>
-                                    <td className={`py-1.5 px-2 font-medium ${e.type === 'buy' ? 'text-green-700' : 'text-red-700'}`}>
-                                      {e.type === 'buy' ? 'Buy' : 'Sell'}
-                                    </td>
-                                    <td className="text-right py-1.5 px-2 font-mono">
-                                      {e.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </td>
-                                    <td className="text-right py-1.5 px-2">
-                                      {e.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                                    </td>
-                                    <td className="text-right py-1.5 px-2 font-medium">
-                                      {e.cumQuantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                                    </td>
-                                    <td className="text-right py-1.5 px-2 font-mono font-medium">
-                                      {e.cumAvgPrice != null
-                                        ? e.cumAvgPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                                        : '—'}
-                                    </td>
-                                    <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
-                                      {e.commission.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                      <span className="text-gray-500"> ({e.commissionBps.toFixed(0)}bps)</span>
-                                    </td>
-                                    <td className="text-right py-1.5 px-2 font-mono font-medium">
-                                      {e.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    </td>
-                                    <td className="text-right py-1.5 px-2 font-mono font-medium">
-                                      {e.cumCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      )}
+                         trades that created each step. Rendered by the shared TradeHistoryTable so
+                         the Open and Closed views can never drift apart. */}
+                      {tradeEvents.length > 0 && <TradeHistoryTable events={tradeEvents} />}
                     </div>
 
                     {/* --- Invested Capital Charts --- */}
