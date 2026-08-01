@@ -113,6 +113,10 @@ type SharesTooltipRow = {
   shares?: number;
   avgBuyPrice?: number;
   investedCapital?: number;
+  // Open positions supply this: the FIFO cost-basis average, which is what the Transaction
+  // History table shows. It's preferred over avgBuyPrice (dividend-adjusted, and the value
+  // behind the dashed line on the price chart) so the tooltip and the table agree.
+  fifoAvgPrice?: number | null;
 };
 
 /**
@@ -149,7 +153,9 @@ const SharesHeldTooltip = ({ active, payload }: { active?: boolean; payload?: { 
       </div>
       <div className="flex justify-between gap-4">
         <span className="text-gray-500">Avg buy price</span>
-        <span className="font-medium text-gray-900">{fmtPrice(row.avgBuyPrice)}</span>
+        <span className="font-medium text-gray-900">
+          {fmtPrice(row.fifoAvgPrice !== undefined ? (row.fifoAvgPrice ?? undefined) : row.avgBuyPrice)}
+        </span>
       </div>
       <div className="flex justify-between gap-4">
         <span className="text-gray-500">Invested</span>
@@ -179,6 +185,9 @@ type TradeEvent = {
   cumQuantity: number;         // shares still held AFTER this trade
   cumAvgPrice: number | null;  // avg cost of those remaining shares; null when holding none
   cumCost: number;             // what those remaining shares originally COST you
+  cumSold: number;             // running total of sale proceeds taken out of this position
+  income: number;              // dividends/interest this round trip earned, net of tax (0 for buys)
+  cumIncome: number;           // running total of that income — the part of Cum. PnL that isn't price gain
   pnlBasis: number;            // internal: net value this sale actually returned (0 for buys)
   realisedPnl: number | null;  // profit/loss this SALE booked; null on a buy (nothing realised)
   cumRealisedPnl: number;      // running total of realised profit/loss up to and including this row
@@ -197,6 +206,13 @@ type TradeEvent = {
 const applyFifoRunningTotals = (events: TradeEvent[]) => {
   const lots: { shares: number; price: number }[] = [];
   let runningPnl = 0;
+  // Everything you've taken back OUT of this position, at the price you actually sold for.
+  // Read it against Cum. Cost: cost is what the shares you still hold set you back, sold is
+  // what the ones you let go actually returned.
+  let runningSold = 0;
+  // Dividends and interest banked so far. Cum. PnL already contains this; the column exists so
+  // you can see how much of the profit came from being paid to hold rather than from the price.
+  let runningIncome = 0;
 
   for (const e of events) {
     // Snapshot the cost basis before this trade touches the queue, so a sale can tell us
@@ -227,8 +243,14 @@ const applyFifoRunningTotals = (events: TradeEvent[]) => {
       const costReleased = costBefore - totalCost;
       e.realisedPnl = e.pnlBasis - costReleased;
       runningPnl += e.realisedPnl;
+      // Proceeds as they actually landed — the same figure the Cost / Sale Value column shows
+      // for this row, so the running total is one you can add up by eye down the page.
+      runningSold += e.amount;
+      runningIncome += e.income;
     }
     e.cumRealisedPnl = runningPnl;
+    e.cumSold = runningSold;
+    e.cumIncome = runningIncome;
 
     // Epsilon guard: repeated subtraction of fractional shares leaves floating-point dust,
     // and we'd rather show a clean 0 than 0.0000000002.
@@ -260,6 +282,8 @@ const TradeHistoryTable = ({ events }: { events: TradeEvent[] }) => (
             <th className="text-right py-1.5 px-2 bg-gray-50" title="Commission paid, with its size in basis points of the gross trade value (price × quantity). 1 bp = 0.01%.">Commission</th>
             <th className="text-right py-1.5 px-2 bg-gray-50" title="Buy: total cost including commission. Sell: proceeds after commission.">Cost / Sale Value</th>
             <th className="text-right py-1.5 px-2 bg-gray-50" title="What the shares you still hold originally cost. A sale reduces this by the purchase cost of the shares sold, not by the sale proceeds.">Cum. Cost</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50" title="Running total of what you have sold, at the prices you actually got (proceeds after commission). Read against Cum. Cost: what you still hold cost you X, and what you let go returned Y.">Cum. Sold</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50" title="Dividends and interest collected on the shares you have sold, net of tax. This is ALREADY part of Cum. PnL — it tells you how much of the profit came from being paid to hold rather than from the price moving. Income on shares you still hold is not counted, because nothing is realised until you sell.">Income</th>
             <th className="text-right py-1.5 px-2 bg-gray-50" title="Running total of realised profit/loss, with this sale's own contribution in brackets. Realised = what the sale returned (including dividends received and any tax paid) less the original cost of the shares sold. Buys realise nothing, so the total is carried forward in grey. The final row equals this position's total profit.">Cum. PnL</th>
           </tr>
         </thead>
@@ -304,6 +328,16 @@ const TradeHistoryTable = ({ events }: { events: TradeEvent[] }) => (
               </td>
               <td className={`text-right py-1.5 px-2 font-mono font-medium${box}`}>
                 {e.cumCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </td>
+              {/* Cumulative proceeds. Greyed until the first sale, since a position you've
+                  never sold out of has taken nothing back yet. */}
+              <td className={`text-right py-1.5 px-2 font-mono font-medium${e.cumSold > 0 ? '' : ' text-gray-400'}${box}`}>
+                {e.cumSold.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </td>
+              {/* Income already sits inside Cum. PnL, so it's rendered quietly — it's a
+                  breakdown of the profit beside it, not another number to add on. */}
+              <td className={`text-right py-1.5 px-2 font-mono${e.cumIncome > 0 ? ' text-teal-700' : ' text-gray-400'}${box}`}>
+                {e.cumIncome.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </td>
               {/* Running realised P&L. On a sale it's coloured and carries this sale's own
                   contribution in brackets; on a buy the same total is carried forward in grey,
@@ -1374,7 +1408,11 @@ const PortfolioBacktester = () => {
     const events: TradeEvent[] = [];
     {
       // The purchase leg. initialCost already includes the buy commission.
-      const buyGross = t.buyPrice * t.sharesSold;
+      // Gross traded value, derived from the CASH rather than from price × quantity. The two
+      // should agree, but cost is what the rest of the app trusts, it stays correct even when a
+      // price cell is mistyped (see the IWDA 2020-03-12 row), and it matches how the Transactions
+      // table computes its basis points — so the two tables can never disagree.
+      const buyGross = t.initialCost - t.buyCommission;
       events.push({
         date: t.invDate,
         type: 'buy',
@@ -1389,13 +1427,16 @@ const PortfolioBacktester = () => {
         cumQuantity: 0,
         cumAvgPrice: null,
         cumCost: 0,
+        cumSold: 0,
+        income: 0,
+        cumIncome: 0,
         pnlBasis: 0,       // buying realises nothing — you've swapped cash for shares, not booked a result
         realisedPnl: null,
         cumRealisedPnl: 0,
         stillHeld: false,  // this lot was bought AND sold, so none of it remains
       });
       // The sale leg. valueAfterFee is the proceeds with the sell commission already deducted.
-      const sellGross = t.sellPrice * t.sharesSold;
+      const sellGross = t.valueAfterFee + t.sellCommission;   // proceeds before the fee came off
       events.push({
         date: t.divDate,
         type: 'sell',
@@ -1408,6 +1449,13 @@ const PortfolioBacktester = () => {
         cumQuantity: 0,
         cumAvgPrice: null,
         cumCost: 0,
+        cumSold: 0,
+        // The part of this round trip's result that came from holding rather than from the price
+        // moving: dividends and interest collected along the way, net of any tax paid on them.
+        // Booked against the SALE because that's when the round trip settles — which is also why
+        // finalNetValue (below) already contains it.
+        income: t.cumDividend - t.totalTax,
+        cumIncome: 0,
         // finalNetValue, not valueAfterFee: it also folds in dividends received and tax paid,
         // which is how profit is defined everywhere else in this app. Using it means the running
         // total lands exactly on the "Profit of +X" headline at the top of this section.
@@ -1465,6 +1513,9 @@ const PortfolioBacktester = () => {
       cumQuantity: 0,
       cumAvgPrice: null,
       cumCost: 0,
+      cumSold: 0,
+      income: 0,
+      cumIncome: 0,
       pnlBasis: 0,
       realisedPnl: null,
       cumRealisedPnl: 0,
@@ -2036,8 +2087,15 @@ const PortfolioBacktester = () => {
 
     // Collect buy months for green dot markers
     const buyMonths = new Set(purchases.map(t => toYM(new Date(t.date))));
-    const sortedBuyDates = purchases.map(t => t.date).sort();
-    const firstBuyYM = sortedBuyDates[0] ? toYM(new Date(sortedBuyDates[0])) : '';
+
+    // The asset's FULL trade history — shares still held plus any round trips completed years
+    // ago — exactly the list the Transaction History table renders. The Shares Held bars are
+    // driven from this so the chart and the table tell the same story rather than two.
+    const tradeEvents = getOpenTradeEvents(ticker);
+    const firstEverBuy = tradeEvents.find(e => e.type === 'buy');
+    // "Since Invested" now means since the FIRST time you ever bought this asset, not just the
+    // oldest lot you happen to still hold — otherwise the toggle would crop the history away.
+    const firstBuyYM = firstEverBuy ? toYM(new Date(firstEverBuy.date)) : '';
 
     // Build events: purchases increase cost+shares, dividends reduce effective cost
     type OpenCostEvent = { date: string; ym: string; type: 'buy' | 'div'; shares: number; amount: number };
@@ -2051,15 +2109,6 @@ const PortfolioBacktester = () => {
     let cumDividends = 0;
     let cumShares = 0;
     const adjAvgByMonth = new Map<string, number>();
-    // Map of YYYY-MM → shares held after that month's events, for the "Shares Held" bar chart.
-    // An open position is by definition one with no sales at all (see computeOpenTickers),
-    // so this only ever climbs — it's a picture of accumulation.
-    const sharesByMonth = new Map<string, number>();
-    // Map of YYYY-MM → capital invested so far. Deliberately the GROSS cost (cumCost), not the
-    // dividend-adjusted figure, so the bar tooltip matches the Invested Capital chart below,
-    // which uses the same definition. Note the avg buy price beside it IS dividend-adjusted,
-    // so invested ÷ shares won't exactly equal it whenever dividends have been received.
-    const investedByMonth = new Map<string, number>();
 
     for (const evt of costEvents) {
       if (evt.type === 'buy') {
@@ -2072,18 +2121,33 @@ const PortfolioBacktester = () => {
       if (cumShares > 1e-9) {
         adjAvgByMonth.set(evt.ym, (cumCost - cumDividends) / cumShares);
       }
-      sharesByMonth.set(evt.ym, cumShares > 1e-9 ? cumShares : 0);
-      investedByMonth.set(evt.ym, cumCost);
+    }
+
+    // Month-end state of the FULL history, taken straight from the same FIFO pass the table
+    // uses. Because the events are already chronological, a later event in the same month
+    // simply overwrites an earlier one, leaving the month's closing position.
+    const sharesByMonth = new Map<string, number>();
+    const investedByMonth = new Map<string, number>();
+    const fifoAvgByMonth = new Map<string, number | null>();
+    for (const e of tradeEvents) {
+      const ym = toYM(new Date(e.date));
+      sharesByMonth.set(ym, e.cumQuantity);
+      investedByMonth.set(ym, e.cumCost);
+      fifoAvgByMonth.set(ym, e.cumAvgPrice);
     }
 
     // Build chart data, carrying the avg price forward through months
-    const chartData: { date: string; price: number; avgBuyPrice?: number; shares: number; investedCapital: number }[] = [];
+    const chartData: { date: string; price: number; avgBuyPrice?: number; shares: number; investedCapital: number; fifoAvgPrice?: number | null }[] = [];
     const buyDots: { date: string; price: number }[] = [];
     let currentAvg: number | undefined = undefined;
     // Shares held and capital invested, carried forward. Both start at 0 so months before the
     // first purchase read as zero.
     let currentShares = 0;
     let currentInvested = 0;
+    // The FIFO cost-basis average, for the Shares Held tooltip. Kept separate from currentAvg
+    // (which is dividend-adjusted and drives the dashed line on the price chart) so the tooltip
+    // agrees with the Cum. Avg Price column in the table rather than with the line.
+    let currentFifoAvg: number | null = null;
 
     const graphStartsYM = openGraphStarts ? toYM(new Date(openGraphStarts)) : '';
     const graphEndsYM = openGraphEnds ? toYM(new Date(openGraphEnds)) : '';
@@ -2111,6 +2175,9 @@ const PortfolioBacktester = () => {
       if (investedByMonth.has(rowYM)) {
         currentInvested = investedByMonth.get(rowYM)!;
       }
+      if (fifoAvgByMonth.has(rowYM)) {
+        currentFifoAvg = fifoAvgByMonth.get(rowYM)!;
+      }
 
       // Only show avg buy price line from first buy onward
       const showAvg = currentAvg !== undefined && rowYM >= firstBuyYM;
@@ -2121,6 +2188,7 @@ const PortfolioBacktester = () => {
         avgBuyPrice: showAvg ? currentAvg : undefined,
         shares: currentShares,
         investedCapital: currentInvested,
+        fifoAvgPrice: currentFifoAvg,
       });
 
       // Mark buy months with green dots
@@ -12354,11 +12422,10 @@ const PortfolioBacktester = () => {
                               <th className="text-left py-1.5 px-2 bg-gray-50">Type</th>
                               <th className="text-left py-1.5 px-2 bg-gray-50">Inv Date</th>
                               <th className="text-left py-1.5 px-2 bg-gray-50">Valuation Date</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-50">Hold (D)</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-50">Hold (Y)</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50" title="How long the position has been held: days, with the same span in years in brackets.">Holding</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Shares</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Buy Price</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-50">Buy Comm.</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50" title="Commission paid to buy, with its size in basis points of the gross purchase value. 1 bp = 0.01%.">Buy Comm.</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Initial Cost</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Valuation Price</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Current Value</th>
@@ -12377,7 +12444,7 @@ const PortfolioBacktester = () => {
                                     <td className="py-1.5 px-2"></td>
                                     <td className="py-1.5 px-2 text-amber-700 font-medium">Dividend</td>
                                     <td className="py-1.5 px-2 font-mono">{row.data.date}</td>
-                                    <td className="py-1.5 px-2"></td>
+                                    {/* Valuation Date + Holding — not meaningful for a dividend */}
                                     <td className="py-1.5 px-2"></td>
                                     <td className="py-1.5 px-2"></td>
                                     <td className="text-right py-1.5 px-2 text-gray-400 font-mono">{row.data.qty.toLocaleString()}</td>
@@ -12435,11 +12502,20 @@ const PortfolioBacktester = () => {
                                   <td className="py-1.5 px-2 text-green-700 font-medium">Purchase</td>
                                   <td className="py-1.5 px-2 font-mono">{t.date}</td>
                                   <td className="py-1.5 px-2 font-mono">{todayStr}</td>
-                                  <td className="text-right py-1.5 px-2">{holdDays.toLocaleString()}</td>
-                                  <td className="text-right py-1.5 px-2">{holdYears.toFixed(1)}</td>
+                                  {/* Holding period: days with years in brackets, e.g. "607 (1.7y)" */}
+                                  <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
+                                    {holdDays.toLocaleString()}
+                                    <span className="text-gray-500"> ({holdYears.toFixed(1)}y)</span>
+                                  </td>
                                   <td className="text-right py-1.5 px-2">{t.qty.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                                   <td className="text-right py-1.5 px-2 font-mono">{buyPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
-                                  <td className="text-right py-1.5 px-2 font-mono">{t.commAbs.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  {/* Commission with its size in bps of the gross purchase value */}
+                                  <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
+                                    {t.commAbs.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                    {(t.amount - t.commAbs) > 0 && (
+                                      <span className="text-gray-500"> ({Math.round(t.commAbs / (t.amount - t.commAbs) * 10000)}bps)</span>
+                                    )}
+                                  </td>
                                   <td className="text-right py-1.5 px-2 font-mono">{t.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className="text-right py-1.5 px-2 font-mono">{currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
                                   <td className="text-right py-1.5 px-2 font-mono">{currentVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
@@ -12475,13 +12551,16 @@ const PortfolioBacktester = () => {
                                   <td className="py-2 px-2"></td>
                                   <td className="py-2 px-2 text-left text-gray-700" colSpan={2}>Summary</td>
                                   <td className="py-2 px-2"></td>
-                                  <td className="text-right py-2 px-2 font-mono">{maxDays.toLocaleString()}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{maxYears.toFixed(1)}</td>
+                                  {/* Holding — longest span, days with years in brackets */}
+                                  <td className="text-right py-2 px-2 font-mono whitespace-nowrap">
+                                    {maxDays.toLocaleString()}
+                                    <span className="text-gray-500 font-normal"> ({maxYears.toFixed(1)}y)</span>
+                                  </td>
                                   <td className="text-right py-2 px-2 font-mono">{sumShares.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">{stats.adjAvgBuyPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">
-                                    {sumBuyComm.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    {(sumCost - sumBuyComm) > 0 && <span className="text-gray-400 text-[10px] ml-0.5">({Math.round(sumBuyComm / (sumCost - sumBuyComm) * 10000)}bps)</span>}
+                                    {sumBuyComm.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                    {(sumCost - sumBuyComm) > 0 && <span className="text-gray-500 font-normal"> ({Math.round(sumBuyComm / (sumCost - sumBuyComm) * 10000)}bps)</span>}
                                   </td>
                                   <td className="text-right py-2 px-2 font-mono">{sumCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">{currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
@@ -13073,14 +13152,13 @@ const PortfolioBacktester = () => {
                               </th>
                               <th className="text-left py-1.5 px-2 bg-gray-50">Inv Date</th>
                               <th className="text-left py-1.5 px-2 bg-gray-50">Div Date</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-50">Hold (D)</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-50">Hold (Y)</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50" title="How long the position was held: days, with the same span in years in brackets.">Holding</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Shares</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Buy Price</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-50">Buy Comm.</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50" title="Commission paid to buy, with its size in basis points of the gross purchase value. 1 bp = 0.01%.">Buy Comm.</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Initial Cost</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Sell Price</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-50">Sell Comm.</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-50" title="Commission paid to sell, with its size in basis points of the gross sale proceeds. 1 bp = 0.01%.">Sell Comm.</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Value After Fee</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Cum. Div</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Tax</th>
@@ -13121,14 +13199,29 @@ const PortfolioBacktester = () => {
                                 </td>
                                 <td className="py-1.5 px-2 font-mono">{t.invDate}</td>
                                 <td className="py-1.5 px-2 font-mono">{t.divDate}</td>
-                                <td className="text-right py-1.5 px-2">{t.holdingPeriodDays}</td>
-                                <td className="text-right py-1.5 px-2">{t.holdingPeriodYears.toFixed(1)}</td>
+                                {/* Holding period: days with years in brackets, e.g. "607 (1.7y)" */}
+                                <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
+                                  {t.holdingPeriodDays.toLocaleString()}
+                                  <span className="text-gray-500"> ({t.holdingPeriodYears.toFixed(1)}y)</span>
+                                </td>
                                 <td className="text-right py-1.5 px-2">{t.sharesSold.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.buyPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                                <td className="text-right py-1.5 px-2 font-mono">{t.buyCommission.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                {/* Commission with its size in bps of the gross traded value, matching
+                                    the Transaction History table and the summary row below. */}
+                                <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
+                                  {t.buyCommission.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                  {(t.initialCost - t.buyCommission) > 0 && (
+                                    <span className="text-gray-500"> ({Math.round(t.buyCommission / (t.initialCost - t.buyCommission) * 10000)}bps)</span>
+                                  )}
+                                </td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.initialCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.sellPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                                <td className="text-right py-1.5 px-2 font-mono">{t.sellCommission.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
+                                  {t.sellCommission.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                  {(t.valueAfterFee + t.sellCommission) > 0 && (
+                                    <span className="text-gray-500"> ({Math.round(t.sellCommission / (t.valueAfterFee + t.sellCommission) * 10000)}bps)</span>
+                                  )}
+                                </td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.valueAfterFee.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.cumDividend.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.totalTax.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
@@ -13181,18 +13274,19 @@ const PortfolioBacktester = () => {
                                   <td className="py-2 px-2"></td>
                                   {/* Inv Date — label */}
                                   <td className="py-2 px-2 text-left text-gray-700" colSpan={2}>Summary</td>
-                                  {/* Hold (D) — max */}
-                                  <td className="text-right py-2 px-2 font-mono">{maxDays.toLocaleString()}</td>
-                                  {/* Hold (Y) — max */}
-                                  <td className="text-right py-2 px-2 font-mono">{maxYears.toFixed(1)}</td>
+                                  {/* Holding — longest span among the checked rows, days with years in brackets */}
+                                  <td className="text-right py-2 px-2 font-mono whitespace-nowrap">
+                                    {maxDays.toLocaleString()}
+                                    <span className="text-gray-500 font-normal"> ({maxYears.toFixed(1)}y)</span>
+                                  </td>
                                   {/* Shares — cumulative */}
                                   <td className="text-right py-2 px-2 font-mono">{sumShares.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                                   {/* Buy Price — weighted avg */}
                                   <td className="text-right py-2 px-2 font-mono">{wAvgBuy.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                                   {/* Buy Comm. — cumulative + basis points vs invested amount (shares × buyPrice, excl. commission) */}
                                   <td className="text-right py-2 px-2 font-mono">
-                                    {sumBuyComm.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    {(sumCost - sumBuyComm) > 0 && <span className="text-gray-400 text-[10px] ml-0.5">({Math.round(sumBuyComm / (sumCost - sumBuyComm) * 10000)}bps)</span>}
+                                    {sumBuyComm.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                    {(sumCost - sumBuyComm) > 0 && <span className="text-gray-500 font-normal"> ({Math.round(sumBuyComm / (sumCost - sumBuyComm) * 10000)}bps)</span>}
                                   </td>
                                   {/* Initial Cost — cumulative */}
                                   <td className="text-right py-2 px-2 font-mono">{sumCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
@@ -13200,8 +13294,8 @@ const PortfolioBacktester = () => {
                                   <td className="text-right py-2 px-2 font-mono">{wAvgSell.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                                   {/* Sell Comm. — cumulative + basis points vs gross sale proceeds */}
                                   <td className="text-right py-2 px-2 font-mono">
-                                    {sumSellComm.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    {(sumValueAfterFee + sumSellComm) > 0 && <span className="text-gray-400 text-[10px] ml-0.5">({Math.round(sumSellComm / (sumValueAfterFee + sumSellComm) * 10000)}bps)</span>}
+                                    {sumSellComm.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                    {(sumValueAfterFee + sumSellComm) > 0 && <span className="text-gray-500 font-normal"> ({Math.round(sumSellComm / (sumValueAfterFee + sumSellComm) * 10000)}bps)</span>}
                                   </td>
                                   {/* Value After Fee — cumulative */}
                                   <td className="text-right py-2 px-2 font-mono">{sumValueAfterFee.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>

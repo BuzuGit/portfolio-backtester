@@ -651,6 +651,35 @@ Deliberately no `border-x` on the middle cells — that would draw a vertical li
 
 **A verification trap worth knowing:** while checking, the console showed a JSX syntax error and the server logs showed `GET / 500`. Both were *stale* — thrown seconds earlier while a scripted edit had the file briefly mid-surgery, and followed further down by `✓ Compiled` and `GET / 200`. `read_console_messages` accumulates across navigations, so a fixed failure keeps looking like a live one. Read to the *end* of the log before believing an error, and confirm against the current build rather than the loudest message.
 
+### 20. The Bad Row Was a Free Test
+
+**What happened.** Two places in the app show a commission in basis points. They had been written months apart and quietly disagreed on what to divide by:
+
+```js
+// Transactions summary row
+sumBuyComm / (sumCost - sumBuyComm)      // gross derived from CASH
+// Transaction History table
+t.buyCommission / (t.buyPrice * t.sharesSold)   // gross derived from PRICE
+```
+
+On 137 of 138 rows those are the same number, because `price × quantity` and `cost − commission` describe the same trade. On the IWDA row with the mistyped price (lesson 18), they didn't: **3bps in one table, 6bps in the other, for the same purchase.**
+
+Nobody would have noticed without the typo. The two definitions had coexisted for months, agreeing every single time, and a *data* error is what finally made a *code* inconsistency visible. Fixed by moving both onto the cash-derived gross — the one that stays correct when a price cell is wrong.
+
+**The generalisable bit:** a corrupt row is an unplanned differential test. When two code paths compute "the same" quantity, they only prove they agree on inputs where everything is consistent; it takes a weird input to separate them. So when you find bad data, don't just fix the data — **check whether anything downstream disagreed about it**, because that disagreement is information you paid for and would not otherwise have got.
+
+And the tiebreaker when two definitions compete: prefer the one derived from the value the rest of the system already depends on. Here that's cost, which drives every calculation, over price, which is only ever displayed.
+
+**Practical note on the same change:** merging two table columns into one silently shifts every cell to its right, and this table had four separate places emitting rows — header, normal rows, dividend rows, and a summary `<tfoot>` with `colSpan`. Checking it by eye would have missed a mismatch three columns deep. Counting instead is trivial and conclusive:
+
+```js
+[...tbl.querySelectorAll('tbody tr')].map(r => r.children.length)                       // all rows
+[...tbl.querySelectorAll('tfoot tr')].map(r => [...r.children]
+  .reduce((s, c) => s + (c.colSpan || 1), 0))                                          // colSpan-aware
+```
+
+Assert every one equals the header count. A dividend row that quietly dropped its payout into the wrong column would look completely plausible on screen.
+
 ---
 
 ## How Good Engineers Think
