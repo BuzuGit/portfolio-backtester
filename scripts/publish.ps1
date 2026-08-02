@@ -8,7 +8,7 @@
   none of the credential boilerplate gets retyped each time.
 
   Works in any of the repos under C:\Dev\Claude (portfolio-backtester, cash-flows-tracker,
-  StooqAnalyzer). It reads the GitHub owner/repo from the Invoke-Git remote and asks GitHub what the
+  StooqAnalyzer). It reads the GitHub owner/repo from the git remote and asks GitHub what the
   default branch is, so it does not care that StooqAnalyzer uses "master" while the others
   use "main".
 
@@ -70,8 +70,12 @@ function Fail       { param([string]$Msg) Write-Host "!!! $Msg" -ForegroundColor
 
 # Runs a git command and returns its output. Native executables do not throw on failure, so we
 # judge success by $LASTEXITCODE rather than by exceptions.
+# NOTE: deliberately a *simple* function with no param() block. Adding [Parameter()] would make
+# this an "advanced" function, which silently grants it PowerShell's common parameters -- and then
+# "Invoke-Git branch -D name" has its -D swallowed as a prefix match for -Debug, so the command
+# quietly becomes "git branch name" and deletes nothing. Plain $args passes every flag through
+# untouched. (PowerShell still eats a bare "--" at the call site, so no command here uses one.)
 function Invoke-Git {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
     # git writes ordinary chatter to stderr (line-ending warnings, "Switched to branch", and so
     # on). With $ErrorActionPreference = Stop, redirecting stderr would turn each of those into a
     # fatal NativeCommandError and kill the script over a warning. So we relax the preference for
@@ -80,7 +84,7 @@ function Invoke-Git {
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $out = & git.exe @GitArgs 2>&1 | Out-String
+        $out = & git.exe $args 2>&1 | Out-String
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previous
@@ -193,7 +197,7 @@ if ($All) { $null = Invoke-Git add -A } else { $null = Invoke-Git add -u }
 
 foreach ($path in $Exclude) {
     if (Test-Path (Join-Path $repoRoot $path)) {
-        $null = Invoke-Git reset -q -- $path
+        $null = Invoke-Git reset -q HEAD $path
     }
 }
 
