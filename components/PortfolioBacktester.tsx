@@ -640,6 +640,86 @@ const yearsRowRate = (row: YearsRow, currency: string, which: 'end' | 'avg'): nu
 };
 
 // ---------------------------------------------------------------------------
+// FX DATA SANITY CHECK
+// ---------------------------------------------------------------------------
+// The price sheet stores some exchange rates TWICE over. SGD/USD, for instance, is
+// there as its own SGDUSD column and also implicitly as SGDPLN / USDPLN, because
+// every conversion routes through PLN. Two roads to the same number means the sheet
+// can be checked against itself: where the two roads disagree by more than rounding
+// noise, one of those columns is wrong, and every value converted with it is junk.
+//
+// This matters because a bad FX column is invisible in the UI — the numbers still
+// look like numbers. It shows up as a currency "move" that never happened.
+//
+// Each entry names a direct column and the two xxxPLN columns that should reproduce
+// it. Add a row here if the sheet ever gains another redundant pair.
+const FX_CROSS_CHECKS: { direct: string; numerator: string; denominator: string }[] = [
+  { direct: 'SGDUSD', numerator: 'SGDPLN', denominator: 'USDPLN' },
+];
+
+// The published CSV carries rates as DISPLAYED in the sheet, i.e. rounded to 2
+// decimals. On a number like 0.75 a single step is ~1.3%, so small gaps are normal
+// and expected; only a gap well clear of that means the data is genuinely wrong.
+const FX_CROSS_CHECK_TOLERANCE = 2; // percent
+
+interface FxDataIssue {
+  label: string;      // e.g. "SGDPLN / USDPLN vs SGDUSD"
+  rows: number;       // how many rows disagree
+  total: number;      // how many rows could be checked at all
+  firstDate: string;  // first disagreeing row
+  lastDate: string;   // last disagreeing row
+  worstPct: number;   // largest disagreement seen, in %
+}
+
+/**
+ * Runs every FX_CROSS_CHECKS entry over the price data and reports the failures.
+ * A pure function of the data — no UI, no side effects — so it is easy to reason
+ * about and cheap to re-run whenever the sheet reloads.
+ *
+ * Note it deliberately does NOT guess which of the two columns is at fault: the
+ * sheet can only tell us they contradict each other, not which one is lying.
+ */
+const findFxDataIssues = (rows: AssetRow[] | null): FxDataIssue[] => {
+  if (!rows || rows.length === 0) return [];
+  const issues: FxDataIssue[] = [];
+
+  for (const check of FX_CROSS_CHECKS) {
+    let bad = 0, total = 0, worst = 0;
+    let first = '', last = '';
+
+    for (const row of rows) {
+      const direct = Number(row[check.direct]);
+      const numerator = Number(row[check.numerator]);
+      const denominator = Number(row[check.denominator]);
+      // Skip rows where any of the three is missing — a gap is not a contradiction
+      if (!(direct > 0) || !(numerator > 0) || !(denominator > 0)) continue;
+      total++;
+
+      const gap = Math.abs((numerator / denominator) / direct - 1) * 100;
+      if (gap > FX_CROSS_CHECK_TOLERANCE) {
+        bad++;
+        if (!first) first = row.date;
+        last = row.date;
+        if (gap > worst) worst = gap;
+      }
+    }
+
+    if (bad > 0) {
+      issues.push({
+        label: `${check.numerator} / ${check.denominator} vs ${check.direct}`,
+        rows: bad,
+        total,
+        firstDate: first,
+        lastDate: last,
+        worstPct: worst,
+      });
+    }
+  }
+
+  return issues;
+};
+
+// ---------------------------------------------------------------------------
 // CHART PALETTE (Positions tab)
 // ---------------------------------------------------------------------------
 // One muted, "heritage" palette shared by every Positions chart, so the graphs
@@ -832,6 +912,11 @@ const PortfolioBacktester = () => {
   const [assetData, setAssetData] = useState<AssetRow[] | null>(null);  // Historical price data
   const [availableAssets, setAvailableAssets] = useState<string[]>([]); // List of asset names
   const [assetLookup, setAssetLookup] = useState<AssetLookup[]>([]);    // Lookup table (ticker -> name)
+
+  // Cross-check the sheet's FX columns against each other. Recomputed only when the
+  // data actually reloads, not on every re-render (it walks every row).
+  const fxDataIssues = useMemo(() => findFxDataIssues(assetData), [assetData]);
+  const [fxWarningDismissed, setFxWarningDismissed] = useState(false);  // hide the banner for this session
 
   // Portfolio configurations - start with one empty portfolio
   const [portfolios, setPortfolios] = useState<Portfolio[]>([
@@ -5918,6 +6003,33 @@ const PortfolioBacktester = () => {
               {isLoading ? 'Loading...' : 'Refresh Data'}
             </button>
           </div>
+
+          {/* FX data warning — raised when the sheet's exchange-rate columns contradict
+              each other. Amber, not red: the app still works, but any figure converted
+              through the named columns in that date range can't be trusted. */}
+          {fxDataIssues.length > 0 && !fxWarningDismissed && (
+            <div className="mb-4 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg flex items-start justify-between gap-3">
+              <div className="text-xs text-amber-900">
+                <span className="font-semibold">FX data check</span>
+                {fxDataIssues.map(issue => (
+                  <div key={issue.label} className="mt-1">
+                    <span className="font-mono">{issue.label}</span> disagree in{' '}
+                    <span className="font-semibold">{issue.rows} of {issue.total}</span> rows
+                    {' '}({issue.firstDate} to {issue.lastDate}, worst {issue.worstPct.toFixed(1)}%).
+                    {' '}One of those columns is wrong in the source sheet, so values converted
+                    to or from that currency in this period are unreliable.
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => setFxWarningDismissed(true)}
+                className="text-amber-700 hover:text-amber-900 text-xs font-semibold shrink-0"
+                title="Hide this warning until the page is reloaded"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
 
           {/* View Toggle Buttons - Only show when data is loaded */}
           {/* These act like tabs: click one to switch between the three views */}
