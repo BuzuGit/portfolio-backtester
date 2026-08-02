@@ -184,6 +184,26 @@ $repo  = $Matches[2]
 Write-Ok "$owner/$repo  ($repoRoot)"
 
 # ---------------------------------------------------------------------------
+# Talk to GitHub
+# ---------------------------------------------------------------------------
+
+Write-Step "Connecting to GitHub"
+
+$token = Get-GitHubToken
+$headers = @{
+    "Authorization"        = "Bearer $token"
+    "Accept"               = "application/vnd.github+json"
+    "X-GitHub-Api-Version" = "2022-11-28"
+    "User-Agent"           = "claude-publish-script"
+}
+
+$repoInfo = Retry -What "repo lookup" -Action {
+    Invoke-RestMethod -Uri "https://api.github.com/repos/$owner/$repo" -Headers $headers
+}
+$baseBranch = $repoInfo.default_branch
+Write-Ok "default branch is '$baseBranch'"
+
+# ---------------------------------------------------------------------------
 # Decide what to commit
 # ---------------------------------------------------------------------------
 
@@ -208,26 +228,6 @@ if (-not $staged.Out) {
 $stagedFiles = $staged.Out -split "`n"
 Write-Ok "$($stagedFiles.Count) file(s):"
 $stagedFiles | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
-
-# ---------------------------------------------------------------------------
-# Talk to GitHub
-# ---------------------------------------------------------------------------
-
-Write-Step "Connecting to GitHub"
-
-$token = Get-GitHubToken
-$headers = @{
-    "Authorization"        = "Bearer $token"
-    "Accept"               = "application/vnd.github+json"
-    "X-GitHub-Api-Version" = "2022-11-28"
-    "User-Agent"           = "claude-publish-script"
-}
-
-$repoInfo = Retry -What "repo lookup" -Action {
-    Invoke-RestMethod -Uri "https://api.github.com/repos/$owner/$repo" -Headers $headers
-}
-$baseBranch = $repoInfo.default_branch
-Write-Ok "default branch is '$baseBranch'"
 
 # ---------------------------------------------------------------------------
 # Branch and commit
