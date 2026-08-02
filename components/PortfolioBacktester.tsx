@@ -6536,8 +6536,20 @@ const PortfolioBacktester = () => {
                   // The chart runs oldest -> newest left to right; the table puts the newest year
                   // on top, matching the Returns tables further down the page.
                   const rowsNewestFirst = [...annualRows].reverse();
+                  // The FIRST portfolio is the benchmark. Every other portfolio gets an extra
+                  // "Δ" column: its return minus the benchmark's, for the same year. Because
+                  // both numbers are already percentages, the difference is in percentage
+                  // POINTS (pp) — beating 10% with 12% is +2pp, not +2%.
+                  const benchmark = backtestResults[0];
+                  const challengers = backtestResults.slice(1);  // empty when there's only one portfolio
                   return (
                     <div className="overflow-x-auto mt-3">
+                      {/* Spell out what the Δ columns mean, so nobody has to guess the direction */}
+                      {challengers.length > 0 && (
+                        <p className="text-xs text-gray-500 mb-1">
+                          Δ columns = that portfolio minus <span className="font-medium" style={{ color: benchmark.portfolio.color }}>{benchmark.portfolio.name}</span> (benchmark), in percentage points.
+                        </p>
+                      )}
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="border-b-2 border-gray-200">
@@ -6548,8 +6560,22 @@ const PortfolioBacktester = () => {
                                 key={result.portfolio.id}
                                 className="text-right py-2 px-2 bg-gray-100 font-semibold"
                                 style={{ color: result.portfolio.color }}
+                                title={result.portfolio.id === benchmark.portfolio.id && challengers.length > 0
+                                  ? 'Benchmark — the Δ columns are measured against this portfolio'
+                                  : undefined}
                               >
                                 {result.portfolio.name}
+                              </th>
+                            ))}
+                            {/* Then the Δ columns, one per non-benchmark portfolio */}
+                            {challengers.map(result => (
+                              <th
+                                key={`delta-${result.portfolio.id}`}
+                                className="text-right py-2 px-2 bg-gray-100 font-semibold border-l border-gray-300"
+                                style={{ color: result.portfolio.color }}
+                                title={`${result.portfolio.name} minus ${benchmark.portfolio.name} (benchmark), in percentage points`}
+                              >
+                                Δ {result.portfolio.name}
                               </th>
                             ))}
                           </tr>
@@ -6571,6 +6597,26 @@ const PortfolioBacktester = () => {
                                 return (
                                   <td key={result.portfolio.id} className={`text-right py-2 px-2 ${bgColor} ${textColor}`}>
                                     {ret.toFixed(2)}%
+                                  </td>
+                                );
+                              })}
+                              {/* Δ vs benchmark. Deliberately NOT shaded like the columns above —
+                                  plain coloured text plus a divider line keeps the two blocks
+                                  visually separate, so a green cell always means "beat the benchmark"
+                                  here and "made money" over there. */}
+                              {challengers.map(result => {
+                                const base = row[benchmark.portfolio.name];
+                                const own = row[result.portfolio.name];
+                                if (typeof base !== 'number' || typeof own !== 'number') {
+                                  return <td key={`delta-${result.portfolio.id}`} className="text-right py-2 px-2 text-gray-300 border-l border-gray-300">-</td>;
+                                }
+                                const delta = own - base;
+                                return (
+                                  <td
+                                    key={`delta-${result.portfolio.id}`}
+                                    className={`text-right py-2 px-2 font-medium border-l border-gray-300 ${delta >= 0 ? 'text-green-700' : 'text-red-700'}`}
+                                  >
+                                    {delta >= 0 ? '+' : ''}{delta.toFixed(2)}pp
                                   </td>
                                 );
                               })}
