@@ -859,10 +859,14 @@ const PortfolioBacktester = () => {
   const [closedInvestedInto, setClosedInvestedInto] = useState<string>('');
   // "Invested From": which sale date to use as the normalization starting point
   const [closedInvestedFrom, setClosedInvestedFrom] = useState<string>('');
-  // Chart toggle: start the chart from the first buy date instead of first available price
-  const [closedSinceInvested, setClosedSinceInvested] = useState(false);
+  // Chart toggle: start the chart from the first buy date instead of first available price.
+  // On by default — the years before you owned the asset are rarely what you came to look at.
+  const [closedSinceInvested, setClosedSinceInvested] = useState(true);
   // Chart toggle: end the chart at the last sale date instead of latest available price
   const [closedUntilSold, setClosedUntilSold] = useState(false);
+  // Chart toggle: show the all-time high/low price markers. Off by default — they're occasionally
+  // useful but they crowd the line, and the labels sit on top of the data.
+  const [closedShowMinMax, setClosedShowMinMax] = useState(false);
   // "Graph Ends": optional end date for the price chart (from last sale to last available month)
   const [closedGraphEnds, setClosedGraphEnds] = useState<string>('');
   // "Graph Starts": optional start date for the price chart (from first available data to first buy)
@@ -899,8 +903,11 @@ const PortfolioBacktester = () => {
   // Set of purchase transaction indices that are currently included (checked).
   // null = all included (default). Dividends are always included in calculations.
   const [openIncludedTxns, setOpenIncludedTxns] = useState<Set<number> | null>(null);
-  // Chart toggle: start the chart from the first buy date
-  const [openSinceInvested, setOpenSinceInvested] = useState(false);
+  // Chart toggle: start the chart from the first buy date. On by default, same reasoning as the
+  // closed-position equivalent above.
+  const [openSinceInvested, setOpenSinceInvested] = useState(true);
+  // Chart toggle: show the all-time high/low price markers. Off by default.
+  const [openShowMinMax, setOpenShowMinMax] = useState(false);
   // Toggle: show/hide the avg buy price line (dividend-adjusted) on the price chart
   const [openShowAvgBuy, setOpenShowAvgBuy] = useState(true);
   // "Invested Into" comparison: which other asset to compare against
@@ -12142,8 +12149,12 @@ const PortfolioBacktester = () => {
                                     setOpenInvestedFrom('');
                                     setOpenGraphStarts('');
                                     setOpenGraphEnds('');
-                                    setOpenSinceInvested(false);
+                                    // Opening a position resets the chart to its default view. These
+                                    // must mirror the useState defaults above — this is what actually
+                                    // decides what you see, since you always arrive here by clicking.
+                                    setOpenSinceInvested(true);
                                     setOpenShowAvgBuy(true);
+                                    setOpenShowMinMax(false);
                                   }}
                                 >
                                   <td className="py-2 px-2 text-gray-700">{row.name}</td>
@@ -12240,10 +12251,14 @@ const PortfolioBacktester = () => {
                                     setClosedInvestedFrom('');
                                     setClosedGraphEnds('');
                                     setClosedGraphStarts('');
-                                    setClosedSinceInvested(false);
+                                    // Opening a position resets the chart to its default view. These
+                                    // must mirror the useState defaults above — this is what actually
+                                    // decides what you see, since you always arrive here by clicking.
+                                    setClosedSinceInvested(true);
                                     setClosedUntilSold(false);
                                     setClosedShowAvgBuy(true);
                                     setClosedShowAvgSell(true);
+                                    setClosedShowMinMax(false);
                                   }}
                                 >
                                   <td className="py-2 px-2 text-gray-700">{row.name}</td>
@@ -12398,7 +12413,15 @@ const PortfolioBacktester = () => {
 
                     {/* --- Transactions Table --- */}
                     <div className="bg-white p-4 rounded-lg shadow mb-4">
-                      <h4 className="text-sm font-semibold text-gray-700 mb-3">Transactions</h4>
+                      {/* The valuation price and date are identical on every row — the asset's latest
+                          price, as of today. They belong in the heading, said once, rather than as
+                          two columns repeating the same pair of values down the whole table. */}
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">
+                        Transactions
+                        <span className="font-normal text-gray-500">
+                          {' '}(current price of {currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} as of {todayStr})
+                        </span>
+                      </h4>
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs border-collapse">
                           <thead>
@@ -12420,14 +12443,12 @@ const PortfolioBacktester = () => {
                                 />
                               </th>
                               <th className="text-left py-1.5 px-2 bg-gray-50">Type</th>
-                              <th className="text-left py-1.5 px-2 bg-gray-50">Inv Date</th>
-                              <th className="text-left py-1.5 px-2 bg-gray-50">Valuation Date</th>
+                              <th className="text-left py-1.5 px-2 bg-gray-50 whitespace-nowrap">Inv Date</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50" title="How long the position has been held: days, with the same span in years in brackets.">Holding</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Shares</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Buy Price</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50" title="Commission paid to buy, with its size in basis points of the gross purchase value. 1 bp = 0.01%.">Buy Comm.</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Initial Cost</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-50">Valuation Price</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Current Value</th>
                               <th className="text-right py-1.5 px-2 bg-gray-50">Cum. Div</th>
                               <th className="text-right py-1.5 px-2 bg-gray-100">Total Return</th>
@@ -12443,12 +12464,10 @@ const PortfolioBacktester = () => {
                                   <tr key={`div-${rowIdx}`} className="border-b border-gray-50 bg-amber-50/40">
                                     <td className="py-1.5 px-2"></td>
                                     <td className="py-1.5 px-2 text-amber-700 font-medium">Dividend</td>
-                                    <td className="py-1.5 px-2 font-mono">{row.data.date}</td>
-                                    {/* Valuation Date + Holding — not meaningful for a dividend */}
-                                    <td className="py-1.5 px-2"></td>
+                                    <td className="py-1.5 px-2 font-mono whitespace-nowrap">{row.data.date}</td>
+                                    {/* Holding — not meaningful for a dividend */}
                                     <td className="py-1.5 px-2"></td>
                                     <td className="text-right py-1.5 px-2 text-gray-400 font-mono">{row.data.qty.toLocaleString()}</td>
-                                    <td className="py-1.5 px-2"></td>
                                     <td className="py-1.5 px-2"></td>
                                     <td className="py-1.5 px-2"></td>
                                     <td className="py-1.5 px-2"></td>
@@ -12500,8 +12519,7 @@ const PortfolioBacktester = () => {
                                     />
                                   </td>
                                   <td className="py-1.5 px-2 text-green-700 font-medium">Purchase</td>
-                                  <td className="py-1.5 px-2 font-mono">{t.date}</td>
-                                  <td className="py-1.5 px-2 font-mono">{todayStr}</td>
+                                  <td className="py-1.5 px-2 font-mono whitespace-nowrap">{t.date}</td>
                                   {/* Holding period: days with years in brackets, e.g. "607 (1.7y)" */}
                                   <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
                                     {holdDays.toLocaleString()}
@@ -12517,7 +12535,6 @@ const PortfolioBacktester = () => {
                                     )}
                                   </td>
                                   <td className="text-right py-1.5 px-2 font-mono">{t.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                  <td className="text-right py-1.5 px-2 font-mono">{currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
                                   <td className="text-right py-1.5 px-2 font-mono">{currentVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className="text-right py-1.5 px-2 font-mono">—</td>
                                   <td className={`text-right py-1.5 px-2 font-mono font-medium ${totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -12550,7 +12567,6 @@ const PortfolioBacktester = () => {
                                 <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
                                   <td className="py-2 px-2"></td>
                                   <td className="py-2 px-2 text-left text-gray-700" colSpan={2}>Summary</td>
-                                  <td className="py-2 px-2"></td>
                                   {/* Holding — longest span, days with years in brackets */}
                                   <td className="text-right py-2 px-2 font-mono whitespace-nowrap">
                                     {maxDays.toLocaleString()}
@@ -12563,7 +12579,6 @@ const PortfolioBacktester = () => {
                                     {(sumCost - sumBuyComm) > 0 && <span className="text-gray-500 font-normal"> ({Math.round(sumBuyComm / (sumCost - sumBuyComm) * 10000)}bps)</span>}
                                   </td>
                                   <td className="text-right py-2 px-2 font-mono">{sumCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">{sumCurrentVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className="text-right py-2 px-2 font-mono">{sumDividends.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className={`text-right py-2 px-2 font-mono ${sumReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -12605,6 +12620,17 @@ const PortfolioBacktester = () => {
                           }`}
                         >
                           Avg Buy (Div Adj)
+                        </button>
+
+                        {/* Shows the all-time high/low markers on the price line. Off by default. */}
+                        <button
+                          onClick={() => setOpenShowMinMax(!openShowMinMax)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                            openShowMinMax ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-gray-300 hover:bg-gray-100'
+                          }`}
+                          title="Show or hide the highest and lowest price markers on the chart"
+                        >
+                          Min/Max
                         </button>
 
                         <div className="border-l border-gray-300 h-6 mx-1" />
@@ -12785,11 +12811,11 @@ const PortfolioBacktester = () => {
                                 {openShowAvgBuy && (
                                   <Line type="stepAfter" dataKey="avgBuyPrice" name="Avg Buy (Div Adj)" stroke={CHART_PALETTE.olive} strokeWidth={1.5} dot={false} strokeDasharray="6 3" connectNulls />
                                 )}
-                                {maxPricePoint && (
+                                {openShowMinMax && maxPricePoint && (
                                   <ReferenceDot x={maxPricePoint.date} y={maxPricePoint.price} r={9} fill={CHART_PALETTE.blue} stroke="#fff" strokeWidth={2}
                                     label={{ value: maxPricePoint.price.toFixed(2), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                 )}
-                                {minPricePoint && (
+                                {openShowMinMax && minPricePoint && (
                                   <ReferenceDot x={minPricePoint.date} y={minPricePoint.price} r={9} fill={CHART_PALETTE.rose} stroke="#fff" strokeWidth={2}
                                     label={{ value: minPricePoint.price.toFixed(2), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                 )}
@@ -12811,14 +12837,18 @@ const PortfolioBacktester = () => {
                           <div className="w-3 h-3 rounded-full bg-green-500"></div>
                           <span>Buy month</span>
                         </div>
-                        <div className="flex items-center gap-1">
-                          <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                          <span>Max price</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                          <span>Min price</span>
-                        </div>
+                        {openShowMinMax && (
+                          <>
+                            <div className="flex items-center gap-1">
+                              <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                              <span>Max price</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                              <span>Min price</span>
+                            </div>
+                          </>
+                        )}
                       </div>
 
                       {/* --- Shares Held bar chart ---
@@ -13355,6 +13385,19 @@ const PortfolioBacktester = () => {
                           Until Sold
                         </button>
 
+                        {/* Shows the all-time high/low markers on the price line. Off by default. */}
+                        <button
+                          onClick={() => setClosedShowMinMax(!closedShowMinMax)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                            closedShowMinMax
+                              ? 'bg-slate-800 text-white border-slate-800'
+                              : 'bg-white border-gray-300 hover:bg-gray-100'
+                          }`}
+                          title="Show or hide the highest and lowest price markers on the chart"
+                        >
+                          Min/Max
+                        </button>
+
                         {/* Avg Buy Price toggle — shows/hides the green dashed avg buy line */}
                         <button
                           onClick={() => setClosedShowAvgBuy(!closedShowAvgBuy)}
@@ -13668,7 +13711,7 @@ const PortfolioBacktester = () => {
                                appear on top when they overlap. Larger radius (r=9) creates
                                a visible ring around any overlapping buy/sell dot (r=6). */}
                             {/* Steel-blue dot at highest price */}
-                            {maxPricePoint && (
+                            {closedShowMinMax && maxPricePoint && (
                               <ReferenceDot
                                 x={maxPricePoint.date}
                                 y={maxPricePoint.price}
@@ -13686,7 +13729,7 @@ const PortfolioBacktester = () => {
                               />
                             )}
                             {/* Dusty-rose dot at lowest price */}
-                            {minPricePoint && (
+                            {closedShowMinMax && minPricePoint && (
                               <ReferenceDot
                                 x={minPricePoint.date}
                                 y={minPricePoint.price}
@@ -13747,14 +13790,18 @@ const PortfolioBacktester = () => {
                           <div className="w-3 h-3 rounded-full bg-red-500"></div>
                           <span>Sell month</span>
                         </div>
-                        <div className="flex items-center gap-1">
-                          <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                          <span>Max price</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                          <span>Min price</span>
-                        </div>
+                        {closedShowMinMax && (
+                          <>
+                            <div className="flex items-center gap-1">
+                              <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                              <span>Max price</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                              <span>Min price</span>
+                            </div>
+                          </>
+                        )}
                       </div>
 
                       {/* --- Shares Held bar chart ---

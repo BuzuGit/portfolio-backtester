@@ -670,6 +670,38 @@ Nobody would have noticed without the typo. The two definitions had coexisted fo
 
 And the tiebreaker when two definitions compete: prefer the one derived from the value the rest of the system already depends on. Here that's cost, which drives every calculation, over price, which is only ever displayed.
 
+### 21. The Default That Was Never Used
+
+**The ask:** have the price chart open with "Since Invested" already on.
+
+**The obvious one-word change:**
+
+```js
+const [openSinceInvested, setOpenSinceInvested] = useState(false);  // -> true
+```
+
+Made it, reloaded, and the button was still off.
+
+**The wrong diagnosis, nearly acted on.** My first thought was a stale bundle — dev server hadn't recompiled, browser served cache. That's the familiar explanation and it's usually right. But the *new* Min/Max button added in the same edit was rendering perfectly, which proved the running code was current. One observation killed the theory before it wasted twenty minutes.
+
+**The real cause,** found by grepping for every writer of that state rather than trusting the declaration:
+
+```js
+onClick={() => {              // clicking a position row
+  setOpenSelectedTicker(row.ticker);
+  ...
+  setOpenSinceInvested(false);   // <- resets the chart for a clean slate
+}}
+```
+
+The row click deliberately resets every chart toggle so each position opens predictably. And since you can *only* reach the detail view by clicking a row, that reset always runs. **The `useState` default was dead code** — it described the state of a screen no user ever sees.
+
+**The lesson.** `useState(x)` sets the value the component is *born* with, not the value it *shows*. Any state that gets reassigned on the way into a view has its real default at the reassignment, not the declaration. So when a default won't take, don't stare at the initialiser — **grep every writer of that variable**. `grep -n "setOpenSinceInvested"` returned four lines and the answer was on line three.
+
+The two now sit in the same file with a comment at each reset site saying they must mirror each other. That's a duplication, and duplication drifts — but the alternative (a shared defaults object) is more machinery than four booleans deserve. Worth revisiting only if a fifth toggle appears.
+
+**And the wider point, which cost nothing this time only because I checked:** this would have shipped looking correct in review. The diff was one word, the word was right, TypeScript was happy, and the feature did not work. **Reading the code you changed tells you nothing about the code that changes it back.**
+
 **Practical note on the same change:** merging two table columns into one silently shifts every cell to its right, and this table had four separate places emitting rows — header, normal rows, dividend rows, and a summary `<tfoot>` with `colSpan`. Checking it by eye would have missed a mismatch three columns deep. Counting instead is trivial and conclusive:
 
 ```js
