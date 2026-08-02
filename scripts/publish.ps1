@@ -55,7 +55,10 @@ param(
     # Rehearses everything that happens on your machine - staging, branching, committing - and
     # checks GitHub is reachable, then undoes it all and reports what it WOULD have published.
     # Nothing is pushed. Use it when you want to see the plan before committing to it.
-    [switch]$DryRun
+    [switch]$DryRun,
+    # Skip waiting for the Vercel build. Publishing is meant to end with the change actually
+    # live, so by default we wait and report whether the deployment succeeded.
+    [switch]$NoWait
 )
 
 $ErrorActionPreference = "Stop"
@@ -319,10 +322,72 @@ $null = Retry -What "remote branch delete" -Action { Invoke-Git push origin --de
 $local  = (Invoke-Git rev-parse HEAD).Out
 $remoteHead = (Invoke-Git rev-parse "origin/$baseBranch").Out
 
+if ($local -ne $remoteHead) {
+    Fail "Merged, but local $baseBranch ($local) does not match origin ($remoteHead). Run 'git pull' and check."
+}
+
+# ---------------------------------------------------------------------------
+# Wait for the deployment
+# ---------------------------------------------------------------------------
+# Merging is not the same as being live. Vercel builds after the merge and can fail on
+# something a local typecheck never sees, which would sit broken in production unnoticed.
+# Vercel reports build status back to GitHub as a commit status, so we can watch the merge
+# commit through the API we already have a token for -- no separate Vercel login needed.
+# Repos with no deployment hooked up (CashFlowsTracker) simply report nothing, and we say so.
+
+$deployState = "skipped"
+$deployUrl = ""
+
+if (-not $NoWait) {
+    Write-Step "Waiting for the deployment"
+    $deadline = (Get-Date).AddMinutes(5)
+    $emptyPolls = 0
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 10
+        $status = $null
+        try {
+            $status = Invoke-RestMethod -Uri "https://api.github.com/repos/$owner/$repo/commits/$local/status" -Headers $headers
+        } catch {
+            continue   # transient DNS or rate limit; just poll again
+        }
+        if ($status.total_count -eq 0) {
+            # Give it a little while in case the hook has not posted yet, then conclude
+            # this repo simply has no deployment wired up.
+            $emptyPolls++
+            if ($emptyPolls -ge 3) { $deployState = "none"; break }
+            continue
+        }
+        if ($status.state -ne "pending") {
+            $deployState = $status.state
+            $target = $status.statuses | Where-Object { $_.target_url } | Select-Object -First 1
+            if ($target) { $deployUrl = $target.target_url }
+            break
+        }
+        Write-Host "    building..." -ForegroundColor DarkGray
+    }
+    if ($deployState -eq "skipped") { $deployState = "timeout" }
+}
+
 Write-Host ""
-if ($local -eq $remoteHead) {
-    Write-Host "Done. $baseBranch is at $((Invoke-Git rev-parse --short HEAD).Out) locally and on GitHub." -ForegroundColor Green
-    Write-Host "  $($pr.html_url)" -ForegroundColor Green
-} else {
-    Fail "Merged, but local $baseBranch ($local) does not match origin ($remoteHead). Run 'Invoke-Git pull' and check."
+Write-Host "Done. $baseBranch is at $((Invoke-Git rev-parse --short HEAD).Out) locally and on GitHub." -ForegroundColor Green
+Write-Host "  $($pr.html_url)" -ForegroundColor Green
+
+switch ($deployState) {
+    "success" {
+        Write-Host "  Deployment succeeded - the change is live." -ForegroundColor Green
+        if ($deployUrl) { Write-Host "  $deployUrl" -ForegroundColor Green }
+    }
+    "failure" {
+        Write-Host "  DEPLOYMENT FAILED - the merge is on GitHub but the site did NOT update." -ForegroundColor Red
+        if ($deployUrl) { Write-Host "  $deployUrl" -ForegroundColor Red }
+        exit 1
+    }
+    "error" {
+        Write-Host "  DEPLOYMENT ERRORED - the merge is on GitHub but the site did NOT update." -ForegroundColor Red
+        if ($deployUrl) { Write-Host "  $deployUrl" -ForegroundColor Red }
+        exit 1
+    }
+    "none"    { Write-Host "  No deployment is wired up for this repo, so nothing to wait for." -ForegroundColor DarkGray }
+    "timeout" { Write-Host "  Deployment still building after 5 minutes - check Vercel." -ForegroundColor Yellow }
+    "skipped" { Write-Host "  Skipped the deployment check (-NoWait)." -ForegroundColor DarkGray }
 }
