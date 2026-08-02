@@ -660,7 +660,26 @@ const FX_CROSS_CHECKS: { direct: string; numerator: string; denominator: string 
 // The published CSV carries rates as DISPLAYED in the sheet, i.e. rounded to 2
 // decimals. On a number like 0.75 a single step is ~1.3%, so small gaps are normal
 // and expected; only a gap well clear of that means the data is genuinely wrong.
-const FX_CROSS_CHECK_TOLERANCE = 2; // percent
+//
+// Why 3% and not something tighter: the check divides three separately sourced
+// numbers, and each can sit ~1% away from another provider's rate purely because of
+// when in the day it was sampled. Those differences compound, so the honest noise
+// floor is around 2%. Verified against the NBP official fixing on 2026-08-02: at 2%
+// this flagged two 2011-2012 rows whose columns were each within 1.6% of NBP — real
+// data, false alarm. A permanently-lit warning is worse than none, because you learn
+// to ignore it. 3% still catches genuine corruption by a mile (the SGDPLN column was
+// out by 5-9% at year-ends, and up to 28.7% on individual rows).
+const FX_CROSS_CHECK_TOLERANCE = 3; // percent
+
+// A per-row tolerance alone isn't enough, because a single volatile day can breach any
+// threshold honestly: on 2012-06-29 the zloty rallied hard through the afternoon, so a
+// closing rate legitimately sits 1.6% from NBP's 11:00 fixing, and three such columns
+// compound past 3%. Raising the tolerance until that goes quiet would just blind the
+// check. Instead, only report failures that look SYSTEMATIC (a pattern across rows) or
+// SEVERE (one row so far out it can't be a timing difference). Corrupt data trips both
+// — the 12-month-shifted SGDPLN column failed 140 rows and peaked at 28.7%.
+const FX_MIN_BAD_ROWS = 3;      // isolated one-off days are timing noise, not corruption
+const FX_SEVERE_GAP = 10;       // percent — no sampling difference explains this
 
 interface FxDataIssue {
   label: string;      // e.g. "SGDPLN / USDPLN vs SGDUSD"
@@ -704,7 +723,8 @@ const findFxDataIssues = (rows: AssetRow[] | null): FxDataIssue[] => {
       }
     }
 
-    if (bad > 0) {
+    // Only raise it if the failures are systematic or severe (see the constants above)
+    if (bad >= FX_MIN_BAD_ROWS || worst > FX_SEVERE_GAP) {
       issues.push({
         label: `${check.numerator} / ${check.denominator} vs ${check.direct}`,
         rows: bad,
