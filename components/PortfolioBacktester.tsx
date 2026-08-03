@@ -19,7 +19,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
-import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_SALE, FLOW_DIVIDEND } from '@/lib/fetchData';
+import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, LedgerRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
+import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom } from '@/lib/positions';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -34,21 +35,6 @@ const toYM = (d: Date): string =>
 const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 /** Full month names, used by the Monthly tab seasonality (loss-rate) screen. */
 const MONTH_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-
-/**
- * Derive the list of "open" tickers from transaction data.
- * A ticker is open if it has at least one purchase but NO sale entries.
- * Pure function — takes the raw transactions array and returns ticker strings.
- */
-const computeOpenTickers = (txns: TransactionRow[]): string[] => {
-  const purchaseTickers = new Set(
-    txns.filter(t => t.flow === FLOW_PURCHASE).map(t => t.ticker)
-  );
-  const soldTickers = new Set(
-    txns.filter(t => t.flow === FLOW_SALE).map(t => t.ticker)
-  );
-  return Array.from(purchaseTickers).filter(ticker => !soldTickers.has(ticker));
-};
 
 /**
  * Compute the zero-crossing fraction for a PnL gradient.
@@ -1071,6 +1057,14 @@ const PortfolioBacktester = () => {
   // ---- Open Positions state ----
   // Raw transaction data from the "Data" sheet (purchases, dividends, sales for all assets)
   const [transactionData, setTransactionData] = useState<TransactionRow[]>([]);
+  // The full ledger (Transactions tab). Everything the Positions tab shows is derived
+  // from this; the old Open/Exit tabs are only a fallback until they're deleted.
+  //
+  // The derived open positions / round trips / warnings are computed ONCE at load and
+  // then fed into `transactionData` and `closedData` in the shapes those screens already
+  // expect — so the Positions and Portfolio tabs needed no rewiring, only a new source.
+  const [ledgerData, setLedgerData] = useState<LedgerRow[]>([]);
+  const [positionsModel, setPositionsModel] = useState<ReturnType<typeof buildPositions> | null>(null);
   // ---- Daily NAV chart state ----
   const [dailyData, setDailyData] = useState<DailyNavRow[]>([]);
   const [dailyNavCurrency, setDailyNavCurrency] = useState<'PLN' | 'USD' | 'SGD'>('PLN');
@@ -1189,9 +1183,18 @@ const PortfolioBacktester = () => {
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
   // ----------------------------------------
-  // useEffect runs code when the component first appears ("mounts")
-  // The empty array [] means "run once when component loads"
+  // useEffect runs code when the component first appears ("mounts").
+  //
+  // The ref guard matters: next.config.js sets reactStrictMode, which makes React
+  // deliberately run mount effects TWICE in development to surface bugs. Without the
+  // guard that fired two full loads, so every sheet was downloaded twice — and Google
+  // throttles parallel requests to the same document, so the duplicates did not just
+  // waste bandwidth, they slowed the real ones down. Production only mounts once, but
+  // there is no reason to do the work twice in development either.
+  const hasLoadedRef = useRef(false);
   useEffect(() => {
+    if (hasLoadedRef.current) return;
+    hasLoadedRef.current = true;
     loadDataFromSheet();
   }, []);
 
@@ -1209,20 +1212,40 @@ const PortfolioBacktester = () => {
 
     try {
       // Fetch and parse the CSV data from all sheets
-      const { data, assets, lookup, yearsData: fetchedYearsData, closedData: fetchedClosedData, transactionData: fetchedTransactionData, dailyData: fetchedDailyData } = await fetchSheetData();
+      const { data, assets, lookup, yearsData: fetchedYearsData, dailyData: fetchedDailyData, ledgerData: fetchedLedgerData } = await fetchSheetData();
+
+      // ---- Derive positions from the ledger -------------------------------
+      // Replay the Transactions tab to work out what is still held, what was sold,
+      // and which dividends belong to which shares. Only tickers in the lookup table
+      // are reported — anything left out of it is deliberately not an investment we
+      // want to see. This is the single source now: the old Open/Exit tabs are gone.
+      const allowedTickers = new Set(lookup.map(a => a.ticker));
+      const model = buildPositions(fetchedLedgerData, allowedTickers);
+      const effectiveTransactions = toTransactionRows(fetchedLedgerData, allowedTickers);
+      const effectiveClosed = toClosedPositionRows(model);
+      if (fetchedLedgerData.length === 0) {
+        console.warn('Ledger is empty — the Positions tab will have nothing to show');
+      } else {
+        console.log(`Ledger: ${model.open.length} open, ${closedTickersFrom(model).length} closed, `
+          + `${model.roundTrips.length} round trips, ${model.warnings.length} warning(s)`);
+      }
 
       // Update all our state with the new data
       setAssetData(data);
       setAvailableAssets(assets);
       setAssetLookup(lookup);
       setYearsData(fetchedYearsData);
-      setClosedData(fetchedClosedData);
-      setTransactionData(fetchedTransactionData);
+      setLedgerData(fetchedLedgerData);
+      setPositionsModel(model);
+      setClosedData(effectiveClosed);
+      setTransactionData(effectiveTransactions);
       setDailyData(fetchedDailyData);
       // Auto-select all position tickers (both open and closed) by default
-      const closedTickers = new Set(fetchedClosedData.map((row: ClosedPositionRow) => row.ticker));
-      // Open tickers: have purchases in transaction data but NO "Proceeds from Sale" entries
-      const openTickers = new Set(computeOpenTickers(fetchedTransactionData));
+      const closedTickers = new Set(effectiveClosed.map((row: ClosedPositionRow) => row.ticker));
+      // Open tickers come from the ledger replay, which correctly keeps a position open
+      // when it was only PARTLY sold. The old rule — "bought and never sold" — dropped
+      // those entirely, which is what hid BCASH, MBHTR and ETHSGD.
+      const openTickers = new Set(model.open.map(o => o.ticker));
       const allPositionTickers = new Set([...Array.from(closedTickers), ...Array.from(openTickers)]);
       setClosedSelectedTickers(lookup.filter(a => allPositionTickers.has(a.ticker)).map(a => a.ticker));
       setIsConnected(true);
@@ -1657,10 +1680,29 @@ const PortfolioBacktester = () => {
     return events;
   };
 
-  /** Chronological order; a buy and a sell on the same date list the buy first, matching the
-   *  ordering the FIFO cost-basis calculations use everywhere else in this file. */
+  /**
+   * Chronological order, with two tie-breaks for events sharing a date:
+   *
+   *  1. Buys before sells, matching the FIFO cost-basis ordering used everywhere else.
+   *  2. Among buys, the part that was SOLD comes before the part still held.
+   *
+   * Rule 2 exists because one purchase can be split in two. MBHTR was bought 30,000 on
+   * 2026-01-20; a later sale consumed 5,000 of it, so the table shows a sold 5,000 row
+   * and a surviving 25,000 row on that same date. Listing the survivor first interleaves
+   * them — sold, held, sold, held — and you have to read every row to see what you still
+   * own. Sold-first groups them: sold, sold, held, held.
+   *
+   * The old comparator returned -1 for ANY two buys, which is not a valid ordering (it
+   * claims a < b and b < a simultaneously), so which one landed first was arbitrary.
+   */
   const sortTradeEvents = (events: TradeEvent[]) =>
-    events.sort((a, b) => a.date.localeCompare(b.date) || (a.type === 'buy' ? -1 : 1));
+    events.sort((a, b) => {
+      const byDate = a.date.localeCompare(b.date);
+      if (byDate !== 0) return byDate;
+      if (a.type !== b.type) return a.type === 'buy' ? -1 : 1;
+      if (a.type === 'buy') return Number(a.stillHeld) - Number(b.stillHeld);
+      return 0;
+    });
 
   /** Trade history for a CLOSED position: every round trip, split back into real events. */
   const getClosedTradeEvents = (ticker: string): TradeEvent[] => {
@@ -2155,10 +2197,16 @@ const PortfolioBacktester = () => {
   // computing stats, building chart data — all from raw transaction data.
 
   /**
-   * Returns tickers that are "open" — they have purchases in the transaction data
-   * but NO "Proceeds from Sale" entries (i.e., no shares have been sold).
+   * Returns tickers that are still "open" — shares are still held today.
+   *
+   * This comes from replaying every buy and sell, so a position that was only PARTLY
+   * sold stays open for the shares that remain. The rule this replaced — "bought and
+   * never sold" — got that wrong: selling a single share made the whole holding vanish
+   * from Open Positions, which is what hid BCASH, MBHTR and ETHSGD.
+   *
+   * Empty until the ledger has loaded.
    */
-  const getOpenTickers = (): string[] => computeOpenTickers(transactionData);
+  const getOpenTickers = (): string[] => positionsModel?.open.map(o => o.ticker) ?? [];
 
   /**
    * Returns assets that exist in BOTH the lookup table AND either closed or open positions.
@@ -2170,15 +2218,64 @@ const PortfolioBacktester = () => {
     return assetLookup.filter(asset => closedTickers.has(asset.ticker) || openTickers.has(asset.ticker));
   };
 
-  /** Returns all purchase transaction rows for an open ticker, sorted by date. */
+  /**
+   * Returns the purchase rows that make up an open position, sorted by date.
+   *
+   * Two things this must get right, both of which broke when the ledger arrived:
+   *
+   *  1. These are the SURVIVING lots, not every purchase ever made. BCASH was bought
+   *     4,054 units over time and 589 sold, so listing every purchase would claim
+   *     4,054 are held when only 3,465 are.
+   *  2. A ticker with nothing left open returns NOTHING. The ledger still holds the
+   *     original buy rows of assets sold years ago; treating those as open lots
+   *     resurrects sold holdings.
+   *
+   * Commission comes back with each lot. It is already inside `amount`, so it is there
+   * to be displayed, never to be added on top.
+   */
   const getOpenPurchases = (ticker: string): TransactionRow[] => {
+    if (positionsModel) {
+      const pos = positionsModel.open.find(o => o.ticker === ticker);
+      if (!pos) return [];
+      return pos.lots.map(l => ({
+        date: l.date, fx: pos.currency, qty: l.qty,
+        commAbs: l.commission, commBps: l.commissionBps,
+        amount: l.cost, asset: pos.asset, flow: FLOW_PURCHASE, ticker,
+        // Each lot keeps the account it was actually bought in — ETHSGD spans
+        // BinanceSG and Gemini, so a single per-position account would mislabel half.
+        account: l.account,
+      }));
+    }
+    // Fallback for when the ledger didn't load and we're on the old Open/Exit tabs
     return transactionData
       .filter(t => t.ticker === ticker && t.flow === FLOW_PURCHASE)
       .sort((a, b) => a.date.localeCompare(b.date));
   };
 
-  /** Returns all dividend transaction rows for a ticker, sorted by date. */
+  /**
+   * Returns the dividends the CURRENTLY HELD shares actually earned, sorted by date.
+   *
+   * This is not the asset's full payment history. If you bought MBHTR in 2021, sold
+   * those shares, and bought again in 2025, the 2021 dividends belong to the shares you
+   * no longer own — they went out with the round trips. Listing them against today's
+   * holding would be meaningless and would double-count the income, since the Closed
+   * section reports it too.
+   *
+   * The lot replay already tracked which payment reached which shares, so this simply
+   * reads that back.
+   */
   const getOpenDividends = (ticker: string): TransactionRow[] => {
+    if (positionsModel) {
+      const pos = positionsModel.open.find(o => o.ticker === ticker);
+      // Nothing open means no income belongs here — it all left with the round trips.
+      // Falling through to the raw ledger instead would report a closed position's
+      // entire dividend history a second time, on top of what the round trips carry.
+      if (!pos) return [];
+      return pos.incomeEvents.map(e => ({
+        date: e.date, fx: pos.currency, qty: 0, commAbs: 0, commBps: 0,
+        amount: e.amount, asset: pos.asset, flow: FLOW_DIVIDEND, ticker, account: '',
+      }));
+    }
     return transactionData
       .filter(t => t.ticker === ticker && t.flow === FLOW_DIVIDEND)
       .sort((a, b) => a.date.localeCompare(b.date));
@@ -4798,9 +4895,16 @@ const PortfolioBacktester = () => {
       if (!isPriced(ticker)) continue; // unpriced assets → left for "Other"
 
       const native = getAssetCurrency(ticker);
-      const openLots = transactionData.filter(t => t.ticker === ticker && t.flow === FLOW_PURCHASE);
+      // Only lots that are STILL HELD. Anything sold is accounted for by closedLots
+      // below, which knows the sale year and drops the lot from years after it. Reading
+      // raw purchase rows here instead would book a 2020 purchase of a holding sold in
+      // 2025 as "held from start" of 2026 — an asset that contributed nothing that year.
+      const openLots = getOpenPurchases(ticker);
       const closedLots = closedData.filter(c => c.ticker === ticker);
-      const dividends = transactionData.filter(t => t.ticker === ticker && t.flow === FLOW_DIVIDEND);
+      // Income on the shares still held. Payments that belonged to sold shares travel
+      // with their round trip and are spread over the holding period further down, so
+      // taking every dividend row here would count them twice.
+      const dividends = getOpenDividends(ticker);
 
       // Native prices + FX at the two year boundaries.
       const pPrev = prevYearEndRow ? Number(prevYearEndRow[ticker]) || 0 : 0; // 31 Dec Y−1
@@ -4872,9 +4976,19 @@ const PortfolioBacktester = () => {
           }
         }
 
-        // Dividends/interest for this sold lot: spread the lifetime total across
-        // the months held and take year Y's share (cash, so no scale guard needed).
-        if (c.cumDividend) {
+        // Dividends/interest for this sold lot.
+        // Preferred: the actual payments, on the dates they were actually paid — the
+        // ledger records them, so year Y gets exactly what year Y received.
+        // Fallback (legacy Exit tab, which only stored a lifetime total): spread that
+        // total evenly across the months held and take year Y's share. That estimate
+        // is why 2023 used to read 935 for ES3TR when the real figure was 1,064.
+        if (c.incomeEvents) {
+          for (const e of c.incomeEvents) {
+            if (!e.date.startsWith(`${year}-`)) continue;
+            incN += e.amount;
+            incC += cashAt(e.date.slice(0, 7), native, e.amount);
+          }
+        } else if (c.cumDividend) {
           const months = monthsInclusive(c.invDate, c.divDate);
           if (months.length > 0) {
             const k = months.filter(ym => ym.startsWith(`${year}-`)).length;

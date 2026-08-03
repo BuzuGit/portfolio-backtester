@@ -21,12 +21,18 @@ const SHEET_BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM
 const DATA_SHEET_URL = `${SHEET_BASE_URL}?gid=0&output=csv`;
 const LOOKUP_SHEET_URL = `${SHEET_BASE_URL}?gid=166035960&output=csv`;
 const YEARS_SHEET_URL = `${SHEET_BASE_URL}?gid=2044431115&output=csv`;
-// gid=2134130819 is the Closed tab (buy/sell transactions for closed positions)
-const CLOSED_SHEET_URL = `${SHEET_BASE_URL}?gid=2134130819&output=csv`;
-// gid=1857187976 is the Data tab (raw transactions: purchases, dividends, sales)
-const TRANSACTIONS_SHEET_URL = `${SHEET_BASE_URL}?gid=1760382748&output=csv`;
+// NOTE: the old "Open" (gid=1760382748) and "Exit" (gid=2134130819) tabs were deleted
+// in Aug 2026. Open positions and closed round trips are now DERIVED from the full
+// ledger below by lib/positions.ts. Do not re-add fetches for them: a deleted tab
+// answers 400 on every request, which cost ~800ms each and used up two of the six
+// connections the browser will open to a single host.
 // gid=882618775 is the Daily tab (daily portfolio NAV + inflation indices per currency)
 const DAILY_SHEET_URL = `${SHEET_BASE_URL}?gid=882618775&output=csv`;
+// gid=378728363 is the Transactions tab — the COMPLETE ledger: every buy, sell, dividend,
+// interest payment, cash inflow and transfer since 2014. This is what the Positions tab is
+// built from now; open positions and closed round trips are DERIVED from it rather than
+// read from the hand-maintained Open/Exit tabs.
+const LEDGER_SHEET_URL = `${SHEET_BASE_URL}?gid=378728363&output=csv`;
 
 // Type definitions - these describe the shape of our data
 // (TypeScript uses these to catch errors and provide autocomplete)
@@ -137,6 +143,12 @@ export interface ClosedPositionRow {
   totalTax: number;             // Total tax paid on the transaction
   proceedsFromSale: number;     // Net proceeds from sale after tax
   finalNetValue: number;        // Final net value including dividends
+  // When the rows come from the ledger, the individual dividend payments behind
+  // `cumDividend`, with their real dates. The old Exit tab could not supply these —
+  // it only stored a lifetime total — which is why year-by-year views had to smear
+  // that total evenly across the holding period. Left undefined by the legacy parser
+  // so those views can fall back to smearing.
+  incomeEvents?: { date: string; amount: number }[];
   // Computed fields (calculated during parsing):
   totalReturn: number;          // finalNetValue - initialCost (profit/loss in currency)
   totalReturnPct: number;       // (totalReturn / initialCost) × 100
@@ -181,14 +193,136 @@ export interface DailyNavRow {
   ddSgd: number;    // "DD SGD"    — daily drawdown in SGD (0 to -100)
 }
 
+// ---------------------------------------------------------------------------
+// THE LEDGER (Transactions tab)
+// ---------------------------------------------------------------------------
+// One row per event. Unlike the old Open/Exit tabs, nothing here is pre-computed:
+// whether a position is open, closed or half-sold has to be worked out by walking
+// the rows in date order. See lib/positions.ts for that.
+export interface LedgerRow {
+  date: string;        // normalized to YYYY-MM-DD (the sheet writes YYYY/MM/DD)
+  currency: string;    // "SGD", "USD", "PLN"
+  qty: number;         // share/unit count (0 when the sheet leaves it blank)
+  price: number;       // per-unit price
+  amount: number;      // cash value of the event, in `currency`.
+                       // NOTE: commission is ALREADY inside this figure — a purchase's
+                       // Amount is qty x price PLUS commission, a sale's is qty x price
+                       // MINUS it. Never add or subtract `commission` from this again.
+  commission: number;  // "Comm /adj" — absolute commission paid, in `currency`
+  commissionBps: number; // "Comm (bps)" — the sheet's own bps figure
+  costBasis: number;   // the sheet's own cost basis for a sale (0 when absent)
+  asset: string;       // full asset name — the reliable grouping key
+  ticker: string;      // may be blank; "UST T-Bill" is reused by two different bills
+  flow: string;        // see LEDGER_FLOW_* below
+  account: string;     // "Flow to account:"
+  remarks: string;
+}
+
+// Flow types seen in the ledger. Only the first four touch a position; the rest are
+// cash bookkeeping (moving money between accounts, contributions, fees).
+export const LEDGER_PURCHASE = 'Purchase of Asset';
+export const LEDGER_SALE     = 'Proceeds from Sale';
+export const LEDGER_DIVIDEND = 'Dividend';
+export const LEDGER_INTEREST = 'Interest';   // coupon on savings bonds — income, like a dividend
+export const LEDGER_INFLOW   = 'Inflow';     // usually cash, but ALSO how some holdings were acquired
+
 export interface ParsedData {
   data: AssetRow[];           // Array of rows, each with date and asset prices
   assets: string[];           // List of asset names found in the CSV
   lookup: AssetLookup[];      // Lookup table with ticker-to-name mappings
   yearsData: YearsRow[];      // Annual portfolio summary (from Years sheet)
-  closedData: ClosedPositionRow[];  // Closed position transactions (from Closed sheet)
-  transactionData: TransactionRow[];  // Raw transactions from the Data sheet (purchases, dividends, sales)
   dailyData: DailyNavRow[];   // Daily NAV + inflation data (from Daily sheet)
+  ledgerData: LedgerRow[];    // Full transaction ledger (from Transactions sheet)
+}
+
+/**
+ * A CSV reader that understands newlines INSIDE quoted fields.
+ *
+ * The other parsers in this file split the file on "\n" first and then parse each
+ * line. That is fine for the price sheets, but the Transactions tab has a header
+ * whose cells contain line breaks ("Price\nValue", "Comm\n/adj"), so its header
+ * alone spans three physical lines — splitting first would shred it. This walks the
+ * text character by character instead, tracking whether it is inside quotes.
+ */
+function parseCSVRows(csvText: string): string[][] {
+  const text = csvText.replace(/^﻿/, '').replace(/\r\n/g, '\n');
+  const rows: string[][] = [];
+  let row: string[] = [], cur = '', inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      // A doubled quote inside a quoted field is a literal quote character
+      if (inQuotes && text[i + 1] === '"') { cur += '"'; i++; } else inQuotes = !inQuotes;
+    } else if (ch === ',' && !inQuotes) {
+      row.push(cur); cur = '';
+    } else if (ch === '\n' && !inQuotes) {
+      row.push(cur); rows.push(row); row = []; cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  row.push(cur);
+  if (row.length > 1 || row[0] !== '') rows.push(row);
+  return rows;
+}
+
+/**
+ * Parses the Transactions tab into LedgerRow objects.
+ *
+ * Only rows with a real YYYY/MM/DD date are kept — the sheet ends with a few
+ * summary/total rows that would otherwise parse as garbage.
+ *
+ * Numbers arrive formatted for humans ("20,359.00"), so commas and spaces are
+ * stripped before parsing.
+ */
+export function parseLedger(csvText: string): LedgerRow[] {
+  const rows = parseCSVRows(csvText);
+  if (rows.length < 2) {
+    console.warn('Transactions sheet is empty or has no data rows');
+    return [];
+  }
+
+  // Collapse whitespace in headers so "Price\nValue" matches as "Price\ Value"
+  const headers = rows[0].map(h => (h || '').replace(/\s+/g, ' ').trim());
+  const col = (name: string) => headers.findIndex(h => h.toLowerCase().startsWith(name.toLowerCase()));
+  const iDate = col('Date'), iCurr = col('Curr'), iQty = col('Qty'), iPrice = col('Price'),
+        iAmount = col('Amount'), iCost = col('Cost Basis'), iAsset = col('Asset'),
+        iComm = col('Comm /'), iCommBps = col('Comm ('),
+        iFlow = col('Flow'), iTicker = col('Ticker'), iTo = col('Flow to account'),
+        iRemarks = col('Remarks');
+
+  const num = (v: string | undefined): number => {
+    const x = parseFloat((v || '').replace(/[",\s]/g, ''));
+    return isFinite(x) ? x : 0;
+  };
+  const cell = (r: string[], i: number) => (i >= 0 ? (r[i] || '').trim() : '');
+
+  const out: LedgerRow[] = [];
+  for (const r of rows.slice(1)) {
+    const rawDate = cell(r, iDate);
+    if (!/^\d{4}\/\d{2}\/\d{2}$/.test(rawDate)) continue;  // skips the trailing summary block
+    out.push({
+      date: rawDate.replace(/\//g, '-'),
+      currency: cell(r, iCurr),
+      qty: num(r[iQty]),
+      price: num(r[iPrice]),
+      amount: num(r[iAmount]),
+      commission: num(r[iComm]),
+      // The sheet quotes commission in bps of the gross trade (qty x price). Where it
+      // left the column blank but a commission exists, work it out the same way so the
+      // two agree — 17.04 on a 4,545 trade is 37.49 bps either way.
+      commissionBps: num(r[iCommBps]) || (num(r[iComm]) && num(r[iQty]) * num(r[iPrice])
+        ? (num(r[iComm]) / (num(r[iQty]) * num(r[iPrice]))) * 10000 : 0),
+      costBasis: num(r[iCost]),
+      asset: cell(r, iAsset),
+      ticker: cell(r, iTicker),
+      flow: cell(r, iFlow),
+      account: cell(r, iTo),
+      remarks: cell(r, iRemarks),
+    });
+  }
+  return out;
 }
 
 /**
@@ -200,14 +334,13 @@ export interface ParsedData {
  * @throws Error if fetch fails or data is invalid
  */
 export async function fetchSheetData(): Promise<ParsedData> {
-  // Fetch all six sheets in parallel for speed
-  const [dataResponse, lookupResponse, yearsResponse, closedResponse, txnResponse, dailyResponse] = await Promise.all([
+  // Fetch all seven sheets in parallel for speed
+  const [dataResponse, lookupResponse, yearsResponse, dailyResponse, ledgerResponse] = await Promise.all([
     fetch(DATA_SHEET_URL, { cache: 'no-cache' }),
     fetch(LOOKUP_SHEET_URL, { cache: 'no-cache' }),
     fetch(YEARS_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Years sheet is optional — don't break the app if it fails
-    fetch(CLOSED_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Closed sheet is optional too
-    fetch(TRANSACTIONS_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Transactions sheet is optional too
     fetch(DAILY_SHEET_URL, { cache: 'no-cache' }).catch(() => null),  // Daily NAV sheet is optional too
+    fetch(LEDGER_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Full ledger — powers the Positions tab
   ]);
 
   // Check if core fetches were successful
@@ -240,48 +373,6 @@ export async function fetchSheetData(): Promise<ParsedData> {
     console.warn('Failed to parse Years sheet (non-fatal):', err);
   }
 
-  // Parse Closed sheet if it loaded successfully (same non-fatal pattern as Years)
-  let closedData: ClosedPositionRow[] = [];
-  try {
-    if (closedResponse && closedResponse.ok) {
-      const closedCsvText = await closedResponse.text();
-      closedData = parseClosedData(closedCsvText);
-      console.log(`Closed sheet: parsed ${closedData.length} rows`);
-    }
-  } catch (err) {
-    console.warn('Failed to parse Closed sheet (non-fatal):', err);
-  }
-
-  // Parse Transactions (Data) sheet if it loaded successfully (same non-fatal pattern)
-  // Google Sheets sometimes returns "Loading..." instead of CSV data when too many
-  // sheets are fetched in parallel. If that happens, retry up to 3 times with a delay.
-  let transactionData: TransactionRow[] = [];
-  try {
-    let txnCsvText = '';
-    if (txnResponse && txnResponse.ok) {
-      txnCsvText = await txnResponse.text();
-    }
-    // Retry if we got "Loading..." or empty response
-    let retries = 0;
-    while ((!txnCsvText || txnCsvText.trim() === 'Loading...' || txnCsvText.trim().length < 50) && retries < 3) {
-      retries++;
-      console.log(`Transactions sheet returned "${txnCsvText.trim()}", retrying (${retries}/3)...`);
-      await new Promise(r => setTimeout(r, 1000 * retries)); // wait 1s, 2s, 3s
-      const retryResponse = await fetch(TRANSACTIONS_SHEET_URL, { cache: 'no-cache' }).catch(() => null);
-      if (retryResponse && retryResponse.ok) {
-        txnCsvText = await retryResponse.text();
-      }
-    }
-    if (txnCsvText && txnCsvText.trim() !== 'Loading...' && txnCsvText.trim().length >= 50) {
-      transactionData = parseTransactionData(txnCsvText);
-      console.log(`Transactions sheet: parsed ${transactionData.length} rows`);
-    } else {
-      console.warn(`Transactions sheet still empty after retries: "${txnCsvText.trim().substring(0, 50)}"`);
-    }
-  } catch (err) {
-    console.warn('Failed to parse Transactions sheet (non-fatal):', err);
-  }
-
   // Parse Daily NAV sheet if it loaded successfully
   let dailyData: DailyNavRow[] = [];
   try {
@@ -307,9 +398,33 @@ export async function fetchSheetData(): Promise<ParsedData> {
     console.warn('Failed to parse Daily sheet (non-fatal):', err);
   }
 
+  // Parse the full ledger (Transactions tab). Same optional + retry pattern as the
+  // others: Google sometimes answers "Loading..." when several tabs are pulled at once.
+  let ledgerData: LedgerRow[] = [];
+  try {
+    let ledgerCsv = '';
+    if (ledgerResponse && ledgerResponse.ok) ledgerCsv = await ledgerResponse.text();
+    let retries = 0;
+    while ((!ledgerCsv || ledgerCsv.trim() === 'Loading...' || ledgerCsv.trim().length < 50) && retries < 3) {
+      retries++;
+      console.log(`Transactions (ledger) sheet returned "${ledgerCsv.trim().substring(0, 20)}", retrying (${retries}/3)...`);
+      await new Promise(r => setTimeout(r, 1000 * retries));
+      const retry = await fetch(LEDGER_SHEET_URL, { cache: 'no-cache' }).catch(() => null);
+      if (retry && retry.ok) ledgerCsv = await retry.text();
+    }
+    if (ledgerCsv && ledgerCsv.trim() !== 'Loading...' && ledgerCsv.trim().length >= 50) {
+      ledgerData = parseLedger(ledgerCsv);
+      console.log(`Transactions (ledger) sheet: parsed ${ledgerData.length} rows`);
+    } else {
+      console.warn('Transactions (ledger) sheet still empty after retries');
+    }
+  } catch (err) {
+    console.warn('Failed to parse Transactions (ledger) sheet (non-fatal):', err);
+  }
+
   console.log(`Lookup table has ${lookup.length} assets: ${lookup.map(l => l.ticker).join(', ')}`);
 
-  return { data, assets, lookup, yearsData, closedData, transactionData, dailyData };
+  return { data, assets, lookup, yearsData, dailyData, ledgerData };
 }
 
 /**
@@ -540,180 +655,6 @@ function splitCSVRows(csvText: string): string[] {
 
   // Don't forget the last row
   if (current.trim()) rows.push(current);
-
-  return rows;
-}
-
-/**
- * Parses the "Closed" sheet CSV into ClosedPositionRow objects.
- *
- * This sheet contains buy/sell transaction data for closed positions.
- * Same ticker can appear multiple times (each row = one buy-sell cycle).
- *
- * IMPORTANT: The Closed sheet has column headers with embedded newlines
- * (e.g., "Inv\nDate"), so we use splitCSVRows() instead of split('\n').
- * Also, headers are normalized by collapsing whitespace (newlines → spaces)
- * so that "Inv\nDate" matches as "Inv Date".
- *
- * Also computes three derived fields per row:
- *   - totalReturn: profit/loss in currency
- *   - totalReturnPct: profit/loss as percentage
- *   - cagr: compound annual growth rate
- *
- * @param csvText - The raw CSV content from the Closed sheet
- * @returns Array of ClosedPositionRow objects
- */
-function parseClosedData(csvText: string): ClosedPositionRow[] {
-  // Use quote-aware row splitter (handles newlines inside quoted headers)
-  const lines = splitCSVRows(csvText.trim());
-
-  if (lines.length < 2) {
-    console.warn('Closed sheet is empty or has no data rows');
-    return [];
-  }
-
-  const delimiter = lines[0].includes('\t') ? '\t' : ',';
-  // Parse header and normalize: collapse any whitespace (newlines, multiple spaces) into single space
-  const headers = parseCSVLine(lines[0], delimiter).map(h => h.replace(/\s+/g, ' ').trim());
-
-  console.log('Closed sheet headers:', headers.join(' | '));
-
-  const colIndex = buildColIndex(headers);
-  const readNum = (values: string[], colName: string) => csvReadNum(colIndex, values, colName);
-  const readStr = (values: string[], colName: string) => csvReadStr(colIndex, values, colName);
-
-  const rows: ClosedPositionRow[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const values = parseCSVLine(line, delimiter);
-
-    // Read all raw fields
-    // Note: The spreadsheet has "Tciker" (typo) but we also check "Ticker" for safety
-    const invDate = normalizeDate(readStr(values, 'Inv Date'));
-    const divDate = normalizeDate(readStr(values, 'Div date'));
-    const ticker = readStr(values, 'Tciker') || readStr(values, 'Ticker');
-
-    // Skip rows without essential data (no dates — ticker can be empty for some legacy rows)
-    if (!invDate || !divDate) continue;
-
-    const holdingPeriodDays = readNum(values, 'Holding Period (D)');
-    const holdingPeriodYears = readNum(values, 'Holding Period (Y)');
-    const asset = readStr(values, 'Asset');
-    const totalSharesBought = readNum(values, 'Total #shares bought');
-    const totalSharesSold = readNum(values, 'Total #shares sold');
-    const sharesSold = readNum(values, '# Shares Sold');
-    const buyPrice = readNum(values, 'Buy Price');
-    const buyCommission = readNum(values, 'Buy Comm.');
-    const initialCost = readNum(values, 'Initial Cost');
-    const sellPrice = readNum(values, 'Sell price');
-    const sellCommission = readNum(values, 'Sell Comm.');
-    const valueAfterFee = readNum(values, 'Value after fee');
-    const cumDividend = readNum(values, 'Cum. Dividend');
-    const totalTax = readNum(values, 'Total tax');
-    const proceedsFromSale = readNum(values, 'Proceeds from Sale');
-    const finalNetValue = readNum(values, 'Final Net Value incl Div');
-
-    // Compute derived fields
-    const totalReturn = finalNetValue - initialCost;
-    const totalReturnPct = initialCost > 0 ? (totalReturn / initialCost) * 100 : 0;
-    // CAGR = ((end / start) ^ (1 / years) - 1) × 100
-    // Use exact days between dates (matching XIRR's time calculation) instead of
-    // the spreadsheet's rounded holdingPeriodYears, so CAGR and XIRR agree
-    // for single transactions.
-    const exactYears = (invDate && divDate)
-      ? (new Date(divDate).getTime() - new Date(invDate).getTime()) / (365.25 * 86400000)
-      : holdingPeriodYears;
-    const cagr = (exactYears > 0 && initialCost > 0 && finalNetValue > 0)
-      ? (Math.pow(finalNetValue / initialCost, 1 / exactYears) - 1) * 100
-      : 0;
-
-    rows.push({
-      invDate, divDate, holdingPeriodDays, holdingPeriodYears,
-      ticker, asset, totalSharesBought, totalSharesSold, sharesSold,
-      buyPrice, buyCommission, initialCost,
-      sellPrice, sellCommission, valueAfterFee,
-      cumDividend, totalTax, proceedsFromSale, finalNetValue,
-      totalReturn, totalReturnPct, cagr,
-    });
-  }
-
-  return rows;
-}
-
-/**
- * Parses the "Data" sheet CSV (gid=1857187976) into TransactionRow objects.
- *
- * This sheet contains every purchase, dividend payment, and sale for all assets.
- * Each row is one event:
- *   - "Purchase of Asset": buying shares (Qty = shares bought, Amount = total cost incl. commission)
- *   - "Dividend": dividend/interest received (Qty = shares held at that time, Amount = cash received)
- *   - "Proceeds from Sale": selling shares (Amount = sale proceeds)
- *
- * Columns: Date, FX, Qty, Price\Value, Comm/adj, Comm (bps), Amount, Asset, Flow, Ticker
- *
- * @param csvText - The raw CSV content from the Data sheet
- * @returns Array of TransactionRow objects
- */
-function parseTransactionData(csvText: string): TransactionRow[] {
-  // Use quote-aware row splitter (handles newlines inside quoted headers)
-  const lines = splitCSVRows(csvText.trim());
-
-  if (lines.length < 2) {
-    console.warn('Transactions sheet is empty or has no data rows');
-    return [];
-  }
-
-  const delimiter = lines[0].includes('\t') ? '\t' : ',';
-  // Parse header and normalize: collapse any whitespace (newlines, multiple spaces) into single space
-  const headers = parseCSVLine(lines[0], delimiter).map(h => h.replace(/\s+/g, ' ').trim());
-
-  console.log('Transactions sheet headers:', headers.join(' | '));
-
-  const colIndex = buildColIndex(headers);
-  const readNum = (values: string[], colName: string) => csvReadNum(colIndex, values, colName);
-  const readStr = (values: string[], colName: string) => csvReadStr(colIndex, values, colName);
-
-  const rows: TransactionRow[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const values = parseCSVLine(line, delimiter);
-
-    const date = normalizeDate(readStr(values, 'Date'));
-    if (!date) continue;
-
-    const flowRaw = readStr(values, 'Flow');
-    if (!flowRaw) continue; // Skip rows without a flow type
-    // Validate that the flow type is one we recognize (Purchase, Sale, or Dividend)
-    if (flowRaw !== FLOW_PURCHASE && flowRaw !== FLOW_SALE && flowRaw !== FLOW_DIVIDEND) continue;
-    const flow: FlowType = flowRaw;
-
-    const ticker = readStr(values, 'Ticker');
-    if (!ticker) continue; // Skip rows without a ticker
-
-    const qty = readNum(values, 'Qty');
-    const commAbs = readNum(values, 'Comm /adj');
-    const amount = readNum(values, 'Amount');
-
-    rows.push({
-      date,
-      fx: readStr(values, 'FX'),
-      qty,
-      commAbs,
-      // "Comm (bps)" column — commission in basis points
-      commBps: readNum(values, 'Comm (bps)'),
-      amount,
-      asset: readStr(values, 'Asset'),
-      flow,
-      ticker,
-      account: readStr(values, 'Flow to account:'),
-    });
-  }
 
   return rows;
 }
