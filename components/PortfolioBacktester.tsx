@@ -19,8 +19,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
-import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, LedgerRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
-import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom } from '@/lib/positions';
+import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
+import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -1057,14 +1057,13 @@ const PortfolioBacktester = () => {
   // ---- Open Positions state ----
   // Raw transaction data from the "Data" sheet (purchases, dividends, sales for all assets)
   const [transactionData, setTransactionData] = useState<TransactionRow[]>([]);
-  // The full ledger (Transactions tab). Everything the Positions tab shows is derived
-  // from this; the old Open/Exit tabs are only a fallback until they're deleted.
-  //
-  // The derived open positions / round trips / warnings are computed ONCE at load and
-  // then fed into `transactionData` and `closedData` in the shapes those screens already
-  // expect — so the Positions and Portfolio tabs needed no rewiring, only a new source.
-  const [ledgerData, setLedgerData] = useState<LedgerRow[]>([]);
-  const [positionsModel, setPositionsModel] = useState<ReturnType<typeof buildPositions> | null>(null);
+  // Open positions, round trips and warnings, replayed from the Transactions ledger once
+  // at load. `transactionData` and `closedData` above are filled from this in the shapes
+  // the Positions and Portfolio screens already expect, so those tabs needed a new source
+  // rather than a rewrite. The raw ledger rows are deliberately NOT kept in state — once
+  // the model is built nothing reads them, and holding 1,100+ rows for nothing is waste.
+  const [positionsModel, setPositionsModel] = useState<PositionsModel | null>(null);
+  const [ledgerWarningDismissed, setLedgerWarningDismissed] = useState(false);  // hide for this session
   // ---- Daily NAV chart state ----
   const [dailyData, setDailyData] = useState<DailyNavRow[]>([]);
   const [dailyNavCurrency, setDailyNavCurrency] = useState<'PLN' | 'USD' | 'SGD'>('PLN');
@@ -1235,7 +1234,6 @@ const PortfolioBacktester = () => {
       setAvailableAssets(assets);
       setAssetLookup(lookup);
       setYearsData(fetchedYearsData);
-      setLedgerData(fetchedLedgerData);
       setPositionsModel(model);
       setClosedData(effectiveClosed);
       setTransactionData(effectiveTransactions);
@@ -6157,6 +6155,32 @@ const PortfolioBacktester = () => {
               </div>
               <button
                 onClick={() => setFxWarningDismissed(true)}
+                className="text-amber-700 hover:text-amber-900 text-xs font-semibold shrink-0"
+                title="Hide this warning until the page is reloaded"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {/* Ledger warnings — rows the position replay could not honour, so the shares were
+              left where they were rather than guessed at. Shown for the same reason as the FX
+              banner above: a silently skipped sale looks exactly like a position you still
+              hold, and nothing else on screen would tell you the difference. */}
+          {positionsModel && positionsModel.warnings.length > 0 && !ledgerWarningDismissed && (
+            <div className="mb-4 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg flex items-start justify-between gap-3">
+              <div className="text-xs text-amber-900">
+                <span className="font-semibold">Transactions check</span>
+                {positionsModel.warnings.map(w => (
+                  <div key={`${w.ticker}-${w.date}`} className="mt-1">
+                    <span className="font-mono">{w.ticker}</span> {w.date} — {w.reason}.
+                    {' '}The sale was skipped and the position left open, so its size and P&amp;L
+                    are wrong until the row is corrected in the sheet.
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => setLedgerWarningDismissed(true)}
                 className="text-amber-700 hover:text-amber-900 text-xs font-semibold shrink-0"
                 title="Hide this warning until the page is reloaded"
               >
