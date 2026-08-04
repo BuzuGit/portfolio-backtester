@@ -40,10 +40,10 @@ Think of this app like a restaurant:
 │  │                 └─────────────────────────────┘  │    │
 │  │                           │                       │    │
 │  │                           ▼                       │    │
-│  │                 ┌─────────────────────┐          │    │
-│  │                 │   fetchData.ts      │          │    │
-│  │                 │   (Data Fetching)   │          │    │
-│  │                 └─────────────────────┘          │    │
+│  │        ┌─────────────────────┐  ┌─────────────┐  │    │
+│  │        │   fetchData.ts      │─▶│positions.ts │  │    │
+│  │        │   (Data Fetching)   │  │(FIFO replay)│  │    │
+│  │        └─────────────────────┘  └─────────────┘  │    │
 │  └─────────────────────────────────────────────────┘    │
 │                           │                              │
 └───────────────────────────│──────────────────────────────┘
@@ -57,9 +57,19 @@ Think of this app like a restaurant:
 
 **The Flow:**
 1. User opens the app
-2. App automatically fetches data from Google Sheets
-3. User configures portfolios and runs backtest
-4. App calculates returns and displays results
+2. App automatically fetches data from Google Sheets (5 tabs, in parallel)
+3. `positions.ts` replays the transaction ledger to work out what is held and what was sold
+4. User configures portfolios and runs backtest
+5. App calculates returns and displays results
+
+**A note on where the numbers come from.** There are two very different kinds of data here, and
+mixing them up is the source of most confusion:
+
+- **Prices** are a grid: one row per month, one column per asset. Straightforward.
+- **Your actual holdings** are a *diary*: "on this date I bought 100 of X", "later I sold 40".
+  Nothing in that diary says which positions are still open. The app has to work it out by
+  replaying the diary in order. That is what `positions.ts` does, and it is why the Positions
+  tab has more logic behind it than any chart in the app.
 
 ---
 
@@ -79,7 +89,8 @@ portfolio-backtester/
 │   └── PortfolioBacktester.tsx  # THE MAIN EVENT - all the backtest logic
 │
 ├── lib/
-│   └── fetchData.ts             # Handles fetching & parsing CSV from Google
+│   ├── fetchData.ts             # Handles fetching & parsing CSV from Google
+│   └── positions.ts             # Replays the transaction ledger into positions
 │
 ├── package.json                 # Project dependencies (like a shopping list)
 ├── next.config.js               # Next.js settings
@@ -90,16 +101,21 @@ portfolio-backtester/
 
 ### Key Files Explained
 
-**`components/PortfolioBacktester.tsx`** - This is the heart of the app. It's a large component (~6,200 lines) that breaks down into clear sections:
+**`components/PortfolioBacktester.tsx`** - This is the heart of the app. It's a large component (~14,500 lines) that breaks down into clear sections:
 - State management (tracking what data we have, user selections)
 - Data loading (fetching from Google Sheets)
 - Portfolio management (adding/removing assets)
 - Backtest calculations (the math that simulates investing)
 - Closed positions analysis (XIRR, comparison charts, dashboard stats)
-- UI rendering (displaying forms, charts, tables across 8 tabs)
+- UI rendering (displaying forms, charts, tables across 9 tabs)
+
+**`lib/positions.ts`** - Replays the Transactions ledger to work out what you still hold, what you
+sold, and which dividend belongs to which shares (FIFO lot matching). Both the Positions tab and the
+Portfolio tab's yearly breakdown are built from what it returns. Added Aug 2026, when the
+hand-maintained "Open" and "Exit" sheet tabs were deleted.
 
 **`lib/fetchData.ts`** - A helper that:
-- Fetches CSV text from your Google Sheet URL (4 sheets in parallel: prices, years, lookup, closed positions)
+- Fetches CSV text from your Google Sheet URL (5 sheets in parallel: prices, lookup, years, daily NAV, transactions ledger)
 - Parses the CSV (handling tricky cases like commas inside quoted fields, and multiline headers)
 - Returns clean, structured data including computed fields like CAGR and total returns
 
@@ -220,7 +236,7 @@ A React library for drawing charts. We use:
 - Restyling all of them blind would have risked breaking the link between a line and its legend dot, which is the one thing a chart cannot afford to get wrong
 - The cost is honest and visible: the app is **knowingly half-restyled**. If you're reading this and wondering why the Graphs tab still has a neon green line in it, that's why — not an oversight
 
-**If you finish the job:** pull the colours from `CHART_PALETTE` rather than inventing new hexes, and re-run the palette validator for each chart's *actual* series count (see Lesson 14 — five colours can be made colour-blind safe, six cannot).
+**If you finish the job:** pull the colours from `CHART_PALETTE` rather than inventing new hexes, and re-run the palette validator for each chart's *actual* series count (see Lesson 16 — five colours can be made colour-blind safe, six cannot).
 
 ### Why shorting "just worked" once we allowed a minus sign
 
@@ -234,7 +250,7 @@ And a negative share count *is* a short position. That's not a metaphor; that's 
 
 The actual blockers were embarrassingly mundane:
 
-1. **You couldn't type a minus sign.** The weight box was a controlled input running `parseFloat(value) || 0`. Type `-`, that's not a number yet, `parseFloat` returns `NaN`, `|| 0` turns it into `0`, React writes `0` back into the box, and your keystroke vanishes. You could never reach the `1` of `-100`. Fixed with a "draft" state that holds the raw text while you're mid-type (see Lesson 15).
+1. **You couldn't type a minus sign.** The weight box was a controlled input running `parseFloat(value) || 0`. Type `-`, that's not a number yet, `parseFloat` returns `NaN`, `|| 0` turns it into `0`, React writes `0` back into the box, and your keystroke vanishes. You could never reach the `1` of `-100`. Fixed with a "draft" state that holds the raw text while you're mid-type (see Lesson 18).
 2. **The auto-balancer clamped at zero** — `Math.max(0, 100 - others)` — so the balancing leg could never go negative.
 
 **The lesson:** when a feature looks big, check whether the *engine* already supports it and only the *edges* don't. Here, roughly 90% of "add shorting" was three lines of input plumbing. Data models that store the physically real quantity (shares) instead of the presentational one (percent) tend to get this kind of generality for free. Storing percentages and reconstructing values would have needed a genuine rewrite.
@@ -292,6 +308,40 @@ By the end you're barely leveraged at all. You didn't sell anything; the denomin
 Without a guard the arithmetic keeps going and produces nonsense: a negative portfolio value that "recovers" in April, a CAGR that takes the root of a negative number, and division by zero seeding `NaN` through every downstream statistic. But the deeper point is that the un-guarded version isn't just ugly, it's **false**. A real broker liquidates you at zero equity. There is no scenario where you ride a negative balance back to profit. Letting the maths run would have invented returns that no human could have earned.
 
 This is the general shape of the thing: a number that's mathematically computable but financially impossible is still a bug.
+
+### Why positions are *derived* from a ledger instead of read from a sheet
+
+**Decision (Aug 2026):** Delete the hand-maintained "Open" and "Exit" tabs. Replay the full
+Transactions ledger through a FIFO lot queue in `lib/positions.ts` and derive open positions,
+closed round trips and dividend attribution from it.
+
+**Why:** the old tabs were a second copy of the truth, maintained by hand. Two copies of anything
+eventually disagree, and this pair disagreed in a way that quietly hid money:
+
+> Sell one share of a holding and the old rule — "a ticker is open if it was bought and never
+> sold" — dropped the entire position from Open Positions. Four holdings were affected. They
+> weren't wrong by a rounding error; they were *absent*.
+
+The ledger has no such notion. It just records what happened, and the app works out the rest.
+That means partially sold positions can be what they actually are: still open for the shares you
+kept, and a completed round trip for the shares you sold.
+
+**Why FIFO, and how we knew it was right.** First-in-first-out means a sale takes the oldest
+shares first. We didn't pick it because it's conventional — we picked it because it's what the
+spreadsheet was already doing. Replaying the ledger with FIFO reproduces the sheet's own
+`Cost Basis` column on **60 of the 64** sale rows that have one. The four that differ are crypto
+rows where the buy and sell quantities use different units, and those are flagged rather than
+guessed at. When your model reproduces the old system's numbers without being told them, you
+have evidence rather than a hope.
+
+**The three rules that make it work** (all of them learned the hard way):
+
+1. **Group by asset name, not ticker.** The ticker column is blank on some rows, and `UST T-Bill`
+   is used for two genuinely different bonds.
+2. **The lookup table is the filter.** Anything not in it — the flat, savings bonds, cash funds —
+   is deliberately not an investment we want on this screen.
+3. **Commission is already inside `Amount`.** A purchase's amount is gross *plus* commission; a
+   sale's is gross *minus* it. Report it, never re-apply it.
 
 ### Why use 'use client' for the main component?
 
@@ -439,7 +489,7 @@ The key steps:
 
 **Lesson:** When many outputs derive from one input, transform the input once rather than transforming each output. It's less code, it's impossible for sections to disagree with each other, and sometimes a tricky requirement (like "convert this side but not that side") solves itself.
 
-### 9. Decomposing a Year's Profit by Asset (and the "scale mismatch" landmine)
+### 14. Decomposing a Year's Profit by Asset (and the "scale mismatch" landmine)
 
 **The goal:** Below the "Contributions and Profit by Year" chart, show a table that breaks a single year's total profit into *how much each asset generated that year* — split into "shares I held on 1 January" vs. "shares I bought during the year" — in whatever currency the buttons are set to. So you can see, e.g., that in 2024 Bitcoin was your biggest engine (+87k zl) and Bitcoin ETF's early dip was the main drag.
 
@@ -465,7 +515,7 @@ Because each boundary is converted at *that month's* exchange rate, this automat
 
 **Lesson:** Correct isn't the same as understandable. If a user has to take a number on faith, show them the arithmetic that produces it — even at the cost of more columns and more rows. And when you redesign, borrow the vocabulary and layout the user has already learned elsewhere in the product.
 
-### 10. The "impossible exchange rate" — converting flows and values with different rates
+### 15. The "impossible exchange rate" — converting flows and values with different rates
 
 **The smell:** A sharp-eyed user noticed the breakdown's "Other" bucket was 24% of profit in złoty but **73% in dollars** for the same year. As he put it: "there's no way this is that volatile — 98k PLN vs 82k USD implies an exchange rate of 1.2, and the dollar trades near 3.7." He was right, and chasing it uncovered a bug that had nothing to do with the breakdown at all.
 
@@ -488,7 +538,7 @@ with values at the period-end rate and contributions at the average rate. Now `g
 
 **Lesson:** Never convert a "profit" or "return" figure directly into another currency by multiplying by one rate. Profit is a difference of values measured at different times; convert the *values* (each at its own moment's rate) and subtract. And treat the home-currency view with suspicion — it's exactly where multi-currency bugs go to hide, because there every rate is 1.
 
-### 14. Choosing Chart Colours Is Arithmetic, Not Taste
+### 16. Choosing Chart Colours Is Arithmetic, Not Taste
 
 **The brief:** "the Positions graphs don't match the rest of the app — make them more elegant." Easy to nod along to and impossible to verify. The old palette was Tailwind's greatest hits: neon green, hot blue, electric indigo, a purple. Next to the new slate-grey buttons they looked like a child's crayon box spilled onto a bank statement.
 
@@ -511,7 +561,7 @@ Translation: my "elegantly muted" colours were so desaturated they'd read as thr
 
 **Lesson:** When a request is aesthetic ("more elegant"), find the part of it that's measurable and measure that part. You still make a taste judgement about *which* passing palette to use — but you never ship one that's quietly unreadable for a chunk of your audience. And when a constraint is genuinely impossible, say so out loud and name the thing that compensates for it, rather than quietly shipping something that fails a test nobody ran.
 
-### 15. The Comment That Wouldn't Compile (Twice)
+### 17. The Comment That Wouldn't Compile (Twice)
 
 **The error:**
 
@@ -545,7 +595,7 @@ Curiously, `{/* … */}` is perfectly legal *between* elements once you're insid
 
 **Lesson:** Two of them, actually. First, when a compiler points at line N, the culprit is often line N−1 — parsers report where they *noticed*, not where you *erred*. Second, and more useful: repeating a mistake isn't a sign you need to try harder, it's a sign the rule hasn't been written down anywhere a future you will look. So it went into this file, which is the whole point of this file.
 
-### 16. The Input Box That Ate Your Minus Sign
+### 18. The Input Box That Ate Your Minus Sign
 
 **The bug:** With shorting added, you still couldn't type `-100` into a weight box. Not "it showed the wrong number" — you physically could not get the character in.
 
@@ -586,7 +636,7 @@ Fixed by using `Number.isFinite(parsed)`, which rejects `Infinity` *and* `NaN` i
 
 Second, and the reason this is written down: the liquidation guard was *tested* — a 7x portfolio correctly blew up on 2020-03-31. It just happened to be tested only from the direction it was designed for. A guard that catches "too small" says nothing about "too large", and `<= 0` quietly treats infinity as perfectly healthy. **When you write a bound, ask what the other end of the number line does to it.**
 
-### 17. Two Charts That Must Line Up Should Eat From One Plate
+### 19. Two Charts That Must Line Up Should Eat From One Plate
 
 **The task:** add a "Shares Held" bar chart under the Price History line in the Positions tab, sharing its X axis — so toggling "Since Invested" or "Until Sold" moves both together.
 
@@ -602,7 +652,7 @@ Fix: plot `mergedChartData` in both. The extra months carry no `shares` value, s
 
 **How it was caught:** not by clicking around, but by reading the function that produced the array and asking "can this ever return something different?" Line 86 answered yes. Testing confirmed it in about a minute. Reading beats poking when the failure needs two switches flipped at once.
 
-### 18. The Table That Found a Typo Nobody Was Looking For
+### 20. The Table That Found a Typo Nobody Was Looking For
 
 **What happened:** the Transaction History table went in, I ran the usual sanity check on the numbers, and one row refused to add up:
 
@@ -623,7 +673,7 @@ That wasn't luck, and it's the transferable idea: **when two fields encode the s
 
 A view whose numbers reconcile is also a view that audits. Ordering data the way it happened, rather than the way it's stored, is one of the cheapest ways to make errors announce themselves. The table shipped and immediately did a job nobody had asked it to do.
 
-### 19. You Cannot Draw a Box Around a Table Row
+### 21. You Cannot Draw a Box Around a Table Row
 
 **The ask:** outline the still-held rows in the Transaction History table so live holdings stand apart from finished trades.
 
@@ -651,7 +701,7 @@ Deliberately no `border-x` on the middle cells — that would draw a vertical li
 
 **A verification trap worth knowing:** while checking, the console showed a JSX syntax error and the server logs showed `GET / 500`. Both were *stale* — thrown seconds earlier while a scripted edit had the file briefly mid-surgery, and followed further down by `✓ Compiled` and `GET / 200`. `read_console_messages` accumulates across navigations, so a fixed failure keeps looking like a live one. Read to the *end* of the log before believing an error, and confirm against the current build rather than the loudest message.
 
-### 20. The Bad Row Was a Free Test
+### 22. The Bad Row Was a Free Test
 
 **What happened.** Two places in the app show a commission in basis points. They had been written months apart and quietly disagreed on what to divide by:
 
@@ -662,7 +712,7 @@ sumBuyComm / (sumCost - sumBuyComm)      // gross derived from CASH
 t.buyCommission / (t.buyPrice * t.sharesSold)   // gross derived from PRICE
 ```
 
-On 137 of 138 rows those are the same number, because `price × quantity` and `cost − commission` describe the same trade. On the IWDA row with the mistyped price (lesson 18), they didn't: **3bps in one table, 6bps in the other, for the same purchase.**
+On 137 of 138 rows those are the same number, because `price × quantity` and `cost − commission` describe the same trade. On the IWDA row with the mistyped price (lesson 20), they didn't: **3bps in one table, 6bps in the other, for the same purchase.**
 
 Nobody would have noticed without the typo. The two definitions had coexisted for months, agreeing every single time, and a *data* error is what finally made a *code* inconsistency visible. Fixed by moving both onto the cash-derived gross — the one that stays correct when a price cell is wrong.
 
@@ -670,7 +720,7 @@ Nobody would have noticed without the typo. The two definitions had coexisted fo
 
 And the tiebreaker when two definitions compete: prefer the one derived from the value the rest of the system already depends on. Here that's cost, which drives every calculation, over price, which is only ever displayed.
 
-### 21. The Default That Was Never Used
+### 23. The Default That Was Never Used
 
 **The ask:** have the price chart open with "Since Invested" already on.
 
@@ -713,6 +763,142 @@ The two now sit in the same file with a comment at each reset site saying they m
 Assert every one equals the header count. A dividend row that quietly dropped its payout into the wrong column would look completely plausible on screen.
 
 ---
+
+### 24. The Same Bug, Four Times: When a Data Source Gets Wider
+
+This is the most useful thing in this file, so read it even if you skip the rest.
+
+The Positions tab used to read from a feed containing **only currently-open positions**. So this
+line was perfectly safe:
+
+```js
+const openLots = transactionData.filter(t => t.ticker === ticker && t.flow === 'Purchase');
+```
+
+Then we switched to the full ledger, which contains **everything ever traded**. The line didn't
+change. It didn't need to — it broke on its own, because its meaning depended on what was in the
+array, and that had quietly changed underneath it.
+
+Think of it like a filing cabinet labelled "Current Clients". For years you could grab any folder
+from it and safely assume the client was current. Then someone merges in the archive without
+relabelling the drawer. Every piece of code that trusted the label is now wrong, and none of it
+looks wrong.
+
+It bit **four separate places** before it was caught:
+
+| Where | What it claimed |
+|---|---|
+| `getOpenPurchases` | 4,054 units of BCASH held — you own 3,465 |
+| `getOpenDividends` | Income counted twice, in Open *and* Closed |
+| `getOpenDividends` again | 2021 dividends shown against shares bought in 2026 |
+| Yearly profit breakdown | A 2020 purchase booked as "held from start" of 2026, for an asset sold in 2025 |
+
+The user caught two of them by eye. That is the embarrassing part and the instructive part: none
+of these threw an error, none failed a type check, and the numbers all looked *plausible*.
+
+**The lesson:** when you widen a data source, grep every consumer of the old variable and ask
+"did this rely on the feed being pre-filtered?" — before shipping. And when you find one instance,
+that is a signal to go hunt the rest, not to fix it and move on. Fixing the first three
+individually is how you end up fixing the fourth in production.
+
+### 25. The Spreadsheet That Lied About Exchange Rates
+
+Gold in SGD was down 1% in 2022. The same gold, priced in USD, was down 17%. Meanwhile SGD/USD
+had barely moved. Three numbers, and at most one story that fits — so something was wrong.
+
+The instinct is to suspect the conversion code. The code was fine. The **data** was lying.
+
+Here's the trick that found it: the spreadsheet stored SGD/USD **twice** — once as its own column,
+and once implicitly as `SGDPLN ÷ USDPLN`, because every conversion routes through the zloty. Two
+independent roads to the same number means the sheet can be checked against *itself*. They
+disagreed on 140 of 201 rows, every one of them before mid-2023.
+
+Then the actual diagnosis, confirmed against the Polish central bank's published rates: the
+`SGDPLN` column was **shifted forward by exactly 12 months**. Every row showed the rate from a
+year later. Across 20 semi-annual probes, reading each row as its own date gave a mean error of
+6.22%; reading it as "12 months later" gave **0.31%** — pure rounding noise. The cause was almost
+certainly a `GOOGLEFINANCE` history block pasted alongside the rows instead of looked up by date.
+
+**Three lessons, in increasing order of value:**
+
+1. **Redundancy is a free test.** If a value can be derived two ways, derive it both ways and
+   compare. The app now does this on every load and raises a banner when the two disagree
+   systematically. It costs one loop over the data.
+2. **Verify against an outside authority, not your own memory.** When the user pushed back with
+   "I think my SGDPLN is ok", re-arguing would have been a coin flip. Fetching the central bank's
+   official fixing settled it *and* revealed the 12-month shift that the first pass had only
+   guessed at. For anything PLN-denominated, `api.nbp.pl` is free, authoritative and needs no key.
+3. **Their pushback was reasonable.** The column *was* correct for recent dates — only the history
+   was broken. A confident correction from someone looking at their own data usually means you
+   measured the wrong thing, not that they're wrong.
+
+### 26. The ETF That Changed Currency Halfway Through
+
+A gold ETF showing +29% in a year when gold fell 4%. Every data source agreed on the +29%, which
+made it feel like reality rather than a bug.
+
+The fingerprint was a ratio that should have been boring. `GSD ÷ GLDM` — two gold funds — sat
+between 4.66 and 4.81 for **ten years**, then jumped to 6.30 in a single month. Assets don't do
+that. Quote currencies do: the December-to-December ratio was 1.349, and USD→SGD at the time was
+1.344.
+
+The explanation was mundane and completely invisible in the numbers. `GSD` is the *Singapore
+dollar counter* of SPDR Gold Shares, which only began trading on 30 June 2021. Before that date it
+has no history at all — so every data provider backfills it with the **US dollar** counter's
+prices, and none of them convert. The series is USD before the switch and SGD after it. The "gain"
+was a 34.9% redenomination partly cancelled by gold's real −4%.
+
+**The lesson:** a price series is a claim about *units*, not just numbers, and nothing in a CSV
+records which units. When one asset moves in a way its peers don't, check the ratio between them
+over the full history. A constant that suddenly steps is a units change, not a market event —
+markets move gradually and both ways; redenominations happen once and never reverse.
+
+### 27. Averages That Hide the Truth: Smearing a Dividend Across Months
+
+The old Exit tab stored one number per round trip: total dividends received over its whole life.
+Asked "how much did this contribute in 2023?", the only available answer was to spread that total
+evenly across the months held and take the year's slice.
+
+For ES3TR that gave **935**. The real figure, from the payment dates, was **1,064**. Not a
+disaster — but confidently wrong, and wrong in a way nobody could spot, because a smeared average
+looks exactly like a measurement.
+
+Once the ledger arrived with dated payments, the estimate became unnecessary. The fix is
+philosophical as much as technical: **stop approximating the moment you have the real data**. The
+smearing code still exists as a fallback for legacy rows, but it now sits behind a check for real
+dates, and a comment explaining that it produced 935 where the truth was 1,064.
+
+There's a second, sharper lesson buried here. The number on screen was briefly **1,999** — which
+is 935 + 1,064. Two code paths, one estimating and one measuring, both contributing. When a total
+looks like roughly double what you expect, check whether you're adding two answers to the same
+question.
+
+### 28. React Ran My Code Twice, On Purpose
+
+"Fetching data from Google Sheets…" went from quick to interminable, and nothing about the data
+had changed.
+
+`performance.getEntriesByType('resource')` told the story in one call: **every sheet was being
+downloaded twice**. `next.config.js` sets `reactStrictMode: true`, and React 18 deliberately
+double-invokes mount effects in development to flush out exactly this kind of bug. The mount
+effect called `loadDataFromSheet()` with no guard, so it ran two complete loads. A `useRef` latch
+fixed it.
+
+But the timing data had a hole in it, and the hole mattered. Two of the fetches — to sheet tabs
+that had just been deleted — **didn't appear in the list at all**, because CORS-failed requests
+aren't recorded. They were still real: still opening connections, still taking ~800ms each to come
+back 400, and still counting against the ~6 simultaneous connections a browser allows per host.
+The visible requests were slow because they were queuing behind invisible ones.
+
+Two things worth carrying forward:
+
+- **A deleted Google Sheet tab returns HTTP 400 *resolved*, not rejected.** `.catch()` never fires
+  and `response.ok` is `false`. Any retry loop keyed on "the content was empty" will cheerfully
+  retry it forever — in our case adding 1s + 2s + 3s of pure sleep to every page load.
+- **When the measurements don't explain the symptom, suspect the measurement.** Resource Timing
+  looks authoritative right up until you learn what it silently omits.
+
+Net result: 14 requests down to 5, and load time from about 6 seconds to 2.5.
 
 ## How Good Engineers Think
 
@@ -800,6 +986,16 @@ That's it! Vercel automatically:
 **Volatility:** How much returns bounce around. High volatility = wild swings. Low volatility = steady growth.
 
 **Rebalancing:** Periodically adjusting your portfolio back to target weights. If stocks grow faster than bonds, you sell some stocks and buy bonds to maintain your 60/40 split.
+
+**FIFO (First In, First Out):** When you sell part of a holding, which shares did you sell? FIFO says the oldest ones. It matters because it decides the cost basis: if you bought at 10 and later at 20, selling one share at 25 is a 15 profit under FIFO, not 5. This app uses FIFO because that is what the source spreadsheet already did.
+
+**Lot:** One purchase, tracked separately. Buy the same asset three times and you have three lots, each with its own date and price. Selling walks through them oldest-first.
+
+**Round trip:** A completed buy-then-sell pairing. One sale that consumes three lots produces three round trips, because each has a different purchase price and holding period.
+
+**Ledger:** The Transactions tab — the diary of everything that happened. Unlike the old Open/Exit tabs it records events, not conclusions; the app derives the conclusions.
+
+**Basis point (bp):** One hundredth of a percent. Commissions are quoted this way: 35bps on a 10,000 trade is 35. Useful because it compares fairly across trade sizes.
 
 **CSV (Comma-Separated Values):** A simple text format for spreadsheet data. Each line is a row, commas separate columns.
 
