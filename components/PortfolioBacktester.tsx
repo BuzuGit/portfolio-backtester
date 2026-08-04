@@ -2232,22 +2232,16 @@ const PortfolioBacktester = () => {
    * to be displayed, never to be added on top.
    */
   const getOpenPurchases = (ticker: string): TransactionRow[] => {
-    if (positionsModel) {
-      const pos = positionsModel.open.find(o => o.ticker === ticker);
-      if (!pos) return [];
-      return pos.lots.map(l => ({
-        date: l.date, fx: pos.currency, qty: l.qty,
-        commAbs: l.commission, commBps: l.commissionBps,
-        amount: l.cost, asset: pos.asset, flow: FLOW_PURCHASE, ticker,
-        // Each lot keeps the account it was actually bought in — ETHSGD spans
-        // BinanceSG and Gemini, so a single per-position account would mislabel half.
-        account: l.account,
-      }));
-    }
-    // Fallback for when the ledger didn't load and we're on the old Open/Exit tabs
-    return transactionData
-      .filter(t => t.ticker === ticker && t.flow === FLOW_PURCHASE)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const pos = positionsModel?.open.find(o => o.ticker === ticker);
+    if (!pos) return [];   // not open, or the ledger hasn't loaded yet
+    return pos.lots.map(l => ({
+      date: l.date, fx: pos.currency, qty: l.qty,
+      commAbs: l.commission, commBps: l.commissionBps,
+      amount: l.cost, asset: pos.asset, flow: FLOW_PURCHASE, ticker,
+      // Each lot keeps the account it was actually bought in — ETHSGD spans
+      // BinanceSG and Gemini, so a single per-position account would mislabel half.
+      account: l.account,
+    }));
   };
 
   /**
@@ -2263,20 +2257,15 @@ const PortfolioBacktester = () => {
    * reads that back.
    */
   const getOpenDividends = (ticker: string): TransactionRow[] => {
-    if (positionsModel) {
-      const pos = positionsModel.open.find(o => o.ticker === ticker);
-      // Nothing open means no income belongs here — it all left with the round trips.
-      // Falling through to the raw ledger instead would report a closed position's
-      // entire dividend history a second time, on top of what the round trips carry.
-      if (!pos) return [];
-      return pos.incomeEvents.map(e => ({
-        date: e.date, fx: pos.currency, qty: 0, commAbs: 0, commBps: 0,
-        amount: e.amount, asset: pos.asset, flow: FLOW_DIVIDEND, ticker, account: '',
-      }));
-    }
-    return transactionData
-      .filter(t => t.ticker === ticker && t.flow === FLOW_DIVIDEND)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    // Nothing open means no income belongs here — it all left with the round trips.
+    // Reading the raw ledger instead would report a closed position's entire dividend
+    // history a second time, on top of what those round trips already carry.
+    const pos = positionsModel?.open.find(o => o.ticker === ticker);
+    if (!pos) return [];
+    return pos.incomeEvents.map(e => ({
+      date: e.date, fx: pos.currency, qty: 0, commAbs: 0, commBps: 0,
+      amount: e.amount, asset: pos.asset, flow: FLOW_DIVIDEND, ticker, account: '',
+    }));
   };
 
   /**
