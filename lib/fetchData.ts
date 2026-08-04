@@ -236,15 +236,22 @@ export interface ParsedData {
 }
 
 /**
- * A CSV reader that understands newlines INSIDE quoted fields.
+ * The CSV reader for this app: turns raw text straight into rows of fields.
  *
- * The other parsers in this file split the file on "\n" first and then parse each
- * line. That is fine for the price sheets, but the Transactions tab has a header
- * whose cells contain line breaks ("Price\nValue", "Comm\n/adj"), so its header
- * alone spans three physical lines — splitting first would shred it. This walks the
- * text character by character instead, tracking whether it is inside quotes.
+ * Several sheets have column headers containing line breaks ("Price\nValue",
+ * "Inv\nDate"), so a header can span three physical lines. Splitting the file on "\n"
+ * first would shred those. This walks the text character by character instead,
+ * tracking whether it is inside quotes, so a newline only ends a row when it is
+ * genuinely outside a quoted field.
+ *
+ * Blank rows are dropped, matching what the sheets actually contain. A row of bare
+ * delimiters (",,,,") is NOT blank — it survives, because the trailing summary blocks
+ * some sheets carry look like that and the callers filter them out themselves.
+ *
+ * @param csvText   the entire file
+ * @param delimiter usually a comma; Google occasionally exports tab-separated
  */
-function parseCSVRows(csvText: string): string[][] {
+function parseCSVRows(csvText: string, delimiter: string = ','): string[][] {
   const text = csvText.replace(/^﻿/, '').replace(/\r\n/g, '\n');
   const rows: string[][] = [];
   let row: string[] = [], cur = '', inQuotes = false;
@@ -254,7 +261,7 @@ function parseCSVRows(csvText: string): string[][] {
     if (ch === '"') {
       // A doubled quote inside a quoted field is a literal quote character
       if (inQuotes && text[i + 1] === '"') { cur += '"'; i++; } else inQuotes = !inQuotes;
-    } else if (ch === ',' && !inQuotes) {
+    } else if (ch === delimiter && !inQuotes) {
       row.push(cur); cur = '';
     } else if (ch === '\n' && !inQuotes) {
       row.push(cur); rows.push(row); row = []; cur = '';
@@ -263,8 +270,8 @@ function parseCSVRows(csvText: string): string[][] {
     }
   }
   row.push(cur);
-  if (row.length > 1 || row[0] !== '') rows.push(row);
-  return rows;
+  rows.push(row);
+  return rows.filter(r => r.length > 1 || r[0].trim() !== '');
 }
 
 /**
@@ -619,47 +626,6 @@ function normalizeDate(dateStr: string): string {
 }
 
 /**
- * Splits CSV text into logical rows, correctly handling quoted fields that
- * contain newlines. Standard split('\n') breaks when column headers or values
- * have line breaks inside quotes (e.g., "Inv\nDate").
- *
- * @param csvText - The entire CSV file as a string
- * @returns Array of logical row strings (each representing one CSV record)
- */
-function splitCSVRows(csvText: string): string[] {
-  const rows: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < csvText.length; i++) {
-    const char = csvText[i];
-
-    if (char === '"') {
-      // Handle escaped quotes (two double-quotes in a row)
-      if (inQuotes && csvText[i + 1] === '"') {
-        current += '""';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-        current += char;
-      }
-    } else if ((char === '\n' || char === '\r') && !inQuotes) {
-      // End of a logical row (only when not inside quotes)
-      if (char === '\r' && csvText[i + 1] === '\n') i++; // skip \r\n as one newline
-      if (current.trim()) rows.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-
-  // Don't forget the last row
-  if (current.trim()) rows.push(current);
-
-  return rows;
-}
-
-/**
  * Converts raw CSV text into structured data.
  *
  * @param csvText - The raw CSV file content
@@ -756,9 +722,9 @@ function parseSheetData(csvText: string): { data: AssetRow[]; assets: string[] }
 /**
  * Parses the "Daily" sheet CSV (gid=882618775) into DailyNavRow objects.
  *
- * This sheet has multiline column headers (e.g., "NW\nPrice"), so we use
- * splitCSVRows() + header normalization (collapse whitespace → single space),
- * exactly like parseClosedData and parseTransactionData.
+ * This sheet has multiline column headers (e.g., "NW\nPrice"), so it uses the
+ * quote-aware parseCSVRows() plus header normalization (collapse whitespace into a
+ * single space), the same way the ledger parser does.
  *
  * Relevant columns (after normalization):
  *   Date       — calendar date (YYYY-MM-DD)
@@ -773,17 +739,21 @@ function parseSheetData(csvText: string): { data: AssetRow[]; assets: string[] }
  * @returns Array of DailyNavRow objects, one per calendar day
  */
 function parseDailyData(csvText: string): DailyNavRow[] {
-  // Use quote-aware splitter because headers contain embedded newlines
-  const lines = splitCSVRows(csvText.trim());
+  // Quote-aware reader, because this sheet's headers contain embedded newlines.
+  // Parse as comma-separated first; if that yields a single column the export was
+  // tab-separated, so read it again that way.
+  let lines = parseCSVRows(csvText.trim());
+  if (lines.length > 0 && lines[0].length === 1 && lines[0][0].includes('\t')) {
+    lines = parseCSVRows(csvText.trim(), '\t');
+  }
 
   if (lines.length < 2) {
     console.warn('Daily sheet is empty or has no data rows');
     return [];
   }
 
-  const delimiter = lines[0].includes('\t') ? '\t' : ',';
   // Normalize headers: collapse any whitespace (newlines, extra spaces) to a single space
-  const headers = parseCSVLine(lines[0], delimiter).map(h => h.replace(/\s+/g, ' ').trim());
+  const headers = lines[0].map(h => h.replace(/\s+/g, ' ').trim());
 
   console.log('Daily sheet headers:', headers.join(' | '));
 
@@ -794,10 +764,7 @@ function parseDailyData(csvText: string): DailyNavRow[] {
   const rows: DailyNavRow[] = [];
 
   for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const values = parseCSVLine(line, delimiter);
+    const values = lines[i];
 
     const date = readStr(values, 'Date');
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue; // Skip non-date rows
