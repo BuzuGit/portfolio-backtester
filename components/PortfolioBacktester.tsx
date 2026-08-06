@@ -21,6 +21,7 @@ import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, Cartesia
 import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
+import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -756,6 +757,9 @@ const ASSET_CLASS_COLORS: Record<string, string> = {
   'Fixed Income': CHART_PALETTE.olive, 'Equities': CHART_PALETTE.wine,
   'Crypto': CHART_PALETTE.rose, 'Alternatives': CHART_PALETTE.violet,
   'Metals & Crypto': CHART_PALETTE.gold, // gold-ish to represent the physical + crypto nature
+  // Cash is deliberately the one grey in the set. It is not an investment competing with the
+  // others for attention, and a muted slice reads as "not at work yet" at a glance.
+  'Cash': '#94a3b8',
 };
 
 // Colors for the by-currency bar chart — one distinct color per native currency
@@ -1103,6 +1107,19 @@ const PortfolioBacktester = () => {
   // Ref for the "select all" checkbox in open position detail view
   const openSelectAllRef = useRef<HTMLInputElement>(null);
 
+  // ---- Cash section state ----
+  // How much money is sitting in each account, in each currency. Built from the same
+  // Transactions ledger as the positions above, but answering a different question:
+  // not "what do I own?" but "what cash is parked where?". See lib/cash.ts.
+  const [cashAccounts, setCashAccounts] = useState<CashAccountBalance[]>([]);
+  // Which cash balance the user drilled into, keyed "account|currency".
+  // Empty string = showing the summary list, mirroring openSelectedTicker above.
+  const [cashSelected, setCashSelected] = useState<string>('');
+  // Which row of the drill-down's "Inflows & Outflows by Type" table is expanded
+  // (e.g. 'Dividends'). Empty string = none. Cleared whenever a different balance is
+  // opened, so you never land on a page showing a category from the previous account.
+  const [cashCategory, setCashCategory] = useState<string>('');
+
   // ---- Monthly Prices chart state ----
   // Which asset's row is currently selected for chart display (empty = no chart)
   const [monthlySelectedTicker, setMonthlySelectedTicker] = useState<string>('');
@@ -1222,11 +1239,21 @@ const PortfolioBacktester = () => {
       const model = buildPositions(fetchedLedgerData, allowedTickers);
       const effectiveTransactions = toTransactionRows(fetchedLedgerData, allowedTickers);
       const effectiveClosed = toClosedPositionRows(model);
+
+      // ---- Derive cash balances from the same ledger ------------------------
+      // The Transactions tab is double-entry: every row names the account the money
+      // LEFT and the account it ARRIVED at. Replaying that gives a bank statement,
+      // and therefore a balance, for each account and currency. `selectVisibleCash`
+      // drops accounts closed years ago at zero. Only the resulting balances are kept
+      // in state, not the ledger rows behind them.
+      const cash = selectVisibleCash(buildCashAccounts(fetchedLedgerData));
+
       if (fetchedLedgerData.length === 0) {
         console.warn('Ledger is empty — the Positions tab will have nothing to show');
       } else {
         console.log(`Ledger: ${model.open.length} open, ${closedTickersFrom(model).length} closed, `
-          + `${model.roundTrips.length} round trips, ${model.warnings.length} warning(s)`);
+          + `${model.roundTrips.length} round trips, ${model.warnings.length} warning(s), `
+          + `${cash.length} cash balance(s)`);
       }
 
       // Update all our state with the new data
@@ -1235,6 +1262,7 @@ const PortfolioBacktester = () => {
       setAssetLookup(lookup);
       setYearsData(fetchedYearsData);
       setPositionsModel(model);
+      setCashAccounts(cash);
       setClosedData(effectiveClosed);
       setTransactionData(effectiveTransactions);
       setDailyData(fetchedDailyData);
@@ -2241,6 +2269,9 @@ const PortfolioBacktester = () => {
       // Each lot keeps the account it was actually bought in — ETHSGD spans
       // BinanceSG and Gemini, so a single per-position account would mislabel half.
       account: l.account,
+      // ...and which cash account paid for it, which is a different account entirely
+      // (shares land in "IB ETF"; the money left "Interactive Brokers").
+      fundedFrom: l.fundedFrom,
     }));
   };
 
@@ -11881,8 +11912,8 @@ const PortfolioBacktester = () => {
                 </button>
               </div>
 
-              {/* --- SUMMARY VIEW (when no specific asset is drilled into) --- */}
-              {!closedSelectedTicker && !openSelectedTicker && (() => {
+              {/* --- SUMMARY VIEW (when no specific asset or cash balance is drilled into) --- */}
+              {!closedSelectedTicker && !openSelectedTicker && !cashSelected && (() => {
                 const filteredAssets = getClosedFilteredLookup();
 
                 if (closedSelectedTickers.length === 0) {
@@ -11980,6 +12011,9 @@ const PortfolioBacktester = () => {
 
                 // Sort open positions by asset class: Fixed Income → M&C → Alternatives → Equities
                 const assetClassOrder: Record<string, number> = {
+                  // Cash sorts first: it is the least risky thing you hold, and the list runs
+                  // from safest to riskiest.
+                  'Cash': -1,
                   'Fixed Income': 0, 'Crypto': 1, 'Other': 1, 'Metals & Crypto': 1, 'Alternatives': 2, 'Equities': 3,
                 };
                 openSummaryData.sort((a, b) => (assetClassOrder[a.assetClass] ?? 99) - (assetClassOrder[b.assetClass] ?? 99));
@@ -12010,12 +12044,51 @@ const PortfolioBacktester = () => {
                 // --- Build a map of ticker → set of accounts (from Purchase of Asset transactions only) ---
                 // Used to filter the portfolio by account — a ticker is "in" an account if it has
                 // at least one purchase from that account.
+                //
+                // The account used here is the one that PAID (`fundedFrom`), not the one the shares
+                // landed in. Otherwise a broker splits into two bars that are really one place:
+                // holdings under "IB ETF" and the cash that buys them under "Interactive Brokers".
+                // Grouping on the payer puts both on the same bar. `account` remains the fallback
+                // for any row without a recorded payer.
+                const purchaseAccountOf = (t: TransactionRow): string => t.fundedFrom || t.account || 'Unknown';
                 const tickerPurchaseAccounts: Record<string, Set<string>> = {};
                 for (const t of transactionData) {
                   if (t.flow !== 'Purchase of Asset') continue;
                   if (!tickerPurchaseAccounts[t.ticker]) tickerPurchaseAccounts[t.ticker] = new Set();
-                  tickerPurchaseAccounts[t.ticker].add(t.account || 'Unknown');
+                  tickerPurchaseAccounts[t.ticker].add(purchaseAccountOf(t));
                 }
+
+                // --- Cash, expressed the same way the position rollups are ---
+                // Cash is not an investment, so it has no cost basis and no profit: a dollar cost a
+                // dollar and is still worth a dollar. That is why `invested` equals `currentValue`
+                // and `pnl` is zero below — not a placeholder, but the truth about cash, and the
+                // reason including it drags the portfolio's overall return down slightly.
+                //
+                // CASH_CLASS is its own asset class rather than being folded into Fixed Income:
+                // idle cash earns nothing and carries no duration, so mixing the two would flatter
+                // the bond sleeve's return and hide how much powder is dry.
+                const CASH_CLASS = 'Cash';
+                const cashRows = cashAccounts.map(c => ({
+                  account: c.account,
+                  currency: c.currency,
+                  // Converted with the latest rate, matching how position CURRENT values are
+                  // converted in these breakdowns.
+                  value: c.balance * (positionsCurrency ? getLatestConversion(c.currency) : toPLNLatest(c.currency)),
+                }));
+                // Cash obeys the same three filters as everything else on this screen, so the
+                // sections stay in sync when a bar is clicked. It is never "Metals & Crypto", so
+                // an M&C class filter excludes it entirely.
+                //
+                // Each section deliberately ignores its OWN filter — otherwise clicking one bar
+                // would hide every other bar in the same chart, leaving nothing to click back on.
+                // That is why this takes flags rather than applying all three: it mirrors what the
+                // position rollups below already do.
+                const cashPasses = (account: string, currency: string, applyCcy: boolean, applyAccount: boolean, applyClass: boolean) =>
+                  (!applyCcy     || !openCurrencyFilter   || openCurrencyFilter === currency) &&
+                  (!applyAccount || !openAccountFilter    || openAccountFilter === account) &&
+                  (!applyClass   || !openAssetClassFilter || openAssetClassFilter === CASH_CLASS);
+                const cashMatching = (applyCcy: boolean, applyAccount: boolean, applyClass: boolean) =>
+                  cashRows.filter(c => cashPasses(c.account, c.currency, applyCcy, applyAccount, applyClass));
 
                 // --- Currency filter + Account filter: both narrow the data driving Asset Class + Open Positions ---
                 const currencyFilteredData = openSummaryData.filter(row => {
@@ -12037,6 +12110,12 @@ const PortfolioBacktester = () => {
                   const nativeCcyForConv = ccy === METALS_CRYPTO_CCY ? (row.nativeCurrency || 'PLN') : ccy;
                   const cvEff = positionsCurrency ? row.currentValueConverted : row.currentValue * toPLNLatest(nativeCcyForConv);
                   ccyRollupMap[ccy] = (ccyRollupMap[ccy] || 0) + cvEff;
+                }
+                // Cash lands in its real currency bar: USD cash swells the USD bar, and so on.
+                // Filtered by account only, matching ccyRollupSource above — the currency filter
+                // is this chart's own, and the class filter is handled by activeCurrencyData.
+                for (const c of cashMatching(false, true, false)) {
+                  ccyRollupMap[c.currency] = (ccyRollupMap[c.currency] || 0) + c.value;
                 }
                 // Sort by value descending so the largest bar appears at the top
                 const currencyRollup = Object.entries(ccyRollupMap)
@@ -12070,6 +12149,12 @@ const PortfolioBacktester = () => {
                   acRollupMap[cls].currentValue += currentValueEff;
                   acRollupMap[cls].pnl += pnlEff;
                 }
+                // Cash joins as its own class. Filtered by currency + account, matching
+                // currencyFilteredData above; the class filter is this table's own.
+                const acCashTotal = cashMatching(true, true, false).reduce((s, c) => s + c.value, 0);
+                if (Math.abs(acCashTotal) > 0.005) {
+                  acRollupMap[CASH_CLASS] = { invested: acCashTotal, currentValue: acCashTotal, pnl: 0 };
+                }
                 const totalEffectivePV = Object.values(acRollupMap).reduce((sum, v) => sum + v.currentValue, 0);
                 const assetClassRollup = Object.entries(acRollupMap)
                   .map(([cls, vals]) => ({
@@ -12098,6 +12183,14 @@ const PortfolioBacktester = () => {
                     acCurrencyBreakdown[cls][ccy].currentValue += row.currentValue * conv;
                     acCurrencyBreakdown[cls][ccy].pnl += row.totalPnL * conv;
                   }
+                }
+                // ...and the same split for Cash, so clicking the Cash row reveals how much sits
+                // in each currency, exactly as clicking Equities reveals its currency mix.
+                for (const c of cashMatching(true, true, false)) {
+                  if (!acCurrencyBreakdown[CASH_CLASS]) acCurrencyBreakdown[CASH_CLASS] = {};
+                  if (!acCurrencyBreakdown[CASH_CLASS][c.currency]) acCurrencyBreakdown[CASH_CLASS][c.currency] = { invested: 0, currentValue: 0, pnl: 0 };
+                  acCurrencyBreakdown[CASH_CLASS][c.currency].invested += c.value;
+                  acCurrencyBreakdown[CASH_CLASS][c.currency].currentValue += c.value;
                 }
 
                 // --- Active currency data for the By Currency bar chart ---
@@ -12212,11 +12305,18 @@ const PortfolioBacktester = () => {
                                     </td>
                                     <td className="text-right py-2 px-2 font-mono">{row.invested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                     <td className="text-right py-2 px-2 font-mono">{row.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                      {row.pnl >= 0 ? '+' : ''}{row.pnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    {/* Cash shows a dash, not "+0". A zero would read as "this
+                                        broke even", when in fact profit and loss simply do not
+                                        apply — cash was never bought at a price. The totals row
+                                        still counts it, which is the point: idle cash drags the
+                                        portfolio's overall return. */}
+                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.assetClass === CASH_CLASS ? 'text-gray-400' : row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {row.assetClass === CASH_CLASS ? '—'
+                                        : `${row.pnl >= 0 ? '+' : ''}${row.pnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
                                     </td>
-                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                      {row.invested > 0 ? `${row.pnl >= 0 ? '+' : ''}${((row.pnl / row.invested) * 100).toFixed(1)}%` : '—'}
+                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.assetClass === CASH_CLASS ? 'text-gray-400' : row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {row.assetClass === CASH_CLASS ? '—'
+                                        : row.invested > 0 ? `${row.pnl >= 0 ? '+' : ''}${((row.pnl / row.invested) * 100).toFixed(1)}%` : '—'}
                                     </td>
                                     <td className="text-right py-2 px-2 font-mono">{row.weight.toFixed(1)}%</td>
                                   </tr>
@@ -12408,7 +12508,9 @@ const PortfolioBacktester = () => {
                         if (tickerTotalInvested === 0) continue;
                         const acctInvested: Record<string, number> = {};
                         for (const t of purchaseOnly) {
-                          const acct = t.account || 'Unknown';
+                          // Group on the account that PAID, so a broker's holdings sit on the same
+                          // bar as its cash. See purchaseAccountOf above.
+                          const acct = purchaseAccountOf(t);
                           acctInvested[acct] = (acctInvested[acct] || 0) + t.amount;
                         }
                         const nativeCcyForConv = effectiveCurrency(row) === METALS_CRYPTO_CCY ? (row.nativeCurrency || 'PLN') : effectiveCurrency(row);
@@ -12416,6 +12518,14 @@ const PortfolioBacktester = () => {
                         for (const [acct, invested] of Object.entries(acctInvested)) {
                           acctRollupMap[acct] = (acctRollupMap[acct] || 0) + cvEff * (invested / tickerTotalInvested);
                         }
+                      }
+                      // Cash sits on the bar for the account actually holding it. Because holdings
+                      // are now grouped by their paying account too, an account's bar is its whole
+                      // balance sheet: what it owns plus what it still has to spend.
+                      // Filtered by currency + class, matching acctBarSource — the account filter
+                      // is this chart's own.
+                      for (const c of cashMatching(true, false, true)) {
+                        acctRollupMap[c.account] = (acctRollupMap[c.account] || 0) + c.value;
                       }
                       const accountRollup = Object.entries(acctRollupMap)
                         .map(([account, currentValue]) => ({ account, currentValue }))
@@ -12521,6 +12631,144 @@ const PortfolioBacktester = () => {
                               </ResponsiveContainer>
                             </div>
                           </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* === Cash Table === */}
+                    {/* Sits above Open Positions because it answers the prior question:
+                        before "what do I own?" comes "what money is sitting where, ready
+                        to buy something?". Rows are grouped by account so an account's
+                        currencies read together — Interactive Brokers' USD, PLN and SGD
+                        lines belong side by side, not scattered by size across the table. */}
+                    {cashAccounts.length > 0 && (() => {
+                      // Convert each balance into the tab's chosen display currency, using
+                      // today's FX. Cash has no purchase history to value against, so unlike
+                      // a position there is only one sensible rate: the latest one.
+                      //
+                      // Obeys all three breakdown filters, so clicking a currency bar or an
+                      // account bar narrows this table the same way it narrows Open Positions
+                      // below. Clicking an asset class other than Cash empties it, which is the
+                      // honest answer to "show me only the Equities part of my cash".
+                      const rows = cashAccounts
+                        .filter(c => cashPasses(c.account, c.currency, true, true, true))
+                        .map(c => ({
+                          ...c,
+                          key: `${c.account}|${c.currency}`,
+                          converted: c.balance * (positionsCurrency ? getLatestConversion(c.currency) : toPLNLatest(c.currency)),
+                        }));
+                      if (rows.length === 0) return null;
+
+                      // Order accounts by how much cash they hold in total, then each
+                      // account's currencies by size within it.
+                      const totalByAccount = new Map<string, number>();
+                      rows.forEach(r => totalByAccount.set(r.account, (totalByAccount.get(r.account) || 0) + r.converted));
+                      rows.sort((a, b) =>
+                        (totalByAccount.get(b.account)! - totalByAccount.get(a.account)!)
+                        || (b.converted - a.converted)
+                        || a.currency.localeCompare(b.currency));
+
+                      const grandTotal = rows.reduce((s, r) => s + r.converted, 0);
+                      // Weight bars are scaled against the largest balance, matching the
+                      // Open Positions table's treatment of the same column.
+                      const maxConverted = Math.max(...rows.map(r => Math.abs(r.converted)), 1);
+                      // True when a row starts a new account block — drives the divider
+                      // line and stops the account name repeating down the group.
+                      const startsGroup = (i: number) => i === 0 || rows[i - 1].account !== rows[i].account;
+
+                      return (
+                        <div className="bg-white p-4 rounded-lg shadow mb-4">
+                          <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                            Cash
+                            <span className="font-normal text-gray-500">
+                              — uninvested balances, rebuilt from every movement in the ledger
+                            </span>
+                            {/* Same colour language as the breakdowns above: amber for a currency
+                                filter, green for an account one, so it is obvious why rows vanished */}
+                            {openCurrencyFilter && (
+                              <span className="text-xs font-normal text-amber-600">— {openCurrencyFilter} only</span>
+                            )}
+                            {openAccountFilter && (
+                              <span className="text-xs font-normal text-green-600">— {openAccountFilter} only</span>
+                            )}
+                          </h4>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs border-collapse">
+                              <thead>
+                                <tr className="border-b border-gray-200">
+                                  <th className="text-left py-2 px-2 bg-gray-100">Account</th>
+                                  <th className="text-left py-2 px-2 bg-gray-100">Currency</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100">Balance</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100" title="Every credit this account has ever received, in this currency">Total In</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100" title="Every debit this account has ever paid out, in this currency">Total Out</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100" title="How many individual movements make up the balance">Movements</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100">Last Activity</th>
+                                  <th className="text-right py-2 px-2 bg-gray-100" style={{ width: 70 }} title="Share of total cash held">Weight</th>
+                                  {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-100">Balance {posCcyLabel}</th>}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map((row, idx) => (
+                                  <tr
+                                    key={row.key}
+                                    className={`cursor-pointer hover:bg-blue-50 transition-colors ${
+                                      startsGroup(idx) ? 'border-t border-gray-200' : ''
+                                    } border-b border-gray-50`}
+                                    onClick={() => { setCashSelected(row.key); setCashCategory(''); }}
+                                    title={`Click to see every inflow and outflow for ${row.account} in ${row.currency}`}
+                                  >
+                                    <td className="py-2 px-2 text-gray-700">{startsGroup(idx) ? row.account : ''}</td>
+                                    <td className="py-2 px-2 text-gray-500 font-mono">{row.currency}</td>
+                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.balance < 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                                      {row.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="text-right py-2 px-2 font-mono text-gray-500">{row.totalIn.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                    <td className="text-right py-2 px-2 font-mono text-gray-500">{row.totalOut.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                    <td className="text-right py-2 px-2 font-mono text-gray-500">{row.movements.length}</td>
+                                    <td className="text-right py-2 px-2 font-mono text-gray-500" title={`First movement: ${row.firstDate}`}>{row.lastDate}</td>
+                                    {/* Weight cell with inline bar chart — same treatment as Open Positions */}
+                                    <td className="py-2 px-2 font-mono" style={{ position: 'relative', overflow: 'hidden' }}>
+                                      <div style={{
+                                        position: 'absolute', left: 0, top: 0, bottom: 0,
+                                        width: `${(Math.abs(row.converted) / maxConverted) * 100}%`,
+                                        backgroundColor: 'rgb(209, 213, 219)',
+                                        borderRadius: '0 2px 2px 0',
+                                      }} />
+                                      <span style={{ position: 'relative' }} className="text-right block">
+                                        {grandTotal !== 0 ? ((row.converted / grandTotal) * 100).toFixed(1) : '0.0'}%
+                                      </span>
+                                    </td>
+                                    {positionsCurrency && (
+                                      <td className="text-right py-2 px-2 font-mono">
+                                        {row.converted.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                      </td>
+                                    )}
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr className="border-t-2 border-gray-300 font-semibold bg-gray-100">
+                                  <td className="py-2 px-2 text-gray-700 font-mono">{rows.length} Balances</td>
+                                  <td colSpan={6}></td>
+                                  <td className="text-right py-2 px-2 font-mono">100.0%</td>
+                                  {positionsCurrency && (
+                                    <td className="text-right py-2 px-2 font-mono">
+                                      {grandTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                    </td>
+                                  )}
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                          {/* An honest caveat rather than a silently misleading number: the
+                              ledger records money moving in and out of investments, so a
+                              brokerage balance is complete, but an everyday bank account
+                              only shows the part of it that this spreadsheet tracks. */}
+                          <p className="text-xs text-gray-400 mt-3">
+                            Brokerage and SRS balances are complete. Everyday bank accounts show only the
+                            money this ledger tracks — spending outside it is not recorded, so their real
+                            balance may be higher.
+                          </p>
                         </div>
                       );
                     })()}
@@ -12721,6 +12969,362 @@ const PortfolioBacktester = () => {
                       </div>
                     )}
                     <p className="text-xs text-gray-400 mt-3">Click a row to see detailed transactions, chart, and statistics.</p>
+                  </>
+                );
+              })()}
+
+              {/* --- CASH DETAIL VIEW --- */}
+              {/* The bank statement behind one balance. An open position's detail page asks
+                  "what did I pay and what is it worth now?"; a cash balance has no price, so
+                  the interesting questions are different: where did this money come from,
+                  where did it go, and what was the balance along the way. */}
+              {cashSelected && (() => {
+                const cashRow = cashAccounts.find(c => `${c.account}|${c.currency}` === cashSelected);
+                if (!cashRow) return null;
+
+                const { movements } = cashRow;
+                const fmt = (n: number, dp = 2) => n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+
+                // --- Breakdown: group the movements by what kind of event they were, so
+                // "where did 1.5m dollars of inflow come from?" has an answer at a glance.
+                const byCategory = new Map<string, { inflow: number; outflow: number; count: number }>();
+                for (const m of movements) {
+                  const c = byCategory.get(m.category) || { inflow: 0, outflow: 0, count: 0 };
+                  if (m.direction === 'in') c.inflow += m.amount; else c.outflow += m.amount;
+                  c.count++;
+                  byCategory.set(m.category, c);
+                }
+                const categories = Array.from(byCategory.entries())
+                  .map(([category, v]) => ({ category, ...v, net: v.inflow - v.outflow }))
+                  .sort((a, b) => (b.inflow + b.outflow) - (a.inflow + a.outflow));
+
+                // A few headline numbers worth pulling out of the categories above
+                const interestEarned = (byCategory.get('Interest')?.inflow || 0) + (byCategory.get('Dividends')?.inflow || 0);
+                const feesPaid = byCategory.get('Fees & commissions')?.outflow || 0;
+
+                // --- Balance-over-time chart. One point per movement is honest (the balance
+                // really did step at each one) but 278 points with duplicate dates render
+                // badly, so same-day movements collapse to the day's CLOSING balance —
+                // which is what a bank statement shows anyway.
+                const balanceByDate = new Map<string, number>();
+                for (const m of movements) balanceByDate.set(m.date, m.balance);
+                const chartData = Array.from(balanceByDate.entries()).map(([date, balance]) => ({ date, balance }));
+
+                // Newest first: the recent movements are the ones you came here to read.
+                const statement = movements.slice().reverse();
+
+                return (
+                  <>
+                    <div className="flex items-center gap-3 mb-4">
+                      <button
+                        onClick={() => { setCashSelected(''); setCashCategory(''); }}
+                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                        </svg>
+                        Back to list
+                      </button>
+                      <h3 className="text-lg font-semibold text-gray-800">
+                        {cashRow.account} — {cashRow.currency} cash
+                      </h3>
+                    </div>
+
+                    {/* --- Stat cards --- */}
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+                      {[
+                        { label: 'Current Balance', value: fmt(cashRow.balance), tone: cashRow.balance < 0 ? 'text-red-600' : 'text-gray-800',
+                          hint: `Every credit less every debit, as of ${cashRow.lastDate}` },
+                        { label: 'Total In', value: fmt(cashRow.totalIn, 0), tone: 'text-green-600',
+                          hint: 'Everything that ever arrived in this account, in this currency' },
+                        { label: 'Total Out', value: fmt(cashRow.totalOut, 0), tone: 'text-red-600',
+                          hint: 'Everything that ever left' },
+                        { label: 'Income Earned', value: fmt(interestEarned), tone: 'text-green-600',
+                          hint: 'Interest and dividends credited straight to this cash account' },
+                        { label: 'Fees Paid', value: fmt(feesPaid), tone: feesPaid > 0 ? 'text-red-600' : 'text-gray-400',
+                          hint: 'Commissions and charges booked directly against this account. Trading commissions are already inside each purchase and sale amount, so they are not counted again here.' },
+                        { label: 'Movements', value: String(movements.length), tone: 'text-gray-800',
+                          hint: `From ${cashRow.firstDate} to ${cashRow.lastDate}` },
+                      ].map(card => (
+                        <div key={card.label} className="bg-white p-3 rounded-lg shadow" title={card.hint}>
+                          <div className="text-xs text-gray-500 mb-1">{card.label}</div>
+                          <div className={`text-lg font-semibold font-mono ${card.tone}`}>{card.value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* --- Where the money came from and went --- */}
+                    <div className="bg-white p-4 rounded-lg shadow mb-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                        Inflows &amp; Outflows by Type
+                        <span className="font-normal text-gray-500">(all figures in {cashRow.currency})</span>
+                        {cashCategory && (
+                          <span className="flex items-center gap-1 text-xs font-normal bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+                            {cashCategory}
+                            <button onClick={() => setCashCategory('')} className="hover:text-blue-900 leading-none">✕</button>
+                          </span>
+                        )}
+                      </h4>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs border-collapse">
+                          <thead>
+                            <tr className="border-b border-gray-200">
+                              <th className="text-left py-2 px-2 bg-gray-100">Type</th>
+                              <th className="text-right py-2 px-2 bg-gray-100">In</th>
+                              <th className="text-right py-2 px-2 bg-gray-100">Out</th>
+                              <th className="text-right py-2 px-2 bg-gray-100">Net</th>
+                              <th className="text-right py-2 px-2 bg-gray-100"># Movements</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {categories.map((c, idx) => (
+                              <tr
+                                key={c.category}
+                                className={`border-b border-gray-50 cursor-pointer transition-colors ${
+                                  cashCategory === c.category
+                                    ? 'bg-blue-50 outline outline-1 outline-blue-300'
+                                    : cashCategory
+                                    ? 'opacity-40 hover:opacity-100'
+                                    : idx % 2 === 0 ? 'hover:bg-blue-50' : 'bg-gray-25 hover:bg-blue-50'
+                                }`}
+                                onClick={() => setCashCategory(prev => prev === c.category ? '' : c.category)}
+                                title={`Click to list the ${c.count} ${c.category.toLowerCase()} movements`}
+                              >
+                                <td className="py-2 px-2 text-gray-700">{c.category}</td>
+                                <td className="text-right py-2 px-2 font-mono text-green-600">{c.inflow > 0 ? fmt(c.inflow) : ''}</td>
+                                <td className="text-right py-2 px-2 font-mono text-red-600">{c.outflow > 0 ? fmt(c.outflow) : ''}</td>
+                                <td className={`text-right py-2 px-2 font-mono font-medium ${c.net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {c.net >= 0 ? '+' : ''}{fmt(c.net)}
+                                </td>
+                                <td className="text-right py-2 px-2 font-mono text-gray-500">{c.count}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-gray-300 font-semibold bg-gray-100">
+                              <td className="py-2 px-2 text-gray-700">Balance</td>
+                              <td className="text-right py-2 px-2 font-mono text-green-600">{fmt(cashRow.totalIn)}</td>
+                              <td className="text-right py-2 px-2 font-mono text-red-600">{fmt(cashRow.totalOut)}</td>
+                              <td className={`text-right py-2 px-2 font-mono ${cashRow.balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmt(cashRow.balance)}</td>
+                              <td className="text-right py-2 px-2 font-mono">{movements.length}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+
+                      {/* --- Drill-down: every movement in the clicked category --- */}
+                      {/* Lives inside the same card as the breakdown it expands, so the link
+                          between the row you clicked and the list below is obvious. The Asset
+                          column is the reason this exists: "4,549.35 of dividends" is a number,
+                          "1,204.42 from Vanguard FTSE All-World on 2026-03-24" is an answer. */}
+                      {cashCategory && (() => {
+                        const inCategory = movements.filter(m => m.category === cashCategory);
+                        if (inCategory.length === 0) return null;
+                        const catIn = inCategory.filter(m => m.direction === 'in').reduce((s, m) => s + m.amount, 0);
+                        const catOut = inCategory.filter(m => m.direction === 'out').reduce((s, m) => s + m.amount, 0);
+                        // Newest first, matching the Statement below
+                        const listed = inCategory.slice().reverse();
+                        // Some categories are pure cash movements with no asset behind them
+                        // (deposits, FX, transfers). Dropping the column there keeps the table
+                        // honest rather than printing "Cash" forty times.
+                        const showAsset = inCategory.some(m => m.asset && m.asset !== 'Cash');
+
+                        // --- Monthly totals for the bar chart ---
+                        // A table tells you the numbers; bars tell you the RHYTHM — that interest
+                        // arrives every month but dividends only quarterly, that FX conversions
+                        // cluster before big purchases. That is what this is for.
+                        //
+                        // Months with no activity are filled in with zeros rather than skipped.
+                        // Without them the axis would silently compress a quiet year into the same
+                        // width as a busy one, which is exactly the pattern you are looking for.
+                        const monthlyData = (() => {
+                          const byMonth = new Map<string, { inflow: number; outflow: number; count: number }>();
+                          for (const m of inCategory) {
+                            const key = m.date.slice(0, 7);          // "2026-03"
+                            const e = byMonth.get(key) || { inflow: 0, outflow: 0, count: 0 };
+                            if (m.direction === 'in') e.inflow += m.amount; else e.outflow += m.amount;
+                            e.count++;
+                            byMonth.set(key, e);
+                          }
+                          const keys = Array.from(byMonth.keys()).sort();
+                          if (keys.length === 0) return [];
+                          const out: { month: string; inflow: number; outflow: number; count: number }[] = [];
+                          // Walk month by month from the first to the last, so the gaps are real gaps
+                          const [startY, startM] = keys[0].split('-').map(Number);
+                          const last = keys[keys.length - 1];
+                          const cursor = new Date(Date.UTC(startY, startM - 1, 1));
+                          for (let guard = 0; guard < 1200; guard++) {
+                            const key = `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`;
+                            const e = byMonth.get(key);
+                            out.push({ month: key, inflow: e?.inflow ?? 0, outflow: e?.outflow ?? 0, count: e?.count ?? 0 });
+                            if (key >= last) break;
+                            cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+                          }
+                          return out;
+                        })();
+                        // Only draw a series that actually has something in it, so a one-directional
+                        // category (interest, dividends) gets one clean set of bars rather than a
+                        // legend promising an "Out" series that is flat zero.
+                        const hasIn = catIn > 0, hasOut = catOut > 0;
+
+                        return (
+                          <div className="mt-4 pt-4 border-t border-gray-200">
+                            <h5 className="text-xs font-semibold text-gray-700 mb-2">
+                              {cashCategory}
+                              <span className="font-normal text-gray-500">
+                                {' '}— {inCategory.length} movement{inCategory.length === 1 ? '' : 's'} in {cashRow.currency}
+                              </span>
+                            </h5>
+
+                            {/* --- Monthly bars for the selected category --- */}
+                            {monthlyData.length > 0 && (
+                              <div className="mb-4">
+                                <div className="text-xs text-gray-500 mb-1">
+                                  Monthly total{hasIn && hasOut ? 's' : ''} · {monthlyData.length} month{monthlyData.length === 1 ? '' : 's'} from {monthlyData[0].month} to {monthlyData[monthlyData.length - 1].month}
+                                </div>
+                                <ResponsiveContainer width="100%" height={180}>
+                                  <BarChart data={monthlyData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                                    {/* minTickGap thins the labels automatically, so 86 months of
+                                        history stays readable without hand-tuning an interval */}
+                                    <XAxis dataKey="month" tick={{ fontSize: 9 }} minTickGap={24} />
+                                    <YAxis tick={{ fontSize: 9 }} width={52}
+                                           tickFormatter={(v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+                                    <Tooltip
+                                      cursor={{ fill: 'rgba(0,0,0,0.06)' }}
+                                      formatter={(value: number, name: string) => [`${fmt(value)} ${cashRow.currency}`, name]}
+                                      labelFormatter={(label: string) => {
+                                        const row = monthlyData.find(d => d.month === label);
+                                        return `${label} — ${row?.count ?? 0} movement${row?.count === 1 ? '' : 's'}`;
+                                      }}
+                                    />
+                                    {/* Both series shown only when the category really moves both
+                                        ways (FX conversions, transfers). Green in, red out — the
+                                        same language as the In/Out columns in the table below. */}
+                                    {hasIn && <Bar dataKey="inflow" name="In" fill="#16a34a" isAnimationActive={false} />}
+                                    {hasOut && <Bar dataKey="outflow" name="Out" fill="#dc2626" isAnimationActive={false} />}
+                                    {hasIn && hasOut && <Legend wrapperStyle={{ fontSize: 11 }} />}
+                                  </BarChart>
+                                </ResponsiveContainer>
+                              </div>
+                            )}
+
+                            <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+                              <table className="w-full text-xs border-collapse">
+                                <thead className="sticky top-0">
+                                  <tr className="border-b border-gray-200">
+                                    <th className="text-left py-2 px-2 bg-gray-100">Date</th>
+                                    {showAsset && <th className="text-left py-2 px-2 bg-gray-100">Asset</th>}
+                                    <th className="text-left py-2 px-2 bg-gray-100" title="The account at the other end of this movement">Counterparty</th>
+                                    <th className="text-left py-2 px-2 bg-gray-100">Remarks</th>
+                                    <th className="text-right py-2 px-2 bg-gray-100">In</th>
+                                    <th className="text-right py-2 px-2 bg-gray-100">Out</th>
+                                    <th className="text-right py-2 px-2 bg-gray-100" title="The account's running balance immediately after this movement">Balance</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {listed.map((m, idx) => (
+                                    <tr key={`${cashCategory}-${m.date}-${idx}`} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                                      <td className="py-1.5 px-2 font-mono whitespace-nowrap text-gray-600">{m.date}</td>
+                                      {showAsset && (
+                                        <td className="py-1.5 px-2 text-gray-700">
+                                          {m.asset && m.asset !== 'Cash' ? m.asset : <span className="text-gray-400">—</span>}
+                                          {m.ticker && <span className="text-gray-400"> ({m.ticker})</span>}
+                                        </td>
+                                      )}
+                                      <td className="py-1.5 px-2 text-gray-500">{m.counterparty}</td>
+                                      <td className="py-1.5 px-2 text-gray-500" title={m.remarks}>{m.remarks}</td>
+                                      <td className="text-right py-1.5 px-2 font-mono text-green-600">{m.direction === 'in' ? fmt(m.amount) : ''}</td>
+                                      <td className="text-right py-1.5 px-2 font-mono text-red-600">{m.direction === 'out' ? fmt(m.amount) : ''}</td>
+                                      <td className={`text-right py-1.5 px-2 font-mono ${m.balance < 0 ? 'text-red-600' : 'text-gray-700'}`}>{fmt(m.balance)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr className="border-t-2 border-gray-300 font-semibold bg-gray-100">
+                                    <td className="py-2 px-2 text-gray-700 font-mono">Total</td>
+                                    {showAsset && <td></td>}
+                                    <td colSpan={2}></td>
+                                    <td className="text-right py-2 px-2 font-mono text-green-600">{catIn > 0 ? fmt(catIn) : ''}</td>
+                                    <td className="text-right py-2 px-2 font-mono text-red-600">{catOut > 0 ? fmt(catOut) : ''}</td>
+                                    {/* The running-balance column has no meaningful total, so it
+                                        shows the category's NET effect on the account instead. */}
+                                    <td className={`text-right py-2 px-2 font-mono ${catIn - catOut >= 0 ? 'text-green-600' : 'text-red-600'}`}
+                                        title="Net effect of this category on the balance">
+                                      {catIn - catOut >= 0 ? '+' : ''}{fmt(catIn - catOut)}
+                                    </td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* --- Balance over time --- */}
+                    {chartData.length > 1 && (
+                      <div className="bg-white p-4 rounded-lg shadow mb-4">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3">
+                          Balance Over Time
+                          <span className="font-normal text-gray-500"> (closing balance on each day with activity)</span>
+                        </h4>
+                        <ResponsiveContainer width="100%" height={260}>
+                          <AreaChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                            <XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={40} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={(v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+                            <Tooltip
+                              formatter={(value: number) => [`${fmt(value)} ${cashRow.currency}`, 'Balance']}
+                              labelFormatter={(label: string) => label}
+                            />
+                            {/* Zero line makes an overdrawn stretch obvious at a glance */}
+                            <ReferenceLine y={0} stroke="#9ca3af" strokeWidth={1} />
+                            <Area type="stepAfter" dataKey="balance" stroke={CHART_PALETTE.blue} fill={CHART_PALETTE.blue} fillOpacity={0.15} strokeWidth={2} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+
+                    {/* --- The statement itself --- */}
+                    <div className="bg-white p-4 rounded-lg shadow">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">
+                        Statement
+                        <span className="font-normal text-gray-500"> (newest first — {movements.length} movements in {cashRow.currency})</span>
+                      </h4>
+                      <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                        <table className="w-full text-xs border-collapse">
+                          <thead className="sticky top-0">
+                            <tr className="border-b border-gray-200">
+                              <th className="text-left py-2 px-2 bg-gray-100">Date</th>
+                              <th className="text-left py-2 px-2 bg-gray-100">Type</th>
+                              <th className="text-left py-2 px-2 bg-gray-100" title="The account at the other end of this movement">Counterparty</th>
+                              <th className="text-left py-2 px-2 bg-gray-100">Details</th>
+                              <th className="text-right py-2 px-2 bg-gray-100">In</th>
+                              <th className="text-right py-2 px-2 bg-gray-100">Out</th>
+                              <th className="text-right py-2 px-2 bg-gray-100" title="The balance immediately after this movement">Balance</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {statement.map((m, idx) => (
+                              <tr key={`${m.date}-${idx}`} className={`border-b border-gray-50 ${m.direction === 'in' ? 'bg-green-50/30' : ''}`}>
+                                <td className="py-1.5 px-2 font-mono whitespace-nowrap text-gray-600">{m.date}</td>
+                                <td className="py-1.5 px-2 text-gray-700 whitespace-nowrap">{m.category}</td>
+                                <td className="py-1.5 px-2 text-gray-500">{m.counterparty}</td>
+                                {/* The asset name is the useful label on a trade or dividend; on a pure
+                                    cash move it is just the word "Cash", so the remark is better. */}
+                                <td className="py-1.5 px-2 text-gray-500" title={m.remarks}>
+                                  {m.asset && m.asset !== 'Cash' ? m.asset : m.remarks}
+                                </td>
+                                <td className="text-right py-1.5 px-2 font-mono text-green-600">{m.direction === 'in' ? fmt(m.amount) : ''}</td>
+                                <td className="text-right py-1.5 px-2 font-mono text-red-600">{m.direction === 'out' ? fmt(m.amount) : ''}</td>
+                                <td className={`text-right py-1.5 px-2 font-mono font-medium ${m.balance < 0 ? 'text-red-600' : 'text-gray-700'}`}>{fmt(m.balance)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   </>
                 );
               })()}

@@ -40,7 +40,7 @@ export interface OpenPosition {
   // bought. The Positions tab lists these as its purchase rows.
   // `account` is per lot, not per position: BTCSGD was accumulated across Coinhako,
   // BinanceSG, Crypto.com and Gemini, and ETHSGD across two of them.
-  lots: { date: string; qty: number; cost: number; commission: number; commissionBps: number; account: string }[];
+  lots: { date: string; qty: number; cost: number; commission: number; commissionBps: number; account: string; fundedFrom: string }[];
   // The dividend payments the SURVIVING shares actually received, oldest first. A
   // payment made before these particular shares were bought is absent, because those
   // shares earned none of it.
@@ -120,6 +120,7 @@ interface Lot {
   commission: number;    // commission paid to buy the shares STILL in this lot
   commissionBps: number; // as quoted on the original purchase
   account: string;       // where these particular shares were bought
+  fundedFrom: string;    // which cash account paid for them (the ledger's "from")
   dividends: number;     // income this lot has accumulated while held
   // The individual income payments this lot received, so an open position can list the
   // dividends its own shares actually earned. A lot bought in 2025 gets nothing from a
@@ -187,6 +188,7 @@ export function buildPositions(ledger: LedgerRow[], allowedTickers: Set<string>)
         if (qtyUsable) lots.push({
           date: r.date, qty: r.qty, unitCost: r.amount / r.qty,
           commission: r.commission, commissionBps: r.commissionBps, account: r.account,
+          fundedFrom: r.from,
           dividends: 0, incomeEvents: [],
         });
         continue;
@@ -267,6 +269,7 @@ export function buildPositions(ledger: LedgerRow[], allowedTickers: Set<string>)
         lots: lots.map(l => ({
           date: l.date, qty: l.qty, cost: l.qty * l.unitCost,
           commission: l.commission, commissionBps: l.commissionBps, account: l.account,
+          fundedFrom: l.fundedFrom,
         })),
         // Merge the surviving lots' income histories, combining same-day payments
         incomeEvents: (() => {
@@ -316,6 +319,7 @@ export function toTransactionRows(ledger: LedgerRow[], allowedTickers: Set<strin
       // display only — adding them to cost would charge you twice.
       commAbs: r.commission, commBps: r.commissionBps,
       amount: r.amount, asset: r.asset, flow, ticker: r.ticker, account: r.account,
+      fundedFrom: r.from,
     });
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));

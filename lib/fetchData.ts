@@ -175,6 +175,12 @@ export interface TransactionRow {
   flow: FlowType;     // "Purchase of Asset", "Dividend", or "Proceeds from Sale"
   ticker: string;     // Ticker symbol (e.g., "CFATR")
   account: string;    // Brokerage/bank account where the asset was held (e.g., "Saxo", "mBank")
+  // Which CASH account paid for this purchase — the ledger's "Flow from account:".
+  // `account` above is where the shares ended up ("IB ETF"), which is a different
+  // thing from where the money came from ("Interactive Brokers"). The By Account
+  // breakdown groups on this so a broker's holdings and its cash land on one bar.
+  // Optional because the legacy parser had no such column.
+  fundedFrom?: string;
 }
 
 // Daily NAV row from the "Daily" sheet (gid=882618775)
@@ -214,7 +220,12 @@ export interface LedgerRow {
   asset: string;       // full asset name — the reliable grouping key
   ticker: string;      // may be blank; "UST T-Bill" is reused by two different bills
   flow: string;        // see LEDGER_FLOW_* below
-  account: string;     // "Flow to account:"
+  account: string;     // "Flow to account:"  — where the money ARRIVED
+  // "Flow from account:" — where the money LEFT. Together with `account` this makes
+  // the sheet double-entry: every row moves `amount` out of `from` and into `account`.
+  // Only lib/cash.ts uses it (to rebuild per-account cash balances); the position
+  // replay in lib/positions.ts cares only about the destination.
+  from: string;
   remarks: string;
 }
 
@@ -297,6 +308,7 @@ export function parseLedger(csvText: string): LedgerRow[] {
         iAmount = col('Amount'), iCost = col('Cost Basis'), iAsset = col('Asset'),
         iComm = col('Comm /'), iCommBps = col('Comm ('),
         iFlow = col('Flow'), iTicker = col('Ticker'), iTo = col('Flow to account'),
+        iFrom = col('Flow from account'),
         iRemarks = col('Remarks');
 
   const num = (v: string | undefined): number => {
@@ -326,6 +338,7 @@ export function parseLedger(csvText: string): LedgerRow[] {
       ticker: cell(r, iTicker),
       flow: cell(r, iFlow),
       account: cell(r, iTo),
+      from: cell(r, iFrom),
       remarks: cell(r, iRemarks),
     });
   }
