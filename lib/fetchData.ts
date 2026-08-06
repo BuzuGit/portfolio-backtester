@@ -16,8 +16,24 @@
 const SHEET_BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM3Qq52UZwmQyRQrG_YER6-RNnagk2GG9Os65kFPtkNTpNtZywaoMEV8w_xDDuu0eRdEoPWgn/pub';
 
 // URLs for each tab (sheet) in the spreadsheet
-// gid=0 is the first tab (raw price data), gid=166035960 is the lookup table
+// gid=0 is the first tab (price data), gid=166035960 is the lookup table
 // gid=2044431115 is the Years tab (annual portfolio summary data)
+//
+// IMPORTANT — these prices are ADJUSTED CLOSE, so they are TOTAL-RETURN series:
+// dividends are already inside them. Eight columns say so in their ticker (the `TR`
+// suffix: ES3TR, CFATR, CLRTR, MBHTR, KMLMTR, BW20TR, BM40TR, BS80TR); the rest are
+// accumulating UCITS share classes (IWDA, CSPX, VWRA, EIMI, DTLA...) that reinvest
+// distributions inside the fund. Either way the price already contains the income.
+//
+// So every return computed from this sheet — CAGR, volatility, Sharpe, correlation,
+// beta, drawdown — is a TOTAL return, not a price return. Do NOT "correct" any of
+// them by adding the ledger's dividends on top; that would count the income twice.
+// The ledger's dividend rows are the CASH that reached your account, which is a
+// separate fact and is what the Positions and Cash tabs use.
+//
+// Adjusted close back-adjusts HISTORY (recent prices are the real ones), so a
+// historical price here can sit below what you actually paid on the day for a
+// high-yielding holding. That is expected, not a data error.
 const DATA_SHEET_URL = `${SHEET_BASE_URL}?gid=0&output=csv`;
 const LOOKUP_SHEET_URL = `${SHEET_BASE_URL}?gid=166035960&output=csv`;
 const YEARS_SHEET_URL = `${SHEET_BASE_URL}?gid=2044431115&output=csv`;
