@@ -343,6 +343,52 @@ have evidence rather than a hope.
 3. **Commission is already inside `Amount`.** A purchase's amount is gross *plus* commission; a
    sale's is gross *minus* it. Report it, never re-apply it.
 
+### Why cash balances come from the *same* ledger, read a different way
+
+**Decision (Aug 2026):** Derive per-account, per-currency cash balances in `lib/cash.ts` by
+replaying the Transactions ledger as double-entry bookkeeping.
+
+The positions replay above asks "what do I still own?". The cash model asks a different question
+of the identical rows — "what money is sitting where?" — and gets it by reading a column the app
+had ignored for its entire life.
+
+**The insight:** every ledger row has *two* account columns, `Flow from account:` and
+`Flow to account:`, plus one always-positive `Amount`. A row isn't really "a dividend" or "a
+purchase"; it's *this much money moved from here to there*. A dividend reads
+`Company Distribution → DBS SRS P`. Buying an ETF reads `Interactive Brokers → IB ETF`.
+Converting currency is a **pair** of rows, one moving SGD out and one moving USD in.
+
+Picture the statement for one account being shredded and shuffled together with every other
+account's. To rebuild it you pick out every scrap naming your account on either side, sort by
+date, and add: money in when you're the destination, money out when you're the source. That's
+the whole file.
+
+**The hard part was never the arithmetic — it was the taxonomy.** The ~35 names in those two
+columns are three different kinds of thing wearing the same costume:
+
+| Kind | Examples | Does it hold money? |
+|---|---|---|
+| Cash accounts | Interactive Brokers, DBS SRS P, Alior Bank | **Yes** — these get a balance |
+| Securities buckets | IB ETF, DBS Vickers SRS, DBS SSB | No — buying shares books cash *into* them, so their "balance" is cost basis |
+| Counterparties | Company Distribution, IB Lending, IB FX | No — these are the *other* party, not somewhere you hold money |
+
+Securities buckets are **derived**, not listed: anything that ever received a `Purchase of Asset`
+is one. That rule maintains itself — add a new broker to the sheet and it classifies itself.
+Only the counterparties are named explicitly, and anything unrecognised defaults to *being*
+cash. That default is deliberate: a new bank account appearing as a visible new row is a mistake
+you'll notice, whereas one silently vanishing is not.
+
+**How we knew it was right:** the model reproduced all five balances the spreadsheet's owner
+expected — IB USD 53,277.92, IB PLN 2,346.53, IB SGD 0.00, DBS SRS P 44,397.94, DBS SRS O
+4,660.78 — **to the cent, on the first run, with no fudge factors.** Same evidence-not-hope
+standard as the FIFO work above.
+
+**One consequence worth knowing:** the By Account breakdown groups holdings by the account that
+*paid* for them (`fundedFrom`), not the one the shares landed in, so a broker's cash and its
+holdings share one bar instead of splitting into "IB ETF" and "Interactive Brokers". The wart:
+crypto bought with DBS money rolls up under DBS, even though the coins live at Gemini. Accurate
+as "who paid", wrong as "where is it custodied" — a known, accepted trade-off.
+
 ### Why use 'use client' for the main component?
 
 **Decision:** Mark PortfolioBacktester as a client component.
@@ -900,6 +946,74 @@ Two things worth carrying forward:
 
 Net result: 14 requests down to 5, and load time from about 6 seconds to 2.5.
 
+### 29. The Column Nobody Read
+
+The request was "show me how much cash I have in each account". The obvious plan is to *infer*
+it: add up dividends, subtract purchases, guess at transfers, and reconcile the difference until
+the numbers look plausible. That plan would have taken a day and produced numbers that were
+nearly right, which in finance is a synonym for wrong.
+
+Before writing any of it, we dumped the ledger's headers and stared at them. There were twenty
+columns. The parser read thirteen. Among the seven it skipped: **`Flow from account:`**.
+
+That single column changes what the file *is*. With only `Flow to account:` the ledger looks like
+a diary of events. With both, it's double-entry bookkeeping — every row is a transfer between two
+named accounts, and a balance is just addition. The first version of the calculation ran in
+about twenty lines and reproduced all five expected balances **to the cent, first try**.
+
+The lesson isn't "read the docs". It's narrower and more useful:
+
+> **Before building machinery to infer something, check whether the source already states it.**
+> The gap between "nearly right after a day's work" and "exactly right in twenty lines" was one
+> unread column.
+
+The tell was there to be found cheaply, too. Every single `Amount` in the ledger is **positive** —
+1,300 rows, no exceptions. A file that records money moving but never records a negative number
+*must* be encoding direction somewhere else. That anomaly was visible in the first five minutes
+of poking at the data, and it was pointing straight at the answer.
+
+### 30. The Threshold That Hid a Real Problem
+
+The Cash table needed to suppress a bit of noise. One long-dead savings account sat at
+**−16.76 PLN** — an unsquared rounding difference from 2022. A savings account cannot really be
+overdrawn by sixteen zloty, and showing it in alarming red would be worse than useless. So the
+visibility rule said: *hide a negative balance on a dormant account.* Clean, simple, shipped.
+
+Weeks later — actually, minutes later, mid-review — the owner tidied an account in the
+spreadsheet. Their cleanup left it at **−6,959 PLN**: an inflow row was missing, or a purchase
+was overstated. A real hole in real money.
+
+The app showed nothing at all. Same rule. Negative, dormant, hidden.
+
+The rule wasn't wrong about the 16.76. It was wrong because it **couldn't tell 16.76 from 6,959**,
+and those are not the same kind of fact. One is arithmetic lint; the other is a data error you
+would very much like to be told about. A filter that suppresses noise by a flat rule will, sooner
+or later, suppress signal that happens to share its shape.
+
+The fix was to stop measuring in absolute terms and start measuring **relative to how much money
+had flowed through the account**:
+
+| Account | Balance | Turnover | Ratio | Verdict |
+|---|---|---|---|---|
+| BGZ Optima P | −16.76 | 404,585 | 0.004% | rounding dust → hide |
+| Alior Bank | −6,959 | 195,041 | 3.6% | a hole → **show** |
+
+Same rule, no hand-tuned constant, and it scales itself to an account handling millions or one
+handling hundreds.
+
+**The sting in the tail.** Making negatives visible immediately broke a chart that had never seen
+one. The By Account bar width was `(value / max) * 100 + '%'` — which for −6,959 produced
+`width: -0.2%`. That's invalid CSS, so the browser *discarded the declaration entirely* and the
+element fell back to `width: auto`, i.e. **full width**. The most negative account rendered as
+the biggest bar on the screen, wider than the one holding 2.8 million.
+
+> Invalid CSS doesn't throw, doesn't warn, and doesn't render "nothing". It renders **the
+> default**, which can be the loudest possible lie.
+
+Two habits worth keeping: when you widen a value's range (positive → can-be-negative), go find
+every consumer that quietly assumed the old range; and clamp values feeding a layout, because a
+chart that can't represent your number will not tell you so.
+
 ## How Good Engineers Think
 
 ### 1. Separation of Concerns
@@ -949,6 +1063,19 @@ The app doesn't crash if Google Sheets is slow or unavailable. It shows a loadin
    ```
 
 4. Open http://localhost:3000 in your browser
+
+**Checking your work before you push.** The type checker is the safety net here:
+
+```bash
+npx tsc --noEmit
+```
+
+It reads every file and reports anything that doesn't add up — a misspelled property, a number
+used where text was expected — without producing any output files. Silence means it passed.
+
+Note there is **no linter configured** in this project. `npm run lint` exists but ESLint has
+never been set up, so running it just offers to configure it from scratch. Until someone does,
+`tsc` is the only automatic check, and everything else is verified by driving the running app.
 
 ---
 
