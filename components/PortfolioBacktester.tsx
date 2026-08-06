@@ -8611,15 +8611,19 @@ const PortfolioBacktester = () => {
                               return { best: Math.max(...yearReturns), worst: Math.min(...yearReturns) };
                             })();
 
-                            // ---- Correlation helper: Pearson correlation of monthly returns vs a benchmark ----
-                            const calcCorr = (benchTicker: string): number | null => {
-                              // NOTE: we deliberately do NOT short-circuit when the selected asset IS
-                              // the benchmark. In the asset's native currency the two price series are
-                              // identical, so the computed correlation is exactly 1.00 anyway. But when
-                              // the user views the benchmark (IWDA/VDTA) in a different currency, the
-                              // asset side is FX-converted while the benchmark stays in native USD — so
-                              // the real correlation is < 1 (FX adds noise). Letting it compute reflects that.
-                              if (!assetData) return null;
+                            // ---- Paired monthly returns of the asset and a benchmark ----
+                            // Extracted so correlation and beta are computed from the SAME pairs.
+                            // They answer different halves of one question and must never disagree
+                            // about which months they looked at.
+                            //
+                            // NOTE: we deliberately do NOT short-circuit when the selected asset IS
+                            // the benchmark. In the asset's native currency the two price series are
+                            // identical, so the computed correlation is exactly 1.00 anyway. But when
+                            // the user views the benchmark (IWDA/VDTA) in a different currency, the
+                            // asset side is FX-converted while the benchmark stays in native USD — so
+                            // the real correlation is < 1 (FX adds noise). Letting it compute reflects that.
+                            const benchReturnPairs = (benchTicker: string): { a: number; b: number }[] => {
+                              if (!assetData) return [];
 
                               // Build benchmark last-price-per-month map
                               const benchByMonth = new Map<string, number>();
@@ -8641,7 +8645,17 @@ const PortfolioBacktester = () => {
                                   b: (bCurr - bPrev) / bPrev,
                                 });
                               }
-                              if (pairs.length < 3) return null;
+                              return pairs;
+                            };
+
+                            // Fewer than three overlapping months and any of these figures is noise
+                            // dressed up as a statistic.
+                            const MIN_PAIRS = 3;
+
+                            // ---- Correlation: Pearson correlation of monthly returns vs a benchmark ----
+                            const calcCorr = (benchTicker: string): number | null => {
+                              const pairs = benchReturnPairs(benchTicker);
+                              if (pairs.length < MIN_PAIRS) return null;
 
                               const n = pairs.length;
                               const aMean = pairs.reduce((s, p) => s + p.a, 0) / n;
@@ -8655,6 +8669,38 @@ const PortfolioBacktester = () => {
                               return denom === 0 ? null : num / denom;
                             };
 
+                            // ---- Beta: how far this asset moves for a given move in the benchmark ----
+                            // Correlation says whether two things move TOGETHER; it is capped at 1 and
+                            // says nothing about size. Gold and world equities could both correlate 0.30
+                            // while one swings twice as hard as the other. Beta supplies the missing
+                            // half — the slope of the asset's return regressed on the benchmark's:
+                            //
+                            //     beta = covariance(asset, benchmark) / variance(benchmark)
+                            //
+                            // 1.0 means it has historically moved one-for-one with world equities, 1.5
+                            // means it amplifies them by half again, 0.5 means it damps them, and a
+                            // negative beta means it has tended to move the opposite way.
+                            //
+                            // The (n-1) divisor cancels between the covariance and the variance, so it
+                            // is left out rather than written twice.
+                            const calcBeta = (benchTicker: string): number | null => {
+                              const pairs = benchReturnPairs(benchTicker);
+                              if (pairs.length < MIN_PAIRS) return null;
+
+                              const n = pairs.length;
+                              const aMean = pairs.reduce((s, p) => s + p.a, 0) / n;
+                              const bMean = pairs.reduce((s, p) => s + p.b, 0) / n;
+                              let cov = 0, varB = 0;
+                              for (const p of pairs) {
+                                const da = p.a - aMean, db = p.b - bMean;
+                                cov += da * db;
+                                varB += db * db;
+                              }
+                              // A benchmark that never moved has no slope to measure against
+                              return varB === 0 ? null : cov / varB;
+                            };
+
+                            const iwdaBeta = calcBeta('IWDA');
                             const iwdaCorr = calcCorr('IWDA');
                             const vdtaCorr = calcCorr('VDTA');
 
@@ -8675,7 +8721,14 @@ const PortfolioBacktester = () => {
                                       <th className="text-right py-2 px-2">Curr DD</th>
                                       <th className="text-right py-2 px-2">Best Year</th>
                                       <th className="text-right py-2 px-2">Worst Year</th>
-                                      <th className="text-right py-2 px-2">Corr IWDA</th>
+                                      <th className="text-right py-2 px-2"
+                                          title="Beta vs IWDA (world equities): how far this asset has moved for each 1% move in the market, from monthly returns over the visible period. 1.00 = one-for-one, above 1 = amplifies the market, below 1 = damps it, negative = tends to move the opposite way. Read it alongside Corr IWDA — beta is only meaningful when the correlation is high enough for 'moves with the market' to mean anything.">
+                                        Beta IWDA
+                                      </th>
+                                      <th className="text-right py-2 px-2"
+                                          title="Correlation vs IWDA (world equities): whether this asset moves in the same DIRECTION as the market, from -1 to +1. It says nothing about how far it moves — that is Beta.">
+                                        Corr IWDA
+                                      </th>
                                       <th className="text-right py-2 px-2">Corr VDTA</th>
                                     </tr>
                                   </thead>
@@ -8695,6 +8748,16 @@ const PortfolioBacktester = () => {
                                       </td>
                                       <td className="text-right py-2 px-2 text-red-600">
                                         {bestWorstYear ? `${bestWorstYear.worst.toFixed(1)}%` : '—'}
+                                      </td>
+                                      {/* Beta is the one figure here whose SIGN flips its meaning, so it
+                                          carries the only colour: a negative beta means the asset has
+                                          hedged the market rather than tracked it, which is worth
+                                          spotting at a glance. Magnitude is left uncoloured — whether a
+                                          beta of 1.4 is good or bad depends entirely on why you hold it. */}
+                                      <td className={`text-right py-2 px-2 ${iwdaBeta !== null && iwdaBeta < 0 ? 'text-green-600' : ''}`}
+                                          title={iwdaBeta === null ? undefined
+                                            : `A 1% move in world equities has coincided with a ${iwdaBeta.toFixed(2)}% move in this asset, on average`}>
+                                        {iwdaBeta !== null ? iwdaBeta.toFixed(2) : '—'}
                                       </td>
                                       <td className="text-right py-2 px-2">
                                         {iwdaCorr !== null ? iwdaCorr.toFixed(2) : '—'}
