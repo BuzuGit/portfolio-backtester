@@ -8616,21 +8616,28 @@ const PortfolioBacktester = () => {
                             // They answer different halves of one question and must never disagree
                             // about which months they looked at.
                             //
-                            // NOTE: we deliberately do NOT short-circuit when the selected asset IS
-                            // the benchmark. In the asset's native currency the two price series are
-                            // identical, so the computed correlation is exactly 1.00 anyway. But when
-                            // the user views the benchmark (IWDA/VDTA) in a different currency, the
-                            // asset side is FX-converted while the benchmark stays in native USD — so
-                            // the real correlation is < 1 (FX adds noise). Letting it compute reflects that.
+                            // BOTH SIDES ARE CONVERTED TO THE DISPLAY CURRENCY. This is not a detail.
+                            // `priceData` is already expressed in `monthlyDisplayCurrency`, so leaving
+                            // the benchmark in its native USD regresses a PLN return on a USD one and
+                            // silently measures the asset partly against USDPLN. The damage is easy to
+                            // miss and easy to prove: on the mixed basis, IWDA scored a beta of 0.48
+                            // and a correlation of 0.57 against ITSELF when viewed in PLN, and the
+                            // diversifiers came out with the wrong SIGN — long treasuries -0.66
+                            // instead of +0.29, managed futures -0.79 instead of +0.16. Converting the
+                            // benchmark the same way the asset was restores beta == 1.00 exactly for
+                            // an index against itself, in every display currency.
                             const benchReturnPairs = (benchTicker: string): { a: number; b: number }[] => {
                               if (!assetData) return [];
 
-                              // Build benchmark last-price-per-month map
+                              // Build benchmark last-price-per-month map, on the SAME currency basis
+                              // as priceData (see getMonthlyChartData, which converts identically).
+                              const benchCcy = getAssetCurrency(benchTicker);
                               const benchByMonth = new Map<string, number>();
                               for (const row of assetData) {
                                 const p = Number(row[benchTicker]);
                                 if (!p || p <= 0) continue;
-                                benchByMonth.set(toYM(new Date(row.date as string)), p);
+                                const conv = getConversionRate(row, benchCcy, monthlyDisplayCurrency || '');
+                                benchByMonth.set(toYM(new Date(row.date as string)), p * conv);
                               }
 
                               const pairs: { a: number; b: number }[] = [];
@@ -8648,13 +8655,22 @@ const PortfolioBacktester = () => {
                               return pairs;
                             };
 
+                            // IWDA's pairs are needed by both beta and correlation. Without this the
+                            // benchmark's whole price history is rebuilt twice per render for no gain.
+                            const pairsCache = new Map<string, { a: number; b: number }[]>();
+                            const cachedPairs = (benchTicker: string) => {
+                              let p = pairsCache.get(benchTicker);
+                              if (!p) { p = benchReturnPairs(benchTicker); pairsCache.set(benchTicker, p); }
+                              return p;
+                            };
+
                             // Fewer than three overlapping months and any of these figures is noise
                             // dressed up as a statistic.
                             const MIN_PAIRS = 3;
 
                             // ---- Correlation: Pearson correlation of monthly returns vs a benchmark ----
                             const calcCorr = (benchTicker: string): number | null => {
-                              const pairs = benchReturnPairs(benchTicker);
+                              const pairs = cachedPairs(benchTicker);
                               if (pairs.length < MIN_PAIRS) return null;
 
                               const n = pairs.length;
@@ -8684,7 +8700,7 @@ const PortfolioBacktester = () => {
                             // The (n-1) divisor cancels between the covariance and the variance, so it
                             // is left out rather than written twice.
                             const calcBeta = (benchTicker: string): number | null => {
-                              const pairs = benchReturnPairs(benchTicker);
+                              const pairs = cachedPairs(benchTicker);
                               if (pairs.length < MIN_PAIRS) return null;
 
                               const n = pairs.length;
