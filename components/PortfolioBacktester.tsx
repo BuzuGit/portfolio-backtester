@@ -1244,8 +1244,14 @@ const PortfolioBacktester = () => {
       // The Transactions tab is double-entry: every row names the account the money
       // LEFT and the account it ARRIVED at. Replaying that gives a bank statement,
       // and therefore a balance, for each account and currency. `selectVisibleCash`
-      // drops accounts closed years ago at zero. Only the resulting balances are kept
-      // in state, not the ledger rows behind them.
+      // drops accounts closed years ago at zero.
+      //
+      // Unlike positionsModel above, this DOES keep per-row detail in state: ~1,250
+      // movements, about 230 KB. That is deliberate rather than an oversight — the
+      // drill-down page renders the statement line by line, so the alternative is
+      // holding the raw ledger and recomputing, which costs the same memory and more
+      // work. Building it takes well under a millisecond, so it happens once here
+      // rather than on render.
       const cash = selectVisibleCash(buildCashAccounts(fetchedLedgerData));
 
       if (fetchedLedgerData.length === 0) {
@@ -12153,7 +12159,13 @@ const PortfolioBacktester = () => {
                 // currencyFilteredData above; the class filter is this table's own.
                 const acCashTotal = cashMatching(true, true, false).reduce((s, c) => s + c.value, 0);
                 if (Math.abs(acCashTotal) > 0.005) {
-                  acRollupMap[CASH_CLASS] = { invested: acCashTotal, currentValue: acCashTotal, pnl: 0 };
+                  // Accumulate, never assign. Nothing in the lookup table is classed "Cash"
+                  // today, but if a holding ever were, a plain assignment here would wipe it
+                  // off this table with no error — the worst kind of bug, because the total
+                  // would still look plausible. Adding to whatever is there cannot lose data.
+                  if (!acRollupMap[CASH_CLASS]) acRollupMap[CASH_CLASS] = { invested: 0, currentValue: 0, pnl: 0 };
+                  acRollupMap[CASH_CLASS].invested += acCashTotal;
+                  acRollupMap[CASH_CLASS].currentValue += acCashTotal;
                 }
                 const totalEffectivePV = Object.values(acRollupMap).reduce((sum, v) => sum + v.currentValue, 0);
                 const assetClassRollup = Object.entries(acRollupMap)
@@ -12539,6 +12551,11 @@ const PortfolioBacktester = () => {
                         CHART_PALETTE.blue, CHART_PALETTE.terracotta, CHART_PALETTE.teal, CHART_PALETTE.gold,
                         CHART_PALETTE.rose, CHART_PALETTE.olive, CHART_PALETTE.violet, CHART_PALETTE.wine,
                       ];
+                      // Colour is pinned to the ACCOUNT, not to a position in an array. The pie
+                      // below omits accounts in debit, so indexing it positionally would only line
+                      // up with the bars by luck — true today because negatives sort last, and
+                      // silently wrong the moment that ordering changes.
+                      const accountColor = new Map(accountRollup.map((r, i) => [r.account, ACCOUNT_COLORS[i % ACCOUNT_COLORS.length]]));
 
                       return (
                         <div className="bg-white p-4 rounded-lg shadow mb-4">
@@ -12556,8 +12573,17 @@ const PortfolioBacktester = () => {
                               {accountRollup.map((acctRow, idx) => {
                                 const isSelected = openAccountFilter === acctRow.account;
                                 const isFiltered = !!openAccountFilter && !isSelected;
-                                const barPct = maxAccountValue > 0 ? (acctRow.currentValue / maxAccountValue) * 100 : 0;
-                                const color = ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length];
+                                // Clamped at zero because an account CAN now be negative (a cash
+                                // balance in debit). A negative percentage is invalid CSS, so the
+                                // browser drops the width entirely and the div falls back to auto —
+                                // which rendered a -6,959 balance as a FULL-WIDTH bar, wider than
+                                // the 2.8m one above it. A debit contributes nothing to what you
+                                // hold, so it draws no bar; the figure and its % still show beside
+                                // it, exactly as they do for a very small positive balance.
+                                const barPct = maxAccountValue > 0
+                                  ? Math.max(0, (acctRow.currentValue / maxAccountValue) * 100)
+                                  : 0;
+                                const color = accountColor.get(acctRow.account)!;
                                 return (
                                   <div
                                     key={acctRow.account}
@@ -12597,7 +12623,10 @@ const PortfolioBacktester = () => {
                                   {/* isAnimationActive={false} = draw instantly instead of sweeping in on tab open */}
                                   <Pie
                                     isAnimationActive={false}
-                                    data={accountRollup}
+                                    // Only positive values: a pie shows each part's share of a
+                                    // whole, and a negative balance has no share of anything. The
+                                    // bars beside it still list every account, including debits.
+                                    data={accountRollup.filter(r => r.currentValue > 0)}
                                     dataKey="currentValue"
                                     nameKey="account"
                                     cx="50%"
@@ -12617,10 +12646,10 @@ const PortfolioBacktester = () => {
                                       );
                                     }}
                                   >
-                                    {accountRollup.map((row, idx) => (
+                                    {accountRollup.filter(r => r.currentValue > 0).map(row => (
                                       <Cell
                                         key={row.account}
-                                        fill={ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length]}
+                                        fill={accountColor.get(row.account)}
                                         style={{ cursor: 'pointer', opacity: !openAccountFilter || openAccountFilter === row.account ? 1 : 0.3 }}
                                         onClick={() => setOpenAccountFilter(prev => prev === row.account ? null : row.account)}
                                       />
@@ -12980,7 +13009,25 @@ const PortfolioBacktester = () => {
                   where did it go, and what was the balance along the way. */}
               {cashSelected && (() => {
                 const cashRow = cashAccounts.find(c => `${c.account}|${c.currency}` === cashSelected);
-                if (!cashRow) return null;
+                // The selected balance can genuinely vanish underneath us: hit Refresh while
+                // this page is open and the sheet no longer has that account (renamed, or its
+                // last money moved out so it fell below the visibility threshold). Returning
+                // null here would render an empty tab — the summary above is suppressed while
+                // cashSelected is set — leaving no way back except switching tabs. So offer
+                // the way back explicitly rather than silently rendering nothing.
+                if (!cashRow) {
+                  return (
+                    <div className="bg-white p-8 rounded-lg shadow text-center text-gray-500">
+                      <p className="mb-3">That cash balance is no longer in the data — it may have changed in the sheet.</p>
+                      <button
+                        onClick={() => { setCashSelected(''); setCashCategory(''); }}
+                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50"
+                      >
+                        Back to list
+                      </button>
+                    </div>
+                  );
+                }
 
                 const { movements } = cashRow;
                 const fmt = (n: number, dp = 2) => n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });

@@ -204,14 +204,25 @@ export function buildCashAccounts(ledger: LedgerRow[]): CashAccountBalance[] {
  *
  *   - Accounts closed years ago that ended at zero (BGZ Optima O, Idea Bank,
  *     Millenium Bank). Real history, but nothing is there now.
- *   - Small negative residues on long-dead accounts (BGZ Optima P sits at -16.76 PLN
+ *   - Tiny negative residues on long-dead accounts (BGZ Optima P sits at -16.76 PLN
  *     because a 2022 rounding difference was never squared off). A savings account
  *     cannot really be overdrawn by 16 zloty; showing it as a red balance would be
  *     more alarming than informative.
  *
- * So a line "counts" if it holds real money, OR if it is negative but still ACTIVE —
- * because an account genuinely in debit today (a margin loan, say) is exactly the
- * thing you would want to see, and must not be hidden by the rule above.
+ * WHAT MUST NEVER BE HIDDEN is a negative balance big enough to mean something. A
+ * dormant account sitting at -6,959 is not rounding dust, it is a missing row in the
+ * ledger — precisely the thing worth seeing. An earlier version of this function tested
+ * only "is it negative and old?", which swallowed both cases alike and silently
+ * concealed a real 6,959 PLN discrepancy on Alior Bank.
+ *
+ * So "dust" is judged RELATIVE to the money that has flowed through the account, not by
+ * a flat cut-off. A rounding error is vanishingly small next to an account's turnover
+ * (16.76 against 404,585 that passed through, 0.004%); a genuine hole is not (6,959
+ * against 195,041, 3.6%). That scales itself: it needs no re-tuning for an account that
+ * handles millions or one that handles hundreds.
+ *
+ * A line therefore "counts" if it holds real money, OR is still ACTIVE, OR is negative
+ * by more than dust — the last two being the cases where you need to look.
  *
  * Then, crucially, every currency of a counting account comes along for the ride.
  * That is what puts "IB SGD 0.00" on screen next to IB's USD and PLN balances: the
@@ -223,12 +234,18 @@ export function buildCashAccounts(ledger: LedgerRow[]): CashAccountBalance[] {
  */
 export function selectVisibleCash(lines: CashAccountBalance[], asOf: Date = new Date()): CashAccountBalance[] {
   const DORMANT_AFTER_MONTHS = 24;
+  // A negative balance under this fraction of everything that ever came in is treated
+  // as an unsquared rounding difference rather than a real shortfall.
+  const DUST_FRACTION_OF_TURNOVER = 0.001;   // 0.1%
   const cutoff = new Date(asOf);
   cutoff.setMonth(cutoff.getMonth() - DORMANT_AFTER_MONTHS);
   const cutoffStr = cutoff.toISOString().slice(0, 10);
 
+  const isDust = (l: CashAccountBalance) =>
+    Math.abs(l.balance) < Math.max(ZERO_EPS, l.totalIn * DUST_FRACTION_OF_TURNOVER);
+
   const counts = (l: CashAccountBalance) =>
-    Math.abs(l.balance) >= ZERO_EPS && (l.balance > 0 || l.lastDate >= cutoffStr);
+    Math.abs(l.balance) >= ZERO_EPS && (l.balance > 0 || l.lastDate >= cutoffStr || !isDust(l));
 
   const liveAccounts = new Set(lines.filter(counts).map(l => l.account));
   return lines.filter(l => liveAccounts.has(l.account));
