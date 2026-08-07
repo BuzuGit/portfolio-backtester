@@ -8667,6 +8667,9 @@ const PortfolioBacktester = () => {
                             // Fewer than three overlapping months and any of these figures is noise
                             // dressed up as a statistic.
                             const MIN_PAIRS = 3;
+                            // The downside sample is a subset — only months the benchmark fell — so it
+                            // needs its own, stricter floor before a slope through it means anything.
+                            const MIN_DOWN_PAIRS = 8;
 
                             // ---- Correlation: Pearson correlation of monthly returns vs a benchmark ----
                             const calcCorr = (benchTicker: string): number | null => {
@@ -8699,9 +8702,19 @@ const PortfolioBacktester = () => {
                             //
                             // The (n-1) divisor cancels between the covariance and the variance, so it
                             // is left out rather than written twice.
-                            const calcBeta = (benchTicker: string): number | null => {
-                              const pairs = cachedPairs(benchTicker);
-                              if (pairs.length < MIN_PAIRS) return null;
+                            //
+                            // `downsideOnly` restricts the sample to months the BENCHMARK fell, giving
+                            // a "bear beta". This matters because a full-sample beta averages crashes
+                            // together with calm months and can flatter an asset badly: WIG20 scores
+                            // 0.34 against world equities in PLN, but 0.64 when only down months count,
+                            // and it lost 20.8% in March 2020. Covariance and variance use the
+                            // sub-sample's own means, which is the standard bear-beta construction.
+                            const calcBeta = (benchTicker: string, downsideOnly = false): number | null => {
+                              const all = cachedPairs(benchTicker);
+                              const pairs = downsideOnly ? all.filter(p => p.b < 0) : all;
+                              // A bear beta needs enough drawdown months to mean anything. Three would
+                              // be a slope through noise, so the downside figure holds out for more.
+                              if (pairs.length < (downsideOnly ? MIN_DOWN_PAIRS : MIN_PAIRS)) return null;
 
                               const n = pairs.length;
                               const aMean = pairs.reduce((s, p) => s + p.a, 0) / n;
@@ -8717,6 +8730,8 @@ const PortfolioBacktester = () => {
                             };
 
                             const iwdaBeta = calcBeta('IWDA');
+                            const iwdaDownBeta = calcBeta('IWDA', true);
+                            const iwdaDownMonths = cachedPairs('IWDA').filter(p => p.b < 0).length;
                             const iwdaCorr = calcCorr('IWDA');
                             const vdtaCorr = calcCorr('VDTA');
 
@@ -8767,6 +8782,15 @@ const PortfolioBacktester = () => {
                                         Beta IWDA
                                       </th>
                                       <th className="text-right py-2 px-2"
+                                          title={'Downside beta vs IWDA — the same calculation, but using ONLY the months world equities FELL.\n\n'
+                                            + 'WHY IT EXISTS\nA full-sample beta averages crashes together with calm months, which can flatter an asset badly. The number you care about in a drawdown is this one.\n\n'
+                                            + 'HOW TO READ IT\nHigher than the plain beta = the asset gets MORE correlated exactly when markets fall, which is when diversification is supposed to help. Lower, or negative, = it held up or rose while markets dropped, a genuine hedge.\n\n'
+                                            + `Based on ${iwdaDownMonths} down month${iwdaDownMonths === 1 ? '' : 's'} out of ${cachedPairs('IWDA').length}. Shown as — below ${MIN_DOWN_PAIRS} down months, where a slope would just be noise.\n\n`
+                                            + 'CAUTION\nA low beta still does not mean safe. WIG20 scores 0.34 against world equities in PLN and still lost 20.8% in March 2020 — it fell hard, just not in step with a PLN investor\'s IWDA, which the dollar was busy rescuing.\n\n'
+                                            + currencyNote('IWDA', 'world equities')}>
+                                        Beta ↓
+                                      </th>
+                                      <th className="text-right py-2 px-2"
                                           title={'Correlation vs IWDA (world equities): whether this asset moves in the same DIRECTION as the market, from -1 to +1. It says nothing about how far it moves — that is Beta.\n\n'
                                             + currencyNote('IWDA', 'world equities')}>
                                         Corr IWDA
@@ -8804,6 +8828,21 @@ const PortfolioBacktester = () => {
                                           title={iwdaBeta === null ? undefined
                                             : `A 1% move in world equities has coincided with a ${iwdaBeta.toFixed(2)}% move in this asset, on average`}>
                                         {iwdaBeta !== null ? iwdaBeta.toFixed(2) : '—'}
+                                      </td>
+                                      {/* Downside beta. Green when negative (it rose while markets fell)
+                                          and amber when it is materially WORSE than the all-month beta —
+                                          the "diversifier that stops diversifying in a drawdown" case,
+                                          which is the whole reason this column exists. */}
+                                      <td className={`text-right py-2 px-2 font-mono font-medium ${
+                                            iwdaDownBeta === null ? 'text-gray-400'
+                                            : iwdaDownBeta < 0 ? 'text-green-600'
+                                            : (iwdaBeta !== null && iwdaDownBeta > iwdaBeta + 0.15) ? 'text-amber-600'
+                                            : ''}`}
+                                          title={iwdaDownBeta === null
+                                            ? `Fewer than ${MIN_DOWN_PAIRS} months where world equities fell — too few to measure`
+                                            : `Over the ${iwdaDownMonths} months world equities fell, this asset moved ${iwdaDownBeta.toFixed(2)}% per 1% of their decline`
+                                              + (iwdaBeta !== null ? `, versus ${iwdaBeta.toFixed(2)} across all months` : '')}>
+                                        {iwdaDownBeta !== null ? iwdaDownBeta.toFixed(2) : '—'}
                                       </td>
                                       <td className="text-right py-2 px-2">
                                         {iwdaCorr !== null ? iwdaCorr.toFixed(2) : '—'}
