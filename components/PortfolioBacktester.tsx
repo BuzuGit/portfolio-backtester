@@ -8720,6 +8720,30 @@ const PortfolioBacktester = () => {
                             const iwdaCorr = calcCorr('IWDA');
                             const vdtaCorr = calcCorr('VDTA');
 
+                            // ---- The currency caveat, written once and shown on every column it applies to ----
+                            // Correlation and beta both change when you switch the display currency, and
+                            // that surprises people because correlation is scale-invariant: measure two
+                            // things in metres or feet and the answer is the same. Currency is NOT a
+                            // scale factor though. Converting a return ADDS the currency's own return to
+                            // it, and USDPLN is itself ~-0.61 correlated with world equities, so the
+                            // added term is far from neutral. Hence the same fund is a different asset
+                            // to a different owner: IWDA's volatility is 14.1% to a dollar investor and
+                            // 11.8% to a zloty one, because the zloty falls when markets do.
+                            //
+                            // This lives in a tooltip rather than a comment alone because the user has
+                            // to make portfolio decisions off these numbers and the trap is invisible.
+                            const displayedCcy = monthlyDisplayCurrency || 'the asset\'s own currency';
+                            const currencyNote = (bench: string, benchDesc: string) =>
+                              `HOW THIS IS MEASURED\n`
+                              + `Both this asset and ${bench} (${benchDesc}) are converted to ${displayedCcy} — the currency selected above — so the two sides always share one basis.\n\n`
+                              + `WHY THE NUMBER CHANGES WHEN YOU SWITCH CURRENCY\n`
+                              + `Not a rounding artefact. Converting a return adds that currency's own return to it, and USDPLN moves about -0.61 with world equities — the dollar rises exactly when markets fall. So to a zloty investor ${bench} is not simply ${benchDesc}; it is ${benchDesc} PLUS a long-dollar position that cushions crises. IWDA's volatility is 14.1% to a dollar investor but 11.8% to a zloty one — the same fund, a genuinely calmer ride.\n\n`
+                              + `EXAMPLE — WIG20 vs IWDA\n`
+                              + `0.21 measured in PLN, but 0.71 measured in USD.\n\n`
+                              + `WHICH ONE TO USE\n`
+                              + `The currency you think of your wealth in. Your portfolio NAV is tracked in PLN, so for "does WIG20 diversify my world equities?" the PLN answer (0.21) is the decision-relevant one — WIG20 diversifies you MORE than the USD figure implies. The USD answer (0.71) tells you what the Polish market is as an asset to a global investor. Different questions, both valid.\n\n`
+                              + `Note: switching to another asset resets this to that asset's own currency, so pick one currency deliberately before comparing correlations across assets.`;
+
                             return (
                               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
                                 <h3 className="text-md font-semibold text-gray-700 mb-2">Statistics</h3>
@@ -8738,14 +8762,20 @@ const PortfolioBacktester = () => {
                                       <th className="text-right py-2 px-2">Best Year</th>
                                       <th className="text-right py-2 px-2">Worst Year</th>
                                       <th className="text-right py-2 px-2"
-                                          title="Beta vs IWDA (world equities): how far this asset has moved for each 1% move in the market, from monthly returns over the visible period. 1.00 = one-for-one, above 1 = amplifies the market, below 1 = damps it, negative = tends to move the opposite way. Read it alongside Corr IWDA — beta is only meaningful when the correlation is high enough for 'moves with the market' to mean anything.">
+                                          title={'Beta vs IWDA (world equities): how far this asset has moved for each 1% move in the market, from monthly returns over the visible period. 1.00 = one-for-one, above 1 = amplifies the market, below 1 = damps it, negative = tends to move the opposite way. Read it alongside Corr IWDA — beta is only meaningful when the correlation is high enough for "moves with the market" to mean anything.\n\n'
+                                            + currencyNote('IWDA', 'world equities')}>
                                         Beta IWDA
                                       </th>
                                       <th className="text-right py-2 px-2"
-                                          title="Correlation vs IWDA (world equities): whether this asset moves in the same DIRECTION as the market, from -1 to +1. It says nothing about how far it moves — that is Beta.">
+                                          title={'Correlation vs IWDA (world equities): whether this asset moves in the same DIRECTION as the market, from -1 to +1. It says nothing about how far it moves — that is Beta.\n\n'
+                                            + currencyNote('IWDA', 'world equities')}>
                                         Corr IWDA
                                       </th>
-                                      <th className="text-right py-2 px-2">Corr VDTA</th>
+                                      <th className="text-right py-2 px-2"
+                                          title={'Correlation vs VDTA (US government bonds, intermediate): whether this asset moves in the same DIRECTION as the bond market, from -1 to +1.\n\n'
+                                            + currencyNote('VDTA', 'US government bonds')}>
+                                        Corr VDTA
+                                      </th>
                                     </tr>
                                   </thead>
                                   <tbody>
