@@ -1131,6 +1131,11 @@ const PortfolioBacktester = () => {
   // The user can switch to PLN / USD / EUR / CHF / SGD to re-express all stats,
   // charts, and tables below in that currency using the app's FX data.
   const [monthlyDisplayCurrency, setMonthlyDisplayCurrency] = useState<string>('');
+  // Which year the "During stress" chart is showing. 2022 by default — the rate shock,
+  // the deepest full-year equity drawdown in this data. Deliberately NOT reset when you
+  // switch asset, so you can hold a year fixed and click down the list comparing how
+  // each holding behaved in it.
+  const [stressYear, setStressYear] = useState<number>(2022);
   // Which return period to show in the periodic returns bar chart (Monthly/Quarterly/Annual)
   const [returnsChartPeriod, setReturnsChartPeriod] = useState<'monthly' | 'quarterly' | 'annual'>('quarterly');
   // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
@@ -4494,6 +4499,102 @@ const PortfolioBacktester = () => {
       : null;
 
     return { priceData, drawdownData, smaDistData, maxPricePoint, minPricePoint, maxDrawdownPoint, maxSmaDistPoint, minSmaDistPoint, totalReturn, cagr };
+  };
+
+  // ---------------------------------------------------------------------------
+  // "DURING STRESS" — one calendar year, month by month, asset against the market
+  // ---------------------------------------------------------------------------
+  // A beta or a correlation compresses years of history into one number. This does the
+  // opposite: it picks a year the market had a bad time and lays out all twelve months
+  // side by side, so you can see whether a holding actually fell WITH equities or held
+  // its nerve. March 2020 either shows up as a matching red bar or it doesn't.
+  //
+  // Deliberately reads `assetData` directly rather than the visible `priceData`, so the
+  // period buttons (1Y, 2Y, Max) cannot hide the year you asked to look at.
+  const STRESS_BENCHMARK = 'IWDA';
+  const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  /**
+   * Monthly returns for one calendar year, for an asset and for world equities, both
+   * expressed in the SAME currency — the same rule the correlation and beta columns
+   * follow. Comparing a PLN return against a USD one would silently measure the zloty.
+   *
+   * @param ticker         the asset to examine
+   * @param year           calendar year, e.g. 2022
+   * @param targetCurrency display currency ('' = each asset's own, which would defeat
+   *                       the purpose here, so callers pass a real currency)
+   * @returns 12 rows (Jan..Dec) with a return for each side, `null` where a month has
+   *          no price, plus the compounded year total for each side. `null` overall if
+   *          the price data has not loaded.
+   */
+  const getStressYearData = (ticker: string, year: number, targetCurrency: string) => {
+    if (!assetData || assetData.length === 0) return null;
+
+    // Last price of each month for one ticker, converted into the display currency
+    const monthEndPrices = (t: string): Map<string, number> => {
+      const nativeCcy = getAssetCurrency(t);
+      const out = new Map<string, number>();
+      for (const row of assetData) {
+        const p = Number(row[t]);
+        if (!p || p <= 0) continue;
+        const d = new Date(row.date as string);
+        if (isNaN(d.getTime())) continue;
+        // Later rows overwrite earlier ones, leaving each month's LAST price
+        out.set(toYM(d), p * getConversionRate(row, nativeCcy, targetCurrency || ''));
+      }
+      return out;
+    };
+
+    const assetPrices = monthEndPrices(ticker);
+    const benchPrices = monthEndPrices(STRESS_BENCHMARK);
+
+    // January's return needs December of the previous year, hence the `prev` lookup
+    const returnFor = (prices: Map<string, number>, monthIdx: number): number | null => {
+      const cur = `${year}-${String(monthIdx + 1).padStart(2, '0')}`;
+      const prev = monthIdx === 0 ? `${year - 1}-12` : `${year}-${String(monthIdx).padStart(2, '0')}`;
+      const a = prices.get(cur), b = prices.get(prev);
+      if (!a || !b || b === 0) return null;
+      return (a / b - 1) * 100;
+    };
+
+    const rows = MONTH_LABELS.map((month, i) => {
+      const asset = returnFor(assetPrices, i);
+      const bench = returnFor(benchPrices, i);
+      return {
+        month,
+        asset,
+        bench,
+        // The month's relative result in percentage points. Arithmetic difference, which
+        // is how a one-month lead is normally quoted: -1.6% against -8.6% is "+7.0pp".
+        // Note this is RELATIVE — a green +7.0 can still be a month you lost money.
+        //
+        // Subtracted from the values as DISPLAYED (one decimal), not the raw ones. All
+        // three numbers sit on screen together, so a reader who checks the arithmetic
+        // must get the answer shown: Jan 2022 gold is -1.650 and world equities -6.019,
+        // a true gap of +4.369, but the bars read -1.7 and -6.0 and a pill saying "+4.4"
+        // next to them looks broken. Rounding first costs at most 0.05pp — far below the
+        // noise in a monthly return — and buys arithmetic that ties out.
+        gap: (asset !== null && bench !== null)
+          ? Math.round(asset * 10) / 10 - Math.round(bench * 10) / 10
+          : null,
+      };
+    });
+
+    // Compound the months that exist. Averaging or summing them would be wrong: a -50%
+    // followed by +50% is -25% overall, not zero.
+    const compound = (pick: (r: typeof rows[number]) => number | null): number | null => {
+      const known = rows.map(pick).filter((v): v is number => v !== null);
+      if (known.length === 0) return null;
+      return (known.reduce((acc, r) => acc * (1 + r / 100), 1) - 1) * 100;
+    };
+
+    return {
+      rows,
+      assetTotal: compound(r => r.asset),
+      benchTotal: compound(r => r.bench),
+      assetMonths: rows.filter(r => r.asset !== null).length,
+      benchMonths: rows.filter(r => r.bench !== null).length,
+    };
   };
 
   /**
@@ -8985,6 +9086,196 @@ const PortfolioBacktester = () => {
                               </AreaChart>
                             </ResponsiveContainer>
                           </div>
+
+                          {/* === DURING STRESS — this asset vs world equities, month by month === */}
+                          {(() => {
+                            // Years world equities had a hard time. 2020 and 2015 finished UP overall,
+                            // which is precisely why the monthly view matters: the damage was
+                            // concentrated in a few months (Feb-Mar 2020) that an annual figure hides.
+                            const STRESS_YEARS = [2025, 2022, 2020, 2018, 2015, 2011];
+                            const ccy = monthlyDisplayCurrency || getAssetCurrency(monthlySelectedTicker);
+                            const stress = getStressYearData(monthlySelectedTicker, stressYear, ccy);
+                            if (!stress) return null;
+
+                            const { rows, assetTotal, benchTotal, assetMonths } = stress;
+                            const diff = (assetTotal !== null && benchTotal !== null) ? assetTotal - benchTotal : null;
+                            const pct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+                            // Bar labels drop the leading "+" — the bar's direction already says the sign,
+                            // and with 24 of them on screen every saved character helps. Months with no
+                            // price return an empty string so nothing is drawn for them.
+                            const barLabel = (v: number | null) =>
+                              (v === null || v === undefined) ? '' : `${v.toFixed(1)}%`;
+
+                            // --- The gap strip ---
+                            // Drawn as a LabelList with custom content rather than as HTML above the
+                            // chart, because Recharts hands us each bar's real x here. That is the only
+                            // way the pills stay glued to their month when the panel is resized; an
+                            // HTML row would drift the moment the y-axis width changed.
+                            //
+                            // A gap under a point either way is noise, so it renders as plain grey text
+                            // with no pill. The eye then lands only on months that actually moved the
+                            // needle — which is the whole reason for the strip.
+                            const GAP_MUTED_THRESHOLD = 1;
+                            // Headroom above the tallest bar. Without it Recharts lets a bar touch the
+                            // top of the plot area, its value label rides up into the margin, and the
+                            // gap pills — which sit just above the plot area — get collided with. The
+                            // extra space is what makes it safe to tuck the pills down close to the
+                            // chart instead of parking them far away at the top of the SVG.
+                            const stressVals = rows.flatMap(r => [r.asset, r.bench]).filter((v): v is number => v !== null);
+                            const stressHi = Math.max(0, ...stressVals);
+                            const stressLo = Math.min(0, ...stressVals);
+                            const stressSpan = (stressHi - stressLo) || 1;
+                            const stressDomain: [number, number] = [stressLo - stressSpan * 0.06, stressHi + stressSpan * 0.18];
+                            // Pinning the domain costs Recharts its round auto-ticks — the axis came out
+                            // reading -10%, -4%, 2%, 11%. So the ticks are chosen here instead: a 1/2/5
+                            // step, and only the multiples that fall INSIDE the domain. That keeps the
+                            // domain tight (headroom preserved) while every label stays a round number,
+                            // and 0 is always among them since 0 is a multiple of any step.
+                            const stressStep = (() => {
+                              const raw = (stressDomain[1] - stressDomain[0]) / 5;
+                              if (!isFinite(raw) || raw <= 0) return 1;
+                              const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+                              const n = raw / mag;
+                              return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+                            })();
+                            const stressTicks = (() => {
+                              const out: number[] = [];
+                              const start = Math.ceil(stressDomain[0] / stressStep) * stressStep;
+                              for (let v = start; v <= stressDomain[1] + 1e-9 && out.length < 20; v += stressStep) {
+                                out.push(Math.round(v * 1e6) / 1e6);   // shake off float dust like 4.999999
+                              }
+                              return out;
+                            })();
+                            // Recharts types x/width as `string | number`, so they are coerced rather
+                            // than assumed — a non-numeric x would place the pill at NaN and vanish it.
+                            const renderGapPill = (props: { x?: string | number; width?: string | number; index?: number }) => {
+                              const x = Number(props.x), width = Number(props.width), index = props.index;
+                              if (!isFinite(x) || !isFinite(width) || index === undefined) return null;
+                              const gap = rows[index]?.gap;
+                              if (gap === null || gap === undefined) return null;
+                              // The asset bar starts at x and the benchmark bar sits immediately after
+                              // it, each `width` wide — so the pair's centre is one full bar to the right.
+                              const cx = x + width;
+                              const text = `${gap >= 0 ? '+' : ''}${gap.toFixed(1)}`;
+                              const muted = Math.abs(gap) < GAP_MUTED_THRESHOLD;
+                              const pillW = text.length * 6 + 10;
+                              const fg = muted ? '#9ca3af' : gap >= 0 ? '#15803d' : '#b91c1c';
+                              const bg = gap >= 0 ? '#dcfce7' : '#fee2e2';
+                              // Sits low in the top margin so it reads as belonging to the chart rather
+                              // than floating above it. The Y-axis headroom above keeps this band clear.
+                              return (
+                                <g>
+                                  {!muted && (
+                                    <rect x={cx - pillW / 2} y={13} width={pillW} height={17} rx={5} fill={bg} />
+                                  )}
+                                  <text x={cx} y={25} textAnchor="middle" fontSize={11}
+                                        fontWeight={muted ? 500 : 700} fill={fg}>
+                                    {text}
+                                  </text>
+                                </g>
+                              );
+                            };
+                            const assetName = assetLookup.find(a => a.ticker === monthlySelectedTicker)?.name || monthlySelectedTicker;
+
+                            return (
+                              <div className="mt-4 pt-3 border-t border-gray-200">
+                                <div className="flex items-center gap-2 mb-2 px-2 flex-wrap">
+                                  <span className="text-xs font-semibold text-gray-700">During stress:</span>
+                                  {STRESS_YEARS.map(y => (
+                                    <button
+                                      key={y}
+                                      onClick={() => setStressYear(y)}
+                                      className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                        stressYear === y
+                                          ? 'bg-slate-800 text-white border-slate-800'
+                                          : 'bg-white border-gray-300 hover:bg-gray-100'
+                                      }`}
+                                    >
+                                      {y}
+                                    </button>
+                                  ))}
+                                  <span className="text-xs text-gray-400">in {ccy}</span>
+                                </div>
+
+                                {assetMonths === 0 ? (
+                                  <div className="text-xs text-gray-500 px-2 py-6 text-center">
+                                    No price history for {assetName} in {stressYear}.
+                                  </div>
+                                ) : (
+                                  <>
+                                    {/* Full-year summary — compounded, so it is the real outcome of
+                                        holding it through the year, not the sum of the bars */}
+                                    <div className="text-xs px-2 mb-1">
+                                      <span className="font-semibold text-gray-700">{stressYear}:</span>{' '}
+                                      <span className="text-gray-700">{assetName} </span>
+                                      <span className={`font-mono font-semibold ${assetTotal !== null && assetTotal >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {assetTotal !== null ? pct(assetTotal) : '—'}
+                                      </span>
+                                      <span className="text-gray-400"> vs </span>
+                                      <span className="text-gray-700">world equities </span>
+                                      <span className={`font-mono font-semibold ${benchTotal !== null && benchTotal >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {benchTotal !== null ? pct(benchTotal) : '—'}
+                                      </span>
+                                      {diff !== null && (
+                                        <>
+                                          <span className="text-gray-400"> → </span>
+                                          <span className={`font-medium ${diff >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                            {diff >= 0 ? 'outperformed' : 'underperformed'} by {Math.abs(diff).toFixed(1)}pp
+                                          </span>
+                                        </>
+                                      )}
+                                      {assetMonths < 12 && (
+                                        <span className="text-amber-600"> · only {assetMonths} of 12 months have data</span>
+                                      )}
+                                    </div>
+                                    {/* Says what the pills are, and warns that they are RELATIVE — a
+                                        green month can still be a month you lost money, it just lost
+                                        less than the market did. */}
+                                    <div className="text-[10px] text-gray-400 px-2 mb-1">
+                                      Pills show each month&apos;s gap in percentage points (this asset − world equities);
+                                      grey under {GAP_MUTED_THRESHOLD}pp. Green means it beat the market that month, not that it made money.
+                                    </div>
+
+                                    {/* The gap strip owns y=13..30 and the plot area starts at 34, so
+                                        the pills sit just above the chart rather than adrift at the top
+                                        of the SVG. Their lane stays clear because stressDomain reserves
+                                        headroom above the tallest bar. */}
+                                    <ResponsiveContainer width="100%" height={252}>
+                                      <BarChart data={rows} margin={{ top: 34, right: 10, left: -5, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" />
+                                        <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+                                        <YAxis tick={{ fontSize: 9 }} width={40} domain={stressDomain} ticks={stressTicks}
+                                               tickFormatter={(v: number) => `${v.toFixed(0)}%`} />
+                                        <Tooltip
+                                          formatter={(value: number, name: string) => [pct(value), name]}
+                                          labelFormatter={(l: string) => `${l} ${stressYear}`}
+                                        />
+                                        <ReferenceLine y={0} stroke="#9CA3AF" strokeWidth={1} />
+                                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                                        {/* Black for the asset and #F5A623 for the benchmark are the first
+                                            two portfolio colours on the Backtest tab, so "mine vs the other
+                                            one" reads the same way across the app.
+                                            Labels sit above every bar — including negative ones, where the
+                                            bar's top edge is the zero line, so the number ends up just above
+                                            it. isAnimationActive={false} is what makes them appear at all:
+                                            Recharts draws labels only after the entry animation finishes. */}
+                                        <Bar dataKey="asset" name={assetName} fill="#000000" isAnimationActive={false}>
+                                          <LabelList dataKey="asset" position="top" formatter={barLabel}
+                                                     style={{ fontSize: '8px', fill: '#374151' }} />
+                                          {/* The gap strip rides on this series purely to get its x */}
+                                          <LabelList content={renderGapPill} />
+                                        </Bar>
+                                        <Bar dataKey="bench" name="World equities (IWDA)" fill="#F5A623" isAnimationActive={false}>
+                                          <LabelList dataKey="bench" position="top" formatter={barLabel}
+                                                     style={{ fontSize: '8px', fill: '#92600a' }} />
+                                        </Bar>
+                                      </BarChart>
+                                    </ResponsiveContainer>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })()}
 
                           {/* Chart 3: SMA Distance — how far price is from 10-month SMA (in %) */}
                           {smaDistData.length > 0 && (
