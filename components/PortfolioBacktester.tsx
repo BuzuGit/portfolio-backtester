@@ -9116,6 +9116,12 @@ const PortfolioBacktester = () => {
                             // with no pill. The eye then lands only on months that actually moved the
                             // needle — which is the whole reason for the strip.
                             const GAP_MUTED_THRESHOLD = 1;
+                            // Pixels between the asset bar and the benchmark bar within a month. Recharts
+                            // defaults this to 4, but it is declared here and passed to the chart because
+                            // the pill-centring maths below depends on it — leaving it implicit meant the
+                            // pills sat 2px left of true centre, and would have silently drifted further
+                            // if a Recharts upgrade changed the default.
+                            const STRESS_BAR_GAP = 4;
                             // Headroom above the tallest bar. Without it Recharts lets a bar touch the
                             // top of the plot area, its value label rides up into the margin, and the
                             // gap pills — which sit just above the plot area — get collided with. The
@@ -9153,9 +9159,10 @@ const PortfolioBacktester = () => {
                               if (!isFinite(x) || !isFinite(width) || index === undefined) return null;
                               const gap = rows[index]?.gap;
                               if (gap === null || gap === undefined) return null;
-                              // The asset bar starts at x and the benchmark bar sits immediately after
-                              // it, each `width` wide — so the pair's centre is one full bar to the right.
-                              const cx = x + width;
+                              // The asset bar starts at x, then a STRESS_BAR_GAP gutter, then the
+                              // benchmark bar of the same width. So the pair spans x .. x+2*width+gap,
+                              // and its centre is one full bar plus half the gutter to the right.
+                              const cx = x + width + STRESS_BAR_GAP / 2;
                               const text = `${gap >= 0 ? '+' : ''}${gap.toFixed(1)}`;
                               const muted = Math.abs(gap) < GAP_MUTED_THRESHOLD;
                               const pillW = text.length * 6 + 10;
@@ -9241,7 +9248,7 @@ const PortfolioBacktester = () => {
                                         of the SVG. Their lane stays clear because stressDomain reserves
                                         headroom above the tallest bar. */}
                                     <ResponsiveContainer width="100%" height={252}>
-                                      <BarChart data={rows} margin={{ top: 34, right: 10, left: -5, bottom: 5 }}>
+                                      <BarChart data={rows} barGap={STRESS_BAR_GAP} margin={{ top: 34, right: 10, left: -5, bottom: 5 }}>
                                         <CartesianGrid strokeDasharray="3 3" />
                                         <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                                         <YAxis tick={{ fontSize: 9 }} width={40} domain={stressDomain} ticks={stressTicks}
