@@ -2917,16 +2917,29 @@ const PortfolioBacktester = () => {
    * 3. At rebalance dates, sell/buy to restore target weights
    * 4. Track the total value and drawdown over time
    */
-  const calculatePortfolioReturns = (portfolio: Portfolio, data: AssetRow[]): ReturnPoint[] | null => {
+  const calculatePortfolioReturns = (
+    portfolio: Portfolio,
+    data: AssetRow[],
+    // Optional window and cadence. Only the Monthly tab's "vs market" rows pass these:
+    // they need this very engine over a different span, and running a second, parallel
+    // implementation there would eventually disagree with the Backtest tab — which is
+    // precisely the thing those rows exist to rule out. Omitted everywhere else, so the
+    // Backtest tab still reads its own state and behaves exactly as before.
+    overrides?: { start?: string; end?: string; rebalanceFreq?: string },
+  ): ReturnPoint[] | null => {
     // Validation
     if (!portfolio.assets.length || !data.length) return null;
 
     const totalWeight = portfolio.assets.reduce((sum, a) => sum + (a.weight || 0), 0);
     if (Math.abs(totalWeight - 100) > 0.01) return null;  // Weights must sum to 100%
 
+    const rangeStart = overrides?.start ?? selectedDateRange.start;
+    const rangeEnd = overrides?.end ?? selectedDateRange.end;
+    const rebalanceEvery = overrides?.rebalanceFreq ?? rebalanceFreq;
+
     // Filter data to selected date range
     const filteredData = data.filter(row =>
-      row.date >= selectedDateRange.start && row.date <= selectedDateRange.end
+      row.date >= rangeStart && row.date <= rangeEnd
     );
     if (filteredData.length < 2) return null;
 
@@ -2993,11 +3006,11 @@ const PortfolioBacktester = () => {
 
         // 'never' deliberately matches none of these, so shouldRebalance stays false for the whole
         // run — the day-one share counts are held to the end and the weights drift freely.
-        if (rebalanceFreq === 'monthly' && monthsSinceRebalance >= 1) {
+        if (rebalanceEvery === 'monthly' && monthsSinceRebalance >= 1) {
           shouldRebalance = true;
-        } else if (rebalanceFreq === 'quarterly' && monthsSinceRebalance >= 3) {
+        } else if (rebalanceEvery === 'quarterly' && monthsSinceRebalance >= 3) {
           shouldRebalance = true;
-        } else if (rebalanceFreq === 'yearly' && monthsSinceRebalance >= 12) {
+        } else if (rebalanceEvery === 'yearly' && monthsSinceRebalance >= 12) {
           shouldRebalance = true;
         }
       }
@@ -8692,12 +8705,21 @@ const PortfolioBacktester = () => {
 
                           {/* Statistics — delegates to the shared calculateStatistics() used by the Backtest tab */}
                           {(() => {
-                            const statPoints: ReturnPoint[] = priceData.map((p, i) => ({
+                            // Everything below is computed for a SERIES, not for the selected asset
+                            // specifically, so the asset, the market and the 50/50 blend can each be run
+                            // through identical arithmetic. Three rows that quietly disagreed about how
+                            // they were measured would be worse than no rows at all.
+                            const buildStatsRow = (
+                              label: string,
+                              series: { date: string; price: number }[],
+                              drawdowns: { drawdown: number }[],
+                            ) => {
+                            const statPoints: ReturnPoint[] = series.map((p, i) => ({
                               date: p.date,
                               value: p.price,
-                              drawdown: drawdownData[i].drawdown,
+                              drawdown: drawdowns[i]?.drawdown ?? 0,
                             }));
-                            const stats = calculateStatistics(statPoints, { name: monthlySelectedTicker } as Portfolio);
+                            const stats = calculateStatistics(statPoints, { name: label } as Portfolio);
                             if (!stats) return null;
 
                             // Intervals between monthly data points = the actual period covered.
@@ -8708,12 +8730,12 @@ const PortfolioBacktester = () => {
                             const valueOf100 = (100 * statPoints[statPoints.length - 1].value / statPoints[0].value).toFixed(0);
 
                             // ---- Best / Worst calendar year within the visible period ----
-                            // Group priceData by year, compute return for each year using the
+                            // Group series by year, compute return for each year using the
                             // previous year-end price (or first price in window for the first year).
                             const bestWorstYear = (() => {
-                              if (priceData.length < 2) return null;
+                              if (series.length < 2) return null;
                               const yearMap = new Map<number, number[]>();
-                              for (const p of priceData) {
+                              for (const p of series) {
                                 const y = new Date(p.date).getFullYear();
                                 if (!yearMap.has(y)) yearMap.set(y, []);
                                 yearMap.get(y)!.push(p.price);
@@ -8721,7 +8743,7 @@ const PortfolioBacktester = () => {
                               const years = Array.from(yearMap.keys()).sort();
                               if (years.length < 1) return null;
                               const yearReturns: number[] = [];
-                              let prevEnd = priceData[0].price;
+                              let prevEnd = series[0].price;
                               for (const y of years) {
                                 const prices = yearMap.get(y)!;
                                 const lastPrice = prices[prices.length - 1];
@@ -8737,7 +8759,7 @@ const PortfolioBacktester = () => {
                             // about which months they looked at.
                             //
                             // BOTH SIDES ARE CONVERTED TO THE DISPLAY CURRENCY. This is not a detail.
-                            // `priceData` is already expressed in `monthlyDisplayCurrency`, so leaving
+                            // `series` is already expressed in `monthlyDisplayCurrency`, so leaving
                             // the benchmark in its native USD regresses a PLN return on a USD one and
                             // silently measures the asset partly against USDPLN. The damage is easy to
                             // miss and easy to prove: on the mixed basis, IWDA scored a beta of 0.48
@@ -8750,7 +8772,7 @@ const PortfolioBacktester = () => {
                               if (!assetData) return [];
 
                               // Build benchmark last-price-per-month map, on the SAME currency basis
-                              // as priceData (see getMonthlyChartData, which converts identically).
+                              // as series (see getMonthlyChartData, which converts identically).
                               const benchCcy = getAssetCurrency(benchTicker);
                               const benchByMonth = new Map<string, number>();
                               for (const row of assetData) {
@@ -8761,14 +8783,14 @@ const PortfolioBacktester = () => {
                               }
 
                               const pairs: { a: number; b: number }[] = [];
-                              for (let i = 1; i < priceData.length; i++) {
-                                const ym = toYM(new Date(priceData[i].date));
-                                const prevYm = toYM(new Date(priceData[i - 1].date));
+                              for (let i = 1; i < series.length; i++) {
+                                const ym = toYM(new Date(series[i].date));
+                                const prevYm = toYM(new Date(series[i - 1].date));
                                 const bCurr = benchByMonth.get(ym);
                                 const bPrev = benchByMonth.get(prevYm);
                                 if (bCurr == null || bPrev == null || bPrev === 0) continue;
                                 pairs.push({
-                                  a: (priceData[i].price - priceData[i - 1].price) / priceData[i - 1].price,
+                                  a: (series[i].price - series[i - 1].price) / series[i - 1].price,
                                   b: (bCurr - bPrev) / bPrev,
                                 });
                               }
@@ -8855,6 +8877,63 @@ const PortfolioBacktester = () => {
                             const iwdaCorr = calcCorr('IWDA');
                             const vdtaCorr = calcCorr('VDTA');
 
+                            return { label, stats, periodMonths, valueOf100, bestWorstYear,
+                                     iwdaBeta, iwdaDownBeta, iwdaDownMonths, iwdaCorr, vdtaCorr };
+                            };
+                            // ---- end of the per-series row builder ----
+
+                            const assetName = assetLookup.find(a => a.ticker === monthlySelectedTicker)?.name || monthlySelectedTicker;
+                            const assetRow = buildStatsRow(assetName, priceData, drawdownData);
+                            if (!assetRow) return null;
+
+                            // The window every row is measured over: whatever months the selected asset
+                            // actually has on screen. Bitcoin's history starts in 2016, so on "Max" the
+                            // market row is trimmed to 2016 too — otherwise it would be reporting a
+                            // different decade and the comparison would be meaningless.
+                            const windowStart = priceData[0].date;
+                            const windowEnd = priceData[priceData.length - 1].date;
+                            const windowDates = new Set(priceData.map(p => p.date));
+
+                            // ---- Row 2: the market on its own ----
+                            // Same helper the asset's own chart uses, same period, same currency, then
+                            // trimmed to the asset's months.
+                            const benchChart = getMonthlyChartData(STRESS_BENCHMARK, monthlyChartPeriod, monthlyEndDate || undefined, monthlyDisplayCurrency);
+                            const benchRow = (() => {
+                              if (!benchChart) return null;
+                              const keep: number[] = [];
+                              benchChart.priceData.forEach((p, i) => { if (windowDates.has(p.date)) keep.push(i); });
+                              if (keep.length < 2) return null;
+                              return buildStatsRow('World equities (IWDA)',
+                                keep.map(i => benchChart.priceData[i]),
+                                keep.map(i => benchChart.drawdownData[i]));
+                            })();
+
+                            // ---- Row 3: half the asset, half the market, rebalanced once a year ----
+                            // Deliberately run through calculatePortfolioReturns — the Backtest tab's own
+                            // engine — rather than a lookalike written here, so "rebuild this in the
+                            // Backtest tab and you get the same numbers" is true by construction rather
+                            // than by careful copying. Only the window and cadence are overridden.
+                            const blendRow = (() => {
+                              if (monthlySelectedTicker === STRESS_BENCHMARK || !assetData) return null;
+                              const blendPortfolio = {
+                                id: -1, name: `50/50 ${monthlySelectedTicker}/${STRESS_BENCHMARK}`,
+                                assets: [
+                                  { asset: monthlySelectedTicker, weight: 50 },
+                                  { asset: STRESS_BENCHMARK, weight: 50 },
+                                ],
+                                color: '#000000', nameManuallyEdited: false,
+                                inflationAdj: '', baseCurrency: monthlyDisplayCurrency,
+                              } as Portfolio;
+                              const pts = calculatePortfolioReturns(blendPortfolio, assetData,
+                                { start: windowStart, end: windowEnd, rebalanceFreq: 'yearly' });
+                              if (!pts || pts.length < 2) return null;
+                              return buildStatsRow('50/50, rebalanced annually',
+                                pts.map(p => ({ date: p.date, price: p.value })),
+                                pts.map(p => ({ drawdown: p.drawdown })));
+                            })();
+
+                            const statsRows = [assetRow, benchRow, blendRow].filter((r): r is NonNullable<typeof assetRow> => r !== null);
+
                             // ---- The currency caveat, written once and shown on every column it applies to ----
                             // Correlation and beta both change when you switch the display currency, and
                             // that surprises people because correlation is scale-invariant: measure two
@@ -8885,6 +8964,7 @@ const PortfolioBacktester = () => {
                                 <table className="w-full text-xs">
                                   <thead>
                                     <tr className="border-b-2 border-gray-200">
+                                      <th className="text-left py-2 px-2">&nbsp;</th>
                                       <th className="text-right py-2 px-2">Period</th>
                                       <th className="text-right py-2 px-2">Total Return</th>
                                       <th className="text-right py-2 px-2">100 → ?</th>
@@ -8905,7 +8985,7 @@ const PortfolioBacktester = () => {
                                           title={'Downside beta vs IWDA — the same calculation, but using ONLY the months world equities FELL.\n\n'
                                             + 'WHY IT EXISTS\nA full-sample beta averages crashes together with calm months, which can flatter an asset badly. The number you care about in a drawdown is this one.\n\n'
                                             + 'HOW TO READ IT\nHigher than the plain beta = the asset gets MORE correlated exactly when markets fall, which is when diversification is supposed to help. Lower, or negative, = it held up or rose while markets dropped, a genuine hedge.\n\n'
-                                            + `Based on ${iwdaDownMonths} down month${iwdaDownMonths === 1 ? '' : 's'} out of ${cachedPairs('IWDA').length}. Shown as — below ${MIN_DOWN_PAIRS} down months, where a slope would just be noise.\n\n`
+                                            + `Based on ${assetRow.iwdaDownMonths} down month${assetRow.iwdaDownMonths === 1 ? '' : 's'} in the visible period. Shown as — when there are too few for a slope to mean anything.\n\n`
                                             + 'CAUTION\nA low beta still does not mean safe. WIG20 scores 0.34 against world equities in PLN and still lost 20.8% in March 2020 — it fell hard, just not in step with a PLN investor\'s IWDA, which the dollar was busy rescuing.\n\n'
                                             + currencyNote('IWDA', 'world equities')}>
                                         Beta ↓
@@ -8923,10 +9003,23 @@ const PortfolioBacktester = () => {
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    <tr className="border-b border-gray-100">
-                                      <td className="text-right py-2 px-2">{formatPeriod(periodMonths)}</td>
+                                    {statsRows.map((row, rowIdx) => {
+                                      const { stats, bestWorstYear, iwdaBeta, iwdaDownBeta, iwdaDownMonths, iwdaCorr, vdtaCorr } = row;
+                                      // The selected asset keeps the plain styling it always had; the two
+                                      // reference rows are tinted so it stays obvious which line is yours.
+                                      const isAsset = rowIdx === 0;
+                                      return (
+                                      <tr key={row.label} className={`border-b border-gray-100 ${isAsset ? '' : 'bg-gray-50/60'}`}>
+                                        <td className={`text-left py-2 px-2 whitespace-nowrap ${isAsset ? 'font-medium text-gray-800' : 'text-gray-500'}`}>
+                                          {!isAsset && (
+                                            <span className="inline-block w-2 h-2 rounded-sm mr-1.5"
+                                                  style={{ backgroundColor: rowIdx === 1 ? '#F5A623' : '#9ca3af' }} />
+                                          )}
+                                          {row.label}
+                                        </td>
+                                        <td className="text-right py-2 px-2">{formatPeriod(row.periodMonths)}</td>
                                       <td className="text-right py-2 px-2">{stats.totalReturn}%</td>
-                                      <td className="text-right py-2 px-2 font-semibold">{valueOf100}</td>
+                                      <td className="text-right py-2 px-2 font-semibold">{row.valueOf100}</td>
                                       <td className="text-right py-2 px-2">{stats.cagr}%</td>
                                       <td className="text-right py-2 px-2">{stats.volatility}%</td>
                                       <td className="text-right py-2 px-2">{stats.sharpeRatio}</td>
@@ -8959,8 +9052,8 @@ const PortfolioBacktester = () => {
                                             : (iwdaBeta !== null && iwdaDownBeta > iwdaBeta + 0.15) ? 'text-amber-600'
                                             : ''}`}
                                           title={iwdaDownBeta === null
-                                            ? `Fewer than ${MIN_DOWN_PAIRS} months where world equities fell — too few to measure`
-                                            : `Over the ${iwdaDownMonths} months world equities fell, this asset moved ${iwdaDownBeta.toFixed(2)}% per 1% of their decline`
+                                            ? 'Too few months where world equities fell to measure a slope'
+                                            : `Over the ${iwdaDownMonths} months world equities fell, this moved ${iwdaDownBeta.toFixed(2)}% per 1% of their decline`
                                               + (iwdaBeta !== null ? `, versus ${iwdaBeta.toFixed(2)} across all months` : '')}>
                                         {iwdaDownBeta !== null ? iwdaDownBeta.toFixed(2) : '—'}
                                       </td>
@@ -8971,8 +9064,19 @@ const PortfolioBacktester = () => {
                                         {vdtaCorr !== null ? vdtaCorr.toFixed(2) : '—'}
                                       </td>
                                     </tr>
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
+                                {/* How to reproduce the 50/50 row in the Backtest tab. Without the exact
+                                    window you would have to guess which months the period covers. */}
+                                {blendRow && (
+                                  <p className="text-[10px] text-gray-400 mt-2">
+                                    50/50 row = this asset and IWDA at 50% each, rebalanced annually, run through the
+                                    Backtest tab&apos;s own engine. To reproduce it there: Start {windowStart}, End {windowEnd},
+                                    currency {monthlyDisplayCurrency || 'native'}, rebalancing Yearly, no inflation adjustment.
+                                  </p>
+                                )}
                               </div>
                             );
                           })()}
