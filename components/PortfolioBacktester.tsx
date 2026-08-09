@@ -8718,171 +8718,171 @@ const PortfolioBacktester = () => {
                               series: { date: string; price: number }[],
                               drawdowns: { drawdown: number }[],
                             ) => {
-                            const statPoints: ReturnPoint[] = series.map((p, i) => ({
-                              date: p.date,
-                              value: p.price,
-                              drawdown: drawdowns[i]?.drawdown ?? 0,
-                            }));
-                            const stats = calculateStatistics(statPoints, { name: label } as Portfolio);
-                            if (!stats) return null;
+                              const statPoints: ReturnPoint[] = series.map((p, i) => ({
+                                date: p.date,
+                                value: p.price,
+                                drawdown: drawdowns[i]?.drawdown ?? 0,
+                              }));
+                              const stats = calculateStatistics(statPoints, { name: label } as Portfolio);
+                              if (!stats) return null;
 
-                            // Intervals between monthly data points = the actual period covered.
-                            // (length-1 because 13 points from Jun 25 to Jun 26 = 12 monthly intervals = 1y)
-                            const periodMonths = statPoints.length - 1;
+                              // Intervals between monthly data points = the actual period covered.
+                              // (length-1 because 13 points from Jun 25 to Jun 26 = 12 monthly intervals = 1y)
+                              const periodMonths = statPoints.length - 1;
 
-                            // Value of 100 invested at the start of the period
-                            const valueOf100 = (100 * statPoints[statPoints.length - 1].value / statPoints[0].value).toFixed(0);
+                              // Value of 100 invested at the start of the period
+                              const valueOf100 = (100 * statPoints[statPoints.length - 1].value / statPoints[0].value).toFixed(0);
 
-                            // ---- Best / Worst calendar year within the visible period ----
-                            // Group series by year, compute return for each year using the
-                            // previous year-end price (or first price in window for the first year).
-                            const bestWorstYear = (() => {
-                              if (series.length < 2) return null;
-                              const yearMap = new Map<number, number[]>();
-                              for (const p of series) {
-                                const y = new Date(p.date).getFullYear();
-                                if (!yearMap.has(y)) yearMap.set(y, []);
-                                yearMap.get(y)!.push(p.price);
-                              }
-                              const years = Array.from(yearMap.keys()).sort();
-                              if (years.length < 1) return null;
-                              const yearReturns: number[] = [];
-                              let prevEnd = series[0].price;
-                              for (const y of years) {
-                                const prices = yearMap.get(y)!;
-                                const lastPrice = prices[prices.length - 1];
-                                yearReturns.push(((lastPrice - prevEnd) / prevEnd) * 100);
-                                prevEnd = lastPrice;
-                              }
-                              return { best: Math.max(...yearReturns), worst: Math.min(...yearReturns) };
-                            })();
+                              // ---- Best / Worst calendar year within the visible period ----
+                              // Group series by year, compute return for each year using the
+                              // previous year-end price (or first price in window for the first year).
+                              const bestWorstYear = (() => {
+                                if (series.length < 2) return null;
+                                const yearMap = new Map<number, number[]>();
+                                for (const p of series) {
+                                  const y = new Date(p.date).getFullYear();
+                                  if (!yearMap.has(y)) yearMap.set(y, []);
+                                  yearMap.get(y)!.push(p.price);
+                                }
+                                const years = Array.from(yearMap.keys()).sort();
+                                if (years.length < 1) return null;
+                                const yearReturns: number[] = [];
+                                let prevEnd = series[0].price;
+                                for (const y of years) {
+                                  const prices = yearMap.get(y)!;
+                                  const lastPrice = prices[prices.length - 1];
+                                  yearReturns.push(((lastPrice - prevEnd) / prevEnd) * 100);
+                                  prevEnd = lastPrice;
+                                }
+                                return { best: Math.max(...yearReturns), worst: Math.min(...yearReturns) };
+                              })();
 
-                            // ---- Paired monthly returns of the asset and a benchmark ----
-                            // Extracted so correlation and beta are computed from the SAME pairs.
-                            // They answer different halves of one question and must never disagree
-                            // about which months they looked at.
-                            //
-                            // BOTH SIDES ARE CONVERTED TO THE DISPLAY CURRENCY. This is not a detail.
-                            // `series` is already expressed in `monthlyDisplayCurrency`, so leaving
-                            // the benchmark in its native USD regresses a PLN return on a USD one and
-                            // silently measures the asset partly against USDPLN. The damage is easy to
-                            // miss and easy to prove: on the mixed basis, IWDA scored a beta of 0.48
-                            // and a correlation of 0.57 against ITSELF when viewed in PLN, and the
-                            // diversifiers came out with the wrong SIGN — long treasuries -0.66
-                            // instead of +0.29, managed futures -0.79 instead of +0.16. Converting the
-                            // benchmark the same way the asset was restores beta == 1.00 exactly for
-                            // an index against itself, in every display currency.
-                            const benchReturnPairs = (benchTicker: string): { a: number; b: number }[] => {
-                              if (!assetData) return [];
+                              // ---- Paired monthly returns of the asset and a benchmark ----
+                              // Extracted so correlation and beta are computed from the SAME pairs.
+                              // They answer different halves of one question and must never disagree
+                              // about which months they looked at.
+                              //
+                              // BOTH SIDES ARE CONVERTED TO THE DISPLAY CURRENCY. This is not a detail.
+                              // `series` is already expressed in `monthlyDisplayCurrency`, so leaving
+                              // the benchmark in its native USD regresses a PLN return on a USD one and
+                              // silently measures the asset partly against USDPLN. The damage is easy to
+                              // miss and easy to prove: on the mixed basis, IWDA scored a beta of 0.48
+                              // and a correlation of 0.57 against ITSELF when viewed in PLN, and the
+                              // diversifiers came out with the wrong SIGN — long treasuries -0.66
+                              // instead of +0.29, managed futures -0.79 instead of +0.16. Converting the
+                              // benchmark the same way the asset was restores beta == 1.00 exactly for
+                              // an index against itself, in every display currency.
+                              const benchReturnPairs = (benchTicker: string): { a: number; b: number }[] => {
+                                if (!assetData) return [];
 
-                              // Build benchmark last-price-per-month map, on the SAME currency basis
-                              // as series (see getMonthlyChartData, which converts identically).
-                              const benchCcy = getAssetCurrency(benchTicker);
-                              const benchByMonth = new Map<string, number>();
-                              for (const row of assetData) {
-                                const p = Number(row[benchTicker]);
-                                if (!p || p <= 0) continue;
-                                const conv = getConversionRate(row, benchCcy, monthlyDisplayCurrency || '');
-                                benchByMonth.set(toYM(new Date(row.date as string)), p * conv);
-                              }
+                                // Build benchmark last-price-per-month map, on the SAME currency basis
+                                // as series (see getMonthlyChartData, which converts identically).
+                                const benchCcy = getAssetCurrency(benchTicker);
+                                const benchByMonth = new Map<string, number>();
+                                for (const row of assetData) {
+                                  const p = Number(row[benchTicker]);
+                                  if (!p || p <= 0) continue;
+                                  const conv = getConversionRate(row, benchCcy, monthlyDisplayCurrency || '');
+                                  benchByMonth.set(toYM(new Date(row.date as string)), p * conv);
+                                }
 
-                              const pairs: { a: number; b: number }[] = [];
-                              for (let i = 1; i < series.length; i++) {
-                                const ym = toYM(new Date(series[i].date));
-                                const prevYm = toYM(new Date(series[i - 1].date));
-                                const bCurr = benchByMonth.get(ym);
-                                const bPrev = benchByMonth.get(prevYm);
-                                if (bCurr == null || bPrev == null || bPrev === 0) continue;
-                                pairs.push({
-                                  a: (series[i].price - series[i - 1].price) / series[i - 1].price,
-                                  b: (bCurr - bPrev) / bPrev,
-                                });
-                              }
-                              return pairs;
-                            };
+                                const pairs: { a: number; b: number }[] = [];
+                                for (let i = 1; i < series.length; i++) {
+                                  const ym = toYM(new Date(series[i].date));
+                                  const prevYm = toYM(new Date(series[i - 1].date));
+                                  const bCurr = benchByMonth.get(ym);
+                                  const bPrev = benchByMonth.get(prevYm);
+                                  if (bCurr == null || bPrev == null || bPrev === 0) continue;
+                                  pairs.push({
+                                    a: (series[i].price - series[i - 1].price) / series[i - 1].price,
+                                    b: (bCurr - bPrev) / bPrev,
+                                  });
+                                }
+                                return pairs;
+                              };
 
-                            // IWDA's pairs are needed by both beta and correlation. Without this the
-                            // benchmark's whole price history is rebuilt twice per render for no gain.
-                            const pairsCache = new Map<string, { a: number; b: number }[]>();
-                            const cachedPairs = (benchTicker: string) => {
-                              let p = pairsCache.get(benchTicker);
-                              if (!p) { p = benchReturnPairs(benchTicker); pairsCache.set(benchTicker, p); }
-                              return p;
-                            };
+                              // IWDA's pairs are needed by both beta and correlation. Without this the
+                              // benchmark's whole price history is rebuilt twice per render for no gain.
+                              const pairsCache = new Map<string, { a: number; b: number }[]>();
+                              const cachedPairs = (benchTicker: string) => {
+                                let p = pairsCache.get(benchTicker);
+                                if (!p) { p = benchReturnPairs(benchTicker); pairsCache.set(benchTicker, p); }
+                                return p;
+                              };
 
-                            // Fewer than three overlapping months and any of these figures is noise
-                            // dressed up as a statistic.
-                            const MIN_PAIRS = 3;
-                            // The downside sample is a subset — only months the benchmark fell — so it
-                            // needs its own, stricter floor before a slope through it means anything.
-                            const MIN_DOWN_PAIRS = 8;
+                              // Fewer than three overlapping months and any of these figures is noise
+                              // dressed up as a statistic.
+                              const MIN_PAIRS = 3;
+                              // The downside sample is a subset — only months the benchmark fell — so it
+                              // needs its own, stricter floor before a slope through it means anything.
+                              const MIN_DOWN_PAIRS = 8;
 
-                            // ---- Correlation: Pearson correlation of monthly returns vs a benchmark ----
-                            const calcCorr = (benchTicker: string): number | null => {
-                              const pairs = cachedPairs(benchTicker);
-                              if (pairs.length < MIN_PAIRS) return null;
+                              // ---- Correlation: Pearson correlation of monthly returns vs a benchmark ----
+                              const calcCorr = (benchTicker: string): number | null => {
+                                const pairs = cachedPairs(benchTicker);
+                                if (pairs.length < MIN_PAIRS) return null;
 
-                              const n = pairs.length;
-                              const aMean = pairs.reduce((s, p) => s + p.a, 0) / n;
-                              const bMean = pairs.reduce((s, p) => s + p.b, 0) / n;
-                              let num = 0, denA = 0, denB = 0;
-                              for (const p of pairs) {
-                                const da = p.a - aMean, db = p.b - bMean;
-                                num += da * db; denA += da * da; denB += db * db;
-                              }
-                              const denom = Math.sqrt(denA * denB);
-                              return denom === 0 ? null : num / denom;
-                            };
+                                const n = pairs.length;
+                                const aMean = pairs.reduce((s, p) => s + p.a, 0) / n;
+                                const bMean = pairs.reduce((s, p) => s + p.b, 0) / n;
+                                let num = 0, denA = 0, denB = 0;
+                                for (const p of pairs) {
+                                  const da = p.a - aMean, db = p.b - bMean;
+                                  num += da * db; denA += da * da; denB += db * db;
+                                }
+                                const denom = Math.sqrt(denA * denB);
+                                return denom === 0 ? null : num / denom;
+                              };
 
-                            // ---- Beta: how far this asset moves for a given move in the benchmark ----
-                            // Correlation says whether two things move TOGETHER; it is capped at 1 and
-                            // says nothing about size. Gold and world equities could both correlate 0.30
-                            // while one swings twice as hard as the other. Beta supplies the missing
-                            // half — the slope of the asset's return regressed on the benchmark's:
-                            //
-                            //     beta = covariance(asset, benchmark) / variance(benchmark)
-                            //
-                            // 1.0 means it has historically moved one-for-one with world equities, 1.5
-                            // means it amplifies them by half again, 0.5 means it damps them, and a
-                            // negative beta means it has tended to move the opposite way.
-                            //
-                            // The (n-1) divisor cancels between the covariance and the variance, so it
-                            // is left out rather than written twice.
-                            //
-                            // `downsideOnly` restricts the sample to months the BENCHMARK fell, giving
-                            // a "bear beta". This matters because a full-sample beta averages crashes
-                            // together with calm months and can flatter an asset badly: WIG20 scores
-                            // 0.34 against world equities in PLN, but 0.64 when only down months count,
-                            // and it lost 20.8% in March 2020. Covariance and variance use the
-                            // sub-sample's own means, which is the standard bear-beta construction.
-                            const calcBeta = (benchTicker: string, downsideOnly = false): number | null => {
-                              const all = cachedPairs(benchTicker);
-                              const pairs = downsideOnly ? all.filter(p => p.b < 0) : all;
-                              // A bear beta needs enough drawdown months to mean anything. Three would
-                              // be a slope through noise, so the downside figure holds out for more.
-                              if (pairs.length < (downsideOnly ? MIN_DOWN_PAIRS : MIN_PAIRS)) return null;
+                              // ---- Beta: how far this asset moves for a given move in the benchmark ----
+                              // Correlation says whether two things move TOGETHER; it is capped at 1 and
+                              // says nothing about size. Gold and world equities could both correlate 0.30
+                              // while one swings twice as hard as the other. Beta supplies the missing
+                              // half — the slope of the asset's return regressed on the benchmark's:
+                              //
+                              //     beta = covariance(asset, benchmark) / variance(benchmark)
+                              //
+                              // 1.0 means it has historically moved one-for-one with world equities, 1.5
+                              // means it amplifies them by half again, 0.5 means it damps them, and a
+                              // negative beta means it has tended to move the opposite way.
+                              //
+                              // The (n-1) divisor cancels between the covariance and the variance, so it
+                              // is left out rather than written twice.
+                              //
+                              // `downsideOnly` restricts the sample to months the BENCHMARK fell, giving
+                              // a "bear beta". This matters because a full-sample beta averages crashes
+                              // together with calm months and can flatter an asset badly: WIG20 scores
+                              // 0.34 against world equities in PLN, but 0.64 when only down months count,
+                              // and it lost 20.8% in March 2020. Covariance and variance use the
+                              // sub-sample's own means, which is the standard bear-beta construction.
+                              const calcBeta = (benchTicker: string, downsideOnly = false): number | null => {
+                                const all = cachedPairs(benchTicker);
+                                const pairs = downsideOnly ? all.filter(p => p.b < 0) : all;
+                                // A bear beta needs enough drawdown months to mean anything. Three would
+                                // be a slope through noise, so the downside figure holds out for more.
+                                if (pairs.length < (downsideOnly ? MIN_DOWN_PAIRS : MIN_PAIRS)) return null;
 
-                              const n = pairs.length;
-                              const aMean = pairs.reduce((s, p) => s + p.a, 0) / n;
-                              const bMean = pairs.reduce((s, p) => s + p.b, 0) / n;
-                              let cov = 0, varB = 0;
-                              for (const p of pairs) {
-                                const da = p.a - aMean, db = p.b - bMean;
-                                cov += da * db;
-                                varB += db * db;
-                              }
-                              // A benchmark that never moved has no slope to measure against
-                              return varB === 0 ? null : cov / varB;
-                            };
+                                const n = pairs.length;
+                                const aMean = pairs.reduce((s, p) => s + p.a, 0) / n;
+                                const bMean = pairs.reduce((s, p) => s + p.b, 0) / n;
+                                let cov = 0, varB = 0;
+                                for (const p of pairs) {
+                                  const da = p.a - aMean, db = p.b - bMean;
+                                  cov += da * db;
+                                  varB += db * db;
+                                }
+                                // A benchmark that never moved has no slope to measure against
+                                return varB === 0 ? null : cov / varB;
+                              };
 
-                            const iwdaBeta = calcBeta('IWDA');
-                            const iwdaDownBeta = calcBeta('IWDA', true);
-                            const iwdaDownMonths = cachedPairs('IWDA').filter(p => p.b < 0).length;
-                            const iwdaCorr = calcCorr('IWDA');
-                            const vdtaCorr = calcCorr('VDTA');
+                              const iwdaBeta = calcBeta('IWDA');
+                              const iwdaDownBeta = calcBeta('IWDA', true);
+                              const iwdaDownMonths = cachedPairs('IWDA').filter(p => p.b < 0).length;
+                              const iwdaCorr = calcCorr('IWDA');
+                              const vdtaCorr = calcCorr('VDTA');
 
-                            return { label, hint, stats, periodMonths, valueOf100, bestWorstYear,
-                                     iwdaBeta, iwdaDownBeta, iwdaDownMonths, iwdaCorr, vdtaCorr };
+                              return { label, hint, stats, periodMonths, valueOf100, bestWorstYear,
+                                       iwdaBeta, iwdaDownBeta, iwdaDownMonths, iwdaCorr, vdtaCorr };
                             };
                             // ---- end of the per-series row builder ----
 
