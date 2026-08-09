@@ -4557,13 +4557,31 @@ const PortfolioBacktester = () => {
       return (a / b - 1) * 100;
     };
 
+    // Running index, rebased to 100 at the start of the year and compounded month by
+    // month. Held outside the map so each month builds on the one before it.
+    //
+    // A month with no price does not compound and gets no value, so a series that only
+    // starts mid-year begins its climb from 100 at its own first month rather than
+    // pretending to have been flat since January. The "only N of 12 months" warning
+    // above the chart is what tells you that happened.
+    let idxAsset = 100, idxBench = 100;
+
     const rows = MONTH_LABELS.map((month, i) => {
       const asset = returnFor(assetPrices, i);
       const bench = returnFor(benchPrices, i);
+      if (asset !== null) idxAsset *= 1 + asset / 100;
+      if (bench !== null) idxBench *= 1 + bench / 100;
       return {
         month,
         asset,
         bench,
+        // Cumulative return since the start of the year, in percent. Stored as the
+        // change rather than the index itself so the bars anchor at zero: a bar chart
+        // of values hovering around 100 either squashes flat against a zero axis or,
+        // if you move the baseline, exaggerates every difference. The axis and labels
+        // add 100 back, so it still reads as "started at 100".
+        cumAssetPct: asset === null ? null : idxAsset - 100,
+        cumBenchPct: bench === null ? null : idxBench - 100,
         // The month's relative result in percentage points. Arithmetic difference, which
         // is how a one-month lead is normally quoted: -1.6% against -8.6% is "+7.0pp".
         // Note this is RELATIVE — a green +7.0 can still be a month you lost money.
@@ -9152,6 +9170,64 @@ const PortfolioBacktester = () => {
                               }
                               return out;
                             })();
+
+                            // Same round-number treatment for the cumulative chart's axis. Its numbers
+                            // are cumulative % from the start of the year; the axis adds 100 back so it
+                            // reads as an index. Headroom on top and bottom leaves room for the year-end
+                            // labels, which sit outside their bars.
+                            const niceStep = (span: number) => {
+                              const raw = span / 5;
+                              if (!isFinite(raw) || raw <= 0) return 1;
+                              const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+                              const n = raw / mag;
+                              return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+                            };
+                            const cumVals = rows.flatMap(r => [r.cumAssetPct, r.cumBenchPct]).filter((v): v is number => v !== null);
+                            const cumHi = Math.max(0, ...cumVals);
+                            const cumLo = Math.min(0, ...cumVals);
+                            const cumSpan = (cumHi - cumLo) || 1;
+                            const cumDomain: [number, number] = [cumLo - cumSpan * 0.12, cumHi + cumSpan * 0.12];
+                            const cumStep = niceStep(cumDomain[1] - cumDomain[0]);
+                            const cumTicks = (() => {
+                              const out: number[] = [];
+                              const start = Math.ceil(cumDomain[0] / cumStep) * cumStep;
+                              for (let v = start; v <= cumDomain[1] + 1e-9 && out.length < 20; v += cumStep) {
+                                out.push(Math.round(v * 1e6) / 1e6);
+                              }
+                              return out;
+                            })();
+
+                            // Only the LAST month with a value gets a label — the year's outcome. Which
+                            // month that is differs per series (one may run out of data earlier), so it
+                            // is found per key rather than assumed to be December.
+                            const lastFilled = (key: 'cumAssetPct' | 'cumBenchPct') => {
+                              for (let i = rows.length - 1; i >= 0; i--) if (rows[i][key] !== null) return i;
+                              return -1;
+                            };
+                            const renderEndLabel = (key: 'cumAssetPct' | 'cumBenchPct', fill: string) =>
+                              (props: { x?: string | number; y?: string | number; width?: string | number; height?: string | number; index?: number }) => {
+                                const index = props.index;
+                                if (index === undefined || index !== lastFilled(key)) return null;
+                                const v = rows[index][key];
+                                if (v === null) return null;
+                                const x = Number(props.x), width = Number(props.width);
+                                const y = Number(props.y), height = Number(props.height);
+                                if (!isFinite(x) || !isFinite(width) || !isFinite(y)) return null;
+                                // Do NOT assume `y` is the bar's top edge with a positive height. For a bar
+                                // hanging below the 100 line Recharts anchors `y` at the VALUE end and hands
+                                // back a NEGATIVE height back up to the baseline — assuming otherwise put
+                                // every below-100 label in the same spot just under the 100 line, nowhere
+                                // near the bar it belonged to. Deriving both edges works either way round.
+                                const h = isFinite(height) ? height : 0;
+                                const top = Math.min(y, y + h);
+                                const bottom = Math.max(y, y + h);
+                                const ty = v >= 0 ? top - 5 : bottom + 12;
+                                return (
+                                  <text x={x + width / 2} y={ty} textAnchor="middle" fontSize={11} fontWeight={700} fill={fill}>
+                                    {(100 + v).toFixed(1)}
+                                  </text>
+                                );
+                              };
                             // Recharts types x/width as `string | number`, so they are coerced rather
                             // than assumed — a non-numeric x would place the pill at NaN and vanish it.
                             const renderGapPill = (props: { x?: string | number; width?: string | number; index?: number }) => {
@@ -9247,10 +9323,14 @@ const PortfolioBacktester = () => {
                                         the pills sit just above the chart rather than adrift at the top
                                         of the SVG. Their lane stays clear because stressDomain reserves
                                         headroom above the tallest bar. */}
-                                    <ResponsiveContainer width="100%" height={252}>
-                                      <BarChart data={rows} barGap={STRESS_BAR_GAP} margin={{ top: 34, right: 10, left: -5, bottom: 5 }}>
+                                    {/* Month labels and the legend live on the cumulative chart below —
+                                        the two share one axis, so printing them twice would just be
+                                        noise between the panes. `hide` keeps the category scale doing
+                                        its job while removing the labels. */}
+                                    <ResponsiveContainer width="100%" height={218}>
+                                      <BarChart data={rows} barGap={STRESS_BAR_GAP} margin={{ top: 34, right: 10, left: -5, bottom: 0 }}>
                                         <CartesianGrid strokeDasharray="3 3" />
-                                        <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+                                        <XAxis dataKey="month" hide />
                                         <YAxis tick={{ fontSize: 9 }} width={40} domain={stressDomain} ticks={stressTicks}
                                                tickFormatter={(v: number) => `${v.toFixed(0)}%`} />
                                         <Tooltip
@@ -9258,7 +9338,6 @@ const PortfolioBacktester = () => {
                                           labelFormatter={(l: string) => `${l} ${stressYear}`}
                                         />
                                         <ReferenceLine y={0} stroke="#9CA3AF" strokeWidth={1} />
-                                        <Legend wrapperStyle={{ fontSize: 11 }} />
                                         {/* Black for the asset and #F5A623 for the benchmark are the first
                                             two portfolio colours on the Backtest tab, so "mine vs the other
                                             one" reads the same way across the app.
@@ -9275,6 +9354,36 @@ const PortfolioBacktester = () => {
                                         <Bar dataKey="bench" name="World equities (IWDA)" fill="#F5A623" isAnimationActive={false}>
                                           <LabelList dataKey="bench" position="top" formatter={barLabel}
                                                      style={{ fontSize: '8px', fill: '#92600a' }} />
+                                        </Bar>
+                                      </BarChart>
+                                    </ResponsiveContainer>
+
+                                    {/* --- Cumulative: 100 invested on 1 January, compounded --- */}
+                                    {/* Identical left/right margins, YAxis width and barGap as the chart
+                                        above, which is what makes every bar sit directly under its
+                                        monthly counterpart. Change one and you must change both. */}
+                                    <div className="text-[10px] text-gray-500 px-2 mt-1 mb-0.5">
+                                      Cumulative — 100 at the start of {stressYear}, compounded month by month
+                                    </div>
+                                    <ResponsiveContainer width="100%" height={196}>
+                                      <BarChart data={rows} barGap={STRESS_BAR_GAP} margin={{ top: 14, right: 10, left: -5, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" />
+                                        <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+                                        <YAxis tick={{ fontSize: 9 }} width={40} domain={cumDomain} ticks={cumTicks}
+                                               tickFormatter={(v: number) => (100 + v).toFixed(0)} />
+                                        <Tooltip
+                                          formatter={(value: number, name: string) =>
+                                            [`${(100 + value).toFixed(1)}  (${value >= 0 ? '+' : ''}${value.toFixed(1)}%)`, name]}
+                                          labelFormatter={(l: string) => `${l} ${stressYear}`}
+                                        />
+                                        {/* The 100 line — the level both series started from */}
+                                        <ReferenceLine y={0} stroke="#9CA3AF" strokeWidth={1} />
+                                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                                        <Bar dataKey="cumAssetPct" name={assetName} fill="#000000" isAnimationActive={false}>
+                                          <LabelList content={renderEndLabel('cumAssetPct', '#111827')} />
+                                        </Bar>
+                                        <Bar dataKey="cumBenchPct" name="World equities (IWDA)" fill="#F5A623" isAnimationActive={false}>
+                                          <LabelList content={renderEndLabel('cumBenchPct', '#92600a')} />
                                         </Bar>
                                       </BarChart>
                                     </ResponsiveContainer>
