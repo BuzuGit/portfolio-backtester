@@ -4575,13 +4575,14 @@ const PortfolioBacktester = () => {
         month,
         asset,
         bench,
-        // Cumulative return since the start of the year, in percent. Stored as the
-        // change rather than the index itself so the bars anchor at zero: a bar chart
-        // of values hovering around 100 either squashes flat against a zero axis or,
-        // if you move the baseline, exaggerates every difference. The axis and labels
-        // add 100 back, so it still reads as "started at 100".
-        cumAssetPct: asset === null ? null : idxAsset - 100,
-        cumBenchPct: bench === null ? null : idxBench - 100,
+        // The running index itself: 100 at the start of the year, compounded from there.
+        // Plotted as-is against a zero-based axis, so a bar's HEIGHT is what the holding
+        // is worth. An earlier version plotted the change from 100 instead; it made a
+        // holding worth 99.5 draw as a bar hanging below the line, which reads as a loss
+        // of 99.5 rather than a level of 99.5. The differences are less exaggerated this
+        // way, but the picture is the one people actually expect.
+        cumAsset: asset === null ? null : idxAsset,
+        cumBench: bench === null ? null : idxBench,
         // The month's relative result in percentage points. Arithmetic difference, which
         // is how a one-month lead is normally quoted: -1.6% against -8.6% is "+7.0pp".
         // Note this is RELATIVE — a green +7.0 can still be a month you lost money.
@@ -9171,27 +9172,25 @@ const PortfolioBacktester = () => {
                               return out;
                             })();
 
-                            // Same round-number treatment for the cumulative chart's axis. Its numbers
-                            // are cumulative % from the start of the year; the axis adds 100 back so it
-                            // reads as an index. Headroom on top and bottom leaves room for the year-end
-                            // labels, which sit outside their bars.
+                            // The cumulative axis runs from ZERO up past the tallest bar, so bar height
+                            // means value. Headroom on top leaves room for the year-end labels, which
+                            // sit just above their bars. Divided by 6 with a 2.5 rung on the ladder
+                            // because a 0..140 range over 5 steps lands on 50s and gives only three
+                            // labels; this way it lands on 25s.
                             const niceStep = (span: number) => {
-                              const raw = span / 5;
+                              const raw = span / 6;
                               if (!isFinite(raw) || raw <= 0) return 1;
                               const mag = Math.pow(10, Math.floor(Math.log10(raw)));
                               const n = raw / mag;
-                              return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+                              return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
                             };
-                            const cumVals = rows.flatMap(r => [r.cumAssetPct, r.cumBenchPct]).filter((v): v is number => v !== null);
-                            const cumHi = Math.max(0, ...cumVals);
-                            const cumLo = Math.min(0, ...cumVals);
-                            const cumSpan = (cumHi - cumLo) || 1;
-                            const cumDomain: [number, number] = [cumLo - cumSpan * 0.12, cumHi + cumSpan * 0.12];
-                            const cumStep = niceStep(cumDomain[1] - cumDomain[0]);
+                            const cumVals = rows.flatMap(r => [r.cumAsset, r.cumBench]).filter((v): v is number => v !== null);
+                            const cumHi = Math.max(100, ...cumVals);
+                            const cumDomain: [number, number] = [0, cumHi * 1.1];
+                            const cumStep = niceStep(cumDomain[1]);
                             const cumTicks = (() => {
                               const out: number[] = [];
-                              const start = Math.ceil(cumDomain[0] / cumStep) * cumStep;
-                              for (let v = start; v <= cumDomain[1] + 1e-9 && out.length < 20; v += cumStep) {
+                              for (let v = 0; v <= cumDomain[1] + 1e-9 && out.length < 20; v += cumStep) {
                                 out.push(Math.round(v * 1e6) / 1e6);
                               }
                               return out;
@@ -9200,11 +9199,11 @@ const PortfolioBacktester = () => {
                             // Only the LAST month with a value gets a label — the year's outcome. Which
                             // month that is differs per series (one may run out of data earlier), so it
                             // is found per key rather than assumed to be December.
-                            const lastFilled = (key: 'cumAssetPct' | 'cumBenchPct') => {
+                            const lastFilled = (key: 'cumAsset' | 'cumBench') => {
                               for (let i = rows.length - 1; i >= 0; i--) if (rows[i][key] !== null) return i;
                               return -1;
                             };
-                            const renderEndLabel = (key: 'cumAssetPct' | 'cumBenchPct', fill: string) =>
+                            const renderEndLabel = (key: 'cumAsset' | 'cumBench', fill: string) =>
                               (props: { x?: string | number; y?: string | number; width?: string | number; height?: string | number; index?: number }) => {
                                 const index = props.index;
                                 if (index === undefined || index !== lastFilled(key)) return null;
@@ -9218,13 +9217,15 @@ const PortfolioBacktester = () => {
                                 // back a NEGATIVE height back up to the baseline — assuming otherwise put
                                 // every below-100 label in the same spot just under the 100 line, nowhere
                                 // near the bar it belonged to. Deriving both edges works either way round.
+                                // Do NOT assume `y` is the bar's top edge with a positive height —
+                                // Recharts sometimes anchors `y` at the value end and returns a NEGATIVE
+                                // height back to the baseline. Deriving the top from both ends works
+                                // either way round.
                                 const h = isFinite(height) ? height : 0;
                                 const top = Math.min(y, y + h);
-                                const bottom = Math.max(y, y + h);
-                                const ty = v >= 0 ? top - 5 : bottom + 12;
                                 return (
-                                  <text x={x + width / 2} y={ty} textAnchor="middle" fontSize={11} fontWeight={700} fill={fill}>
-                                    {(100 + v).toFixed(1)}
+                                  <text x={x + width / 2} y={top - 5} textAnchor="middle" fontSize={11} fontWeight={700} fill={fill}>
+                                    {v.toFixed(1)}
                                   </text>
                                 );
                               };
@@ -9370,20 +9371,21 @@ const PortfolioBacktester = () => {
                                         <CartesianGrid strokeDasharray="3 3" />
                                         <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                                         <YAxis tick={{ fontSize: 9 }} width={40} domain={cumDomain} ticks={cumTicks}
-                                               tickFormatter={(v: number) => (100 + v).toFixed(0)} />
+                                               tickFormatter={(v: number) => v.toFixed(0)} />
                                         <Tooltip
                                           formatter={(value: number, name: string) =>
-                                            [`${(100 + value).toFixed(1)}  (${value >= 0 ? '+' : ''}${value.toFixed(1)}%)`, name]}
+                                            [`${value.toFixed(1)}  (${value >= 100 ? '+' : ''}${(value - 100).toFixed(1)}%)`, name]}
                                           labelFormatter={(l: string) => `${l} ${stressYear}`}
                                         />
-                                        {/* The 100 line — the level both series started from */}
-                                        <ReferenceLine y={0} stroke="#9CA3AF" strokeWidth={1} />
+                                        {/* The starting level, so you can see at a glance which bars are
+                                            above water and which are below without reading the axis */}
+                                        <ReferenceLine y={100} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
                                         <Legend wrapperStyle={{ fontSize: 11 }} />
-                                        <Bar dataKey="cumAssetPct" name={assetName} fill="#000000" isAnimationActive={false}>
-                                          <LabelList content={renderEndLabel('cumAssetPct', '#111827')} />
+                                        <Bar dataKey="cumAsset" name={assetName} fill="#000000" isAnimationActive={false}>
+                                          <LabelList content={renderEndLabel('cumAsset', '#111827')} />
                                         </Bar>
-                                        <Bar dataKey="cumBenchPct" name="World equities (IWDA)" fill="#F5A623" isAnimationActive={false}>
-                                          <LabelList content={renderEndLabel('cumBenchPct', '#92600a')} />
+                                        <Bar dataKey="cumBench" name="World equities (IWDA)" fill="#F5A623" isAnimationActive={false}>
+                                          <LabelList content={renderEndLabel('cumBench', '#92600a')} />
                                         </Bar>
                                       </BarChart>
                                     </ResponsiveContainer>
