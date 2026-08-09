@@ -8711,6 +8711,10 @@ const PortfolioBacktester = () => {
                             // they were measured would be worse than no rows at all.
                             const buildStatsRow = (
                               label: string,
+                              // Row labels are kept to a ticker or a couple of characters so the table
+                              // stays compact at any window width; the full description moves here and
+                              // shows on hover, which costs no horizontal space.
+                              hint: string,
                               series: { date: string; price: number }[],
                               drawdowns: { drawdown: number }[],
                             ) => {
@@ -8877,13 +8881,13 @@ const PortfolioBacktester = () => {
                             const iwdaCorr = calcCorr('IWDA');
                             const vdtaCorr = calcCorr('VDTA');
 
-                            return { label, stats, periodMonths, valueOf100, bestWorstYear,
+                            return { label, hint, stats, periodMonths, valueOf100, bestWorstYear,
                                      iwdaBeta, iwdaDownBeta, iwdaDownMonths, iwdaCorr, vdtaCorr };
                             };
                             // ---- end of the per-series row builder ----
 
                             const assetName = assetLookup.find(a => a.ticker === monthlySelectedTicker)?.name || monthlySelectedTicker;
-                            const assetRow = buildStatsRow(assetName, priceData, drawdownData);
+                            const assetRow = buildStatsRow(monthlySelectedTicker, assetName, priceData, drawdownData);
                             if (!assetRow) return null;
 
                             // The window every row is measured over: whatever months the selected asset
@@ -8903,7 +8907,8 @@ const PortfolioBacktester = () => {
                               const keep: number[] = [];
                               benchChart.priceData.forEach((p, i) => { if (windowDates.has(p.date)) keep.push(i); });
                               if (keep.length < 2) return null;
-                              return buildStatsRow('World equities (IWDA)',
+                              return buildStatsRow(STRESS_BENCHMARK,
+                                'World equities — the benchmark every Beta and Corr column is measured against',
                                 keep.map(i => benchChart.priceData[i]),
                                 keep.map(i => benchChart.drawdownData[i]));
                             })();
@@ -8927,7 +8932,8 @@ const PortfolioBacktester = () => {
                               const pts = calculatePortfolioReturns(blendPortfolio, assetData,
                                 { start: windowStart, end: windowEnd, rebalanceFreq: 'yearly' });
                               if (!pts || pts.length < 2) return null;
-                              return buildStatsRow('50/50, rebalanced annually',
+                              return buildStatsRow('50/50',
+                                `50% ${monthlySelectedTicker} and 50% ${STRESS_BENCHMARK}, rebalanced annually, run through the Backtest tab's own engine`,
                                 pts.map(p => ({ date: p.date, price: p.value })),
                                 pts.map(p => ({ drawdown: p.drawdown })));
                             })();
@@ -9010,7 +9016,8 @@ const PortfolioBacktester = () => {
                                       const isAsset = rowIdx === 0;
                                       return (
                                       <tr key={row.label} className={`border-b border-gray-100 ${isAsset ? '' : 'bg-gray-50/60'}`}>
-                                        <td className={`text-left py-2 px-2 whitespace-nowrap ${isAsset ? 'font-medium text-gray-800' : 'text-gray-500'}`}>
+                                        <td className={`text-left py-2 px-2 whitespace-nowrap ${isAsset ? 'font-medium text-gray-800' : 'text-gray-500'}`}
+                                            title={row.hint}>
                                           {!isAsset && (
                                             <span className="inline-block w-2 h-2 rounded-sm mr-1.5"
                                                   style={{ backgroundColor: rowIdx === 1 ? '#F5A623' : '#9ca3af' }} />
