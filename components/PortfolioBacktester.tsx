@@ -737,6 +737,60 @@ const MONTHLY_CHART_PERIODS: MonthlyChartPeriod[] =
 // looks the same everywhere on the page.
 const MARKET_LINE_COLOR = '#F5A623';
 
+/**
+ * Adds the running "high water mark" to a price series: the highest price seen SO FAR,
+ * walking left to right. Think of it as a ratchet that only ever clicks upwards. Whenever
+ * the price sits below it, the asset is "underwater" — it has not yet earned back a
+ * previous peak. The mark starts at the first point of whatever series it is given, so a
+ * shorter window means "highest since the window began", not "highest ever".
+ */
+function withHighWaterMark<T extends { date: string; price: number }>(series: T[]): (T & { hwm: number })[] {
+  let hwm = -Infinity;
+  return series.map(d => {
+    if (d.price > hwm) hwm = d.price;
+    return { ...d, hwm };
+  });
+}
+
+/** One continuous stretch spent below a previous peak. */
+interface UnderwaterPeriod {
+  startDate: string;   // first month below the peak
+  endDate: string;     // last month below the peak (recovery happens the month after)
+  midDate: string;     // middle of the stretch — where the duration label is drawn
+  months: number;      // how many months were spent underwater
+  peak: number;        // the price level that had to be won back
+}
+
+/**
+ * Groups the underwater months into continuous stretches, so a chart can shade each one and
+ * say how long it lasted ("3y 4m"). A month counts as underwater when it closed BELOW the
+ * running high — the exact same rule calculateStatistics() uses for its "Longest DD" column,
+ * so a label on the chart always matches the number in the table above it.
+ */
+function findUnderwaterPeriods(series: { date: string; price: number; hwm: number }[]): UnderwaterPeriod[] {
+  const periods: UnderwaterPeriod[] = [];
+  let runStart = -1;  // index where the current stretch began (-1 = not underwater)
+  const closeRun = (startIdx: number, endIdx: number) => {
+    periods.push({
+      startDate: series[startIdx].date,
+      endDate: series[endIdx].date,
+      midDate: series[Math.floor((startIdx + endIdx) / 2)].date,
+      months: endIdx - startIdx + 1,
+      // The high water mark cannot move while underwater, so any index in the run gives
+      // the same peak — the one the price is trying to climb back to.
+      peak: series[startIdx].hwm,
+    });
+  };
+  for (let i = 0; i < series.length; i++) {
+    const isUnderwater = series[i].price < series[i].hwm;
+    if (isUnderwater && runStart === -1) runStart = i;             // stretch begins
+    if (!isUnderwater && runStart !== -1) { closeRun(runStart, i - 1); runStart = -1; }  // recovered
+  }
+  // Still underwater at the right edge — close the final stretch at the last month
+  if (runStart !== -1) closeRun(runStart, series.length - 1);
+  return periods;
+}
+
 // Which consumer-price index belongs to which currency. Only three of the five currencies the
 // app can display have a CPI series in the sheet; EUR and CHF simply have none, so anything
 // inflation-adjusted is shown as "n.a." rather than guessed at from a neighbouring country.
@@ -1266,7 +1320,8 @@ const PortfolioBacktester = () => {
   //  'sma'       = price + the 10-month moving average (the original, default view)
   //  'drawdown'  = price + the high water mark, with the underwater stretches shaded pink
   //  'vsMarket'  = this asset against world equities, both rebased to 100 at the window start
-  const [monthlyPriceChartMode, setMonthlyPriceChartMode] = useState<'sma' | 'drawdown' | 'vsMarket' | 'inflation'>('sma');
+  const [monthlyPriceChartMode, setMonthlyPriceChartMode] =
+    useState<'sma' | 'drawdown' | 'drawdownReal' | 'vsMarket' | 'inflation'>('sma');
   // Linear (default) or logarithmic Y axis on that same chart. Log is what makes the early
   // years of a big winner readable — see niceLogAxisScale for why.
   const [monthlyPriceChartLog, setMonthlyPriceChartLog] = useState(false);
@@ -4603,49 +4658,13 @@ const PortfolioBacktester = () => {
     const visibleData = effectiveData.slice(effectiveData.length - n);
     if (visibleData.length === 0) return null;
 
-    // 4. Separate into price, drawdown, and SMA-distance arrays for the three charts
-    //
-    // `hwm` = the "high water mark": the highest price seen SO FAR, walking left to right.
-    // Think of it as a ratchet that only ever clicks upwards. Whenever the price line sits
-    // below it, the asset is "underwater" — it has not yet earned back a previous peak.
-    // It restarts at the beginning of the visible window (same basis as drawdownData below),
-    // so a 3Y view answers "worst since 3 years ago", not "worst ever".
-    let priceHwm = 0;
-    const priceData = visibleData.map(d => {
-      if (d.price > priceHwm) priceHwm = d.price;
-      return { date: d.date, price: d.price, sma10: d.sma10, hwm: priceHwm };
-    });
-
-    // Group the underwater months into continuous stretches, so the chart can shade each
-    // one and say how long it lasted ("3y 4m"). A month counts as underwater when it closed
-    // BELOW the running high — the exact same rule calculateStatistics() uses for its
-    // "Longest DD" column, so a label here always matches the number in the table above.
-    const underwaterPeriods: {
-      startDate: string;   // first month below the peak
-      endDate: string;     // last month below the peak (recovery happens the month after)
-      midDate: string;     // middle of the stretch — where the duration label is drawn
-      months: number;      // how many months were spent underwater
-      peak: number;        // the price level that had to be won back
-    }[] = [];
-    let runStart = -1;  // index where the current underwater stretch began (-1 = not underwater)
-    const closeRun = (startIdx: number, endIdx: number) => {
-      underwaterPeriods.push({
-        startDate: priceData[startIdx].date,
-        endDate: priceData[endIdx].date,
-        midDate: priceData[Math.floor((startIdx + endIdx) / 2)].date,
-        months: endIdx - startIdx + 1,
-        // The high water mark cannot move while underwater, so any index in the run gives
-        // the same peak — the one the price is trying to climb back to.
-        peak: priceData[startIdx].hwm,
-      });
-    };
-    for (let i = 0; i < priceData.length; i++) {
-      const isUnderwater = priceData[i].price < priceData[i].hwm;
-      if (isUnderwater && runStart === -1) runStart = i;             // stretch begins
-      if (!isUnderwater && runStart !== -1) { closeRun(runStart, i - 1); runStart = -1; }  // recovered
-    }
-    // Still underwater at the right edge — close the final stretch at the last month
-    if (runStart !== -1) closeRun(runStart, priceData.length - 1);
+    // 4. Separate into price, drawdown, and SMA-distance arrays for the three charts.
+    //    The high water mark restarts at the beginning of the visible window (same basis as
+    //    drawdownData below), so a 3Y view answers "worst since 3 years ago", not "worst ever".
+    const priceData = withHighWaterMark(
+      visibleData.map(d => ({ date: d.date, price: d.price, sma10: d.sma10 }))
+    );
+    const underwaterPeriods = findUnderwaterPeriods(priceData);
 
     // Recompute drawdown from scratch within the visible window so the chart
     // reflects the selected period only — not the full history ATH.
@@ -6972,7 +6991,27 @@ const PortfolioBacktester = () => {
 
               {/* Statistics Table */}
               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
-                <h3 className="text-md font-semibold text-gray-700 mb-2">Statistics</h3>
+                {/* Same heading treatment as the Monthly tab's statistics: what window these
+                    numbers cover, and on what basis, rather than a bare "Statistics". The window
+                    is read from the results themselves, not from the date pickers above — a
+                    portfolio whose assets start late is backtested from the first month it can
+                    actually be held, which is not necessarily the start date requested. */}
+                <h3 className="text-md font-semibold text-gray-900 mb-2">
+                  Statistics
+                  {(() => {
+                    const pts = backtestResults[0]?.returns;
+                    if (!pts || pts.length < 2) return null;
+                    const start = pts[0].date, end = pts[pts.length - 1].date;
+                    return (
+                      <>
+                        {' for '}{formatPeriod(pts.length - 1)}
+                        <span className="font-normal text-gray-500">
+                          {' '}({start.slice(0, 7)} / {end.slice(0, 7)}) based on month end prices
+                        </span>
+                      </>
+                    );
+                  })()}
+                </h3>
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b-2 border-gray-200">
@@ -8777,8 +8816,31 @@ const PortfolioBacktester = () => {
                       // If the comparison can't be built (the asset IS the benchmark, or the two
                       // never overlap), quietly fall back to the default view rather than blanking
                       // the chart. Every branch below keys off this EFFECTIVE mode, not the raw state.
-                      const priceChartMode = monthlyPriceChartMode === 'vsMarket' && !vsMarketData
-                        ? 'sma'
+                      // --- Real (inflation-adjusted) prices, for the real drawdown view ---
+                      // Every month restated in the purchasing power of the window's FIRST month:
+                      // price x (CPI then / CPI now). The line therefore starts at the same place as
+                      // the nominal one and diverges downward from it. Drawdowns measured on this
+                      // series are the honest ones — recovering your money is not the same as
+                      // recovering what your money could buy, so real recoveries take longer and
+                      // some nominal "new highs" turn out not to be highs at all.
+                      const realPriceData = (() => {
+                        if (!monthlyCpiTicker || priceData.length === 0) return null;
+                        const baseCpi = cpiAt(priceData[0].date);
+                        if (!baseCpi) return null;
+                        const deflated: { date: string; price: number }[] = [];
+                        for (const d of priceData) {
+                          const cpi = cpiAt(d.date);
+                          if (!cpi) return null;   // a gap would silently distort the peaks
+                          deflated.push({ date: d.date, price: d.price * (baseCpi / cpi) });
+                        }
+                        return withHighWaterMark(deflated);
+                      })();
+
+                      const priceChartMode =
+                        monthlyPriceChartMode === 'vsMarket' && !vsMarketData ? 'sma'
+                        // No CPI for this currency (EUR, CHF) — the real view has nothing to show,
+                        // so fall back to the nominal drawdowns it is otherwise identical to.
+                        : monthlyPriceChartMode === 'drawdownReal' && !realPriceData ? 'drawdown'
                         : monthlyPriceChartMode;
 
                       // --- "Inflation adjusted" view ---
@@ -8816,14 +8878,31 @@ const PortfolioBacktester = () => {
                       // [low, high] pair, so we hand it [price, high water mark]. When the price IS
                       // the high water mark the pair collapses to a zero-height band and nothing shows —
                       // which is exactly right: at a new all-time high there is no drawdown to shade.
-                      const priceChartData = priceChartMode === 'drawdown'
-                        ? priceData.map(d => ({ ...d, underwaterBand: [d.price, d.hwm] as [number, number] }))
+                      //
+                      // The nominal and real drawdown views are the same chart over a different
+                      // price series, so everything below is driven by which series is in play
+                      // rather than by branching the rendering twice.
+                      const isDrawdownView = priceChartMode === 'drawdown' || priceChartMode === 'drawdownReal';
+                      const ddSeries = priceChartMode === 'drawdownReal' && realPriceData ? realPriceData : priceData;
+                      const priceChartData = isDrawdownView
+                        ? ddSeries.map(d => ({ ...d, underwaterBand: [d.price, d.hwm] as [number, number] }))
                         : priceData;
                       // Only stretches of a year or more get a duration label — shorter ones would
                       // just clutter the chart, and a two-month dip is not a story worth telling.
-                      const labelledUnderwaterPeriods = priceChartMode === 'drawdown'
-                        ? underwaterPeriods.filter(p => p.months >= 12)
-                        : [];
+                      const labelledUnderwaterPeriods = !isDrawdownView ? []
+                        : (priceChartMode === 'drawdownReal' && realPriceData
+                            ? findUnderwaterPeriods(realPriceData)
+                            : underwaterPeriods
+                          ).filter(p => p.months >= 12);
+                      // Peak and trough of whichever series is drawn, so the two dots stay on the line.
+                      const ddMaxPoint = isDrawdownView
+                        ? ddSeries.reduce((best, d) => (!best || d.price > best.price ? d : best), null as (typeof ddSeries)[number] | null)
+                        : null;
+                      const ddMinPoint = isDrawdownView
+                        ? ddSeries.reduce((worst, d) => (!worst || d.price < worst.price ? d : worst), null as (typeof ddSeries)[number] | null)
+                        : null;
+                      const shownMaxPoint = isDrawdownView ? ddMaxPoint : maxPricePoint;
+                      const shownMinPoint = isDrawdownView ? ddMinPoint : minPricePoint;
 
                       // Y-axis scale for the price chart. Built from whichever lines are actually
                       // on screen (the SMA can dip below the visible price range; the high water
@@ -8835,7 +8914,7 @@ const PortfolioBacktester = () => {
                           ? vsMarketData.flatMap(d => [d.assetIdx, d.marketIdx])
                         : priceChartMode === 'inflation' && inflationData
                           ? inflationData.flatMap(d => [d.nominalIdx, d.inflationIdx, d.realIdx])
-                          : priceData.map(d => d.price);
+                          : ddSeries.map(d => d.price);
                       if (priceChartMode === 'sma') priceAxisValues.push(...priceData.map(d => d.sma10));
                       // Log needs its own gridlines, and it cannot plot a zero or negative value —
                       // if the helper can't build one, quietly stay linear rather than break.
@@ -8844,7 +8923,7 @@ const PortfolioBacktester = () => {
                       const priceAxis = logAxis ?? niceAxisScale(priceAxisValues);
 
                       // --- Right-edge bubbles for the price chart ---
-                      const lastRow = priceData[priceData.length - 1];
+                      const lastRow = ddSeries[ddSeries.length - 1];
                       const priceBubbleDefs: BubbleDef[] = [];
                       if (priceChartMode === 'vsMarket' && vsMarketData) {
                         // Two bubbles: where 100 ended up for each line.
@@ -8863,11 +8942,15 @@ const PortfolioBacktester = () => {
                       } else if (lastRow) {
                         priceBubbleDefs.push({ value: lastRow.price, color: '#000000', label: formatPrice(lastRow.price) });
                         // Second bubble follows whichever overlay is on screen: the SMA in the
-                        // default view, the high water mark in the drawdown view.
-                        if (priceChartMode === 'drawdown') {
+                        // default view, the high water mark in either drawdown view.
+                        if (isDrawdownView) {
                           priceBubbleDefs.push({ value: lastRow.hwm, color: CHART_PALETTE.rose, label: formatPrice(lastRow.hwm) });
-                        } else if (lastRow.sma10 != null) {
-                          priceBubbleDefs.push({ value: lastRow.sma10, color: '#ef4444', label: formatPrice(lastRow.sma10) });
+                        } else {
+                          // The SMA only exists on the nominal series, which is what this branch draws.
+                          const lastSma = priceData[priceData.length - 1]?.sma10;
+                          if (lastSma != null) {
+                            priceBubbleDefs.push({ value: lastSma, color: '#ef4444', label: formatPrice(lastSma) });
+                          }
                         }
                       }
                       const MonthlyPriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
@@ -9316,7 +9399,7 @@ const PortfolioBacktester = () => {
                                     fact for the whole table, so it belongs in the heading — the key part
                                     dark, the exact dates and the basis as quieter supporting detail. */}
                                 <h3 className="text-md font-semibold text-gray-900 mb-2">
-                                  Statistics for period of {formatPeriod(assetRow.periodMonths)}
+                                  Statistics for {formatPeriod(assetRow.periodMonths)}
                                   <span className="font-normal text-gray-500">
                                     {' '}({windowStart.slice(0, 7)} / {windowEnd.slice(0, 7)}) based on month end prices
                                   </span>
@@ -9461,10 +9544,14 @@ const PortfolioBacktester = () => {
                               or the asset against world equities. The third is hidden when the
                               selected asset IS the benchmark — comparing IWDA with itself would
                               just draw one line on top of another. */}
-                          <div className="flex justify-end gap-1 mb-1 px-2">
+                          <div className="flex justify-end gap-1 mb-1 px-2 flex-wrap">
                             {([
                               { key: 'sma', label: 'Price & 10m SMA' },
                               { key: 'drawdown', label: 'Price & drawdowns' },
+                              // Needs a CPI for the displayed currency; EUR and CHF have none.
+                              ...(monthlyCpiTicker
+                                ? [{ key: 'drawdownReal', label: 'Price & drawdowns inflation adjusted' }] as const
+                                : []),
                               ...(monthlySelectedTicker !== STRESS_BENCHMARK
                                 ? [{ key: 'vsMarket', label: `vs ${STRESS_BENCHMARK}` }] as const
                                 : []),
@@ -9564,7 +9651,7 @@ const PortfolioBacktester = () => {
                               <Customized component={MonthlyPriceBubbles} />
                               {/* Pink shading between the price and its high water mark — the gap the
                                   asset still has to climb back. Drawn first so the lines sit on top. */}
-                              {priceChartMode === 'drawdown' && (
+                              {isDrawdownView && (
                                 <Area
                                   type="monotone"
                                   dataKey="underwaterBand"
@@ -9680,7 +9767,7 @@ const PortfolioBacktester = () => {
                                 />
                               )}
                               {/* High water mark — the ratchet of previous peaks, flat until a new high */}
-                              {priceChartMode === 'drawdown' && (
+                              {isDrawdownView && (
                                 <Line
                                   type="monotone"
                                   dataKey="hwm"
@@ -9715,16 +9802,16 @@ const PortfolioBacktester = () => {
                               {/* Green dot at highest price in the visible period. Hidden in the
                                   indexed views: those are PRICES, and those charts' axes are in
                                   index points, so they would land at meaningless heights. */}
-                              {!isIndexView && maxPricePoint && (
+                              {!isIndexView && shownMaxPoint && (
                                 <ReferenceDot
-                                  x={maxPricePoint.date}
-                                  y={maxPricePoint.price}
+                                  x={shownMaxPoint.date}
+                                  y={shownMaxPoint.price}
                                   r={6}
                                   fill="#22c55e"
                                   stroke="#fff"
                                   strokeWidth={2}
                                   label={{
-                                    value: formatPrice(maxPricePoint.price),
+                                    value: formatPrice(shownMaxPoint.price),
                                     position: 'top',
                                     fontSize: 11,
                                     fill: '#111827',
@@ -9733,16 +9820,16 @@ const PortfolioBacktester = () => {
                                 />
                               )}
                               {/* Red dot at lowest price in the visible period */}
-                              {!isIndexView && minPricePoint && (
+                              {!isIndexView && shownMinPoint && (
                                 <ReferenceDot
-                                  x={minPricePoint.date}
-                                  y={minPricePoint.price}
+                                  x={shownMinPoint.date}
+                                  y={shownMinPoint.price}
                                   r={6}
                                   fill="#ef4444"
                                   stroke="#fff"
                                   strokeWidth={2}
                                   label={{
-                                    value: formatPrice(minPricePoint.price),
+                                    value: formatPrice(shownMinPoint.price),
                                     position: 'bottom',
                                     fontSize: 11,
                                     fill: '#111827',
