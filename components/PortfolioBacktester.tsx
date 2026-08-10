@@ -1125,6 +1125,10 @@ const PortfolioBacktester = () => {
   const [monthlySelectedTicker, setMonthlySelectedTicker] = useState<string>('');
   // How many years of data to show in the monthly charts (default: show everything)
   const [monthlyChartPeriod, setMonthlyChartPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max'>('max');
+  // What the main price chart overlays on top of the price line:
+  //  'sma'      = the 10-month moving average (the original, default view)
+  //  'drawdown' = the high water mark, with the underwater stretches shaded pink
+  const [monthlyPriceChartMode, setMonthlyPriceChartMode] = useState<'sma' | 'drawdown'>('sma');
   // Which currency the selected asset's detail subsection is displayed in.
   // Defaults to the asset's own native currency (set when an asset is clicked),
   // so by default everything shows in the asset's original currency (no conversion).
@@ -4458,7 +4462,48 @@ const PortfolioBacktester = () => {
     if (visibleData.length === 0) return null;
 
     // 4. Separate into price, drawdown, and SMA-distance arrays for the three charts
-    const priceData = visibleData.map(d => ({ date: d.date, price: d.price, sma10: d.sma10 }));
+    //
+    // `hwm` = the "high water mark": the highest price seen SO FAR, walking left to right.
+    // Think of it as a ratchet that only ever clicks upwards. Whenever the price line sits
+    // below it, the asset is "underwater" — it has not yet earned back a previous peak.
+    // It restarts at the beginning of the visible window (same basis as drawdownData below),
+    // so a 3Y view answers "worst since 3 years ago", not "worst ever".
+    let priceHwm = 0;
+    const priceData = visibleData.map(d => {
+      if (d.price > priceHwm) priceHwm = d.price;
+      return { date: d.date, price: d.price, sma10: d.sma10, hwm: priceHwm };
+    });
+
+    // Group the underwater months into continuous stretches, so the chart can shade each
+    // one and say how long it lasted ("3y 4m"). A month counts as underwater when it closed
+    // BELOW the running high — the exact same rule calculateStatistics() uses for its
+    // "Longest DD" column, so a label here always matches the number in the table above.
+    const underwaterPeriods: {
+      startDate: string;   // first month below the peak
+      endDate: string;     // last month below the peak (recovery happens the month after)
+      midDate: string;     // middle of the stretch — where the duration label is drawn
+      months: number;      // how many months were spent underwater
+      peak: number;        // the price level that had to be won back
+    }[] = [];
+    let runStart = -1;  // index where the current underwater stretch began (-1 = not underwater)
+    const closeRun = (startIdx: number, endIdx: number) => {
+      underwaterPeriods.push({
+        startDate: priceData[startIdx].date,
+        endDate: priceData[endIdx].date,
+        midDate: priceData[Math.floor((startIdx + endIdx) / 2)].date,
+        months: endIdx - startIdx + 1,
+        // The high water mark cannot move while underwater, so any index in the run gives
+        // the same peak — the one the price is trying to climb back to.
+        peak: priceData[startIdx].hwm,
+      });
+    };
+    for (let i = 0; i < priceData.length; i++) {
+      const isUnderwater = priceData[i].price < priceData[i].hwm;
+      if (isUnderwater && runStart === -1) runStart = i;             // stretch begins
+      if (!isUnderwater && runStart !== -1) { closeRun(runStart, i - 1); runStart = -1; }  // recovered
+    }
+    // Still underwater at the right edge — close the final stretch at the last month
+    if (runStart !== -1) closeRun(runStart, priceData.length - 1);
 
     // Recompute drawdown from scratch within the visible window so the chart
     // reflects the selected period only — not the full history ATH.
@@ -4511,7 +4556,7 @@ const PortfolioBacktester = () => {
       ? (Math.pow(endPrice / startPrice, 1 / years) - 1) * 100
       : null;
 
-    return { priceData, drawdownData, smaDistData, maxPricePoint, minPricePoint, maxDrawdownPoint, maxSmaDistPoint, minSmaDistPoint, totalReturn, cagr };
+    return { priceData, drawdownData, smaDistData, underwaterPeriods, maxPricePoint, minPricePoint, maxDrawdownPoint, maxSmaDistPoint, minSmaDistPoint, totalReturn, cagr };
   };
 
   // ---------------------------------------------------------------------------
@@ -8534,14 +8579,33 @@ const PortfolioBacktester = () => {
                         </div>
                       );
 
-                      const { priceData, drawdownData, smaDistData, maxPricePoint, minPricePoint, maxDrawdownPoint, maxSmaDistPoint, minSmaDistPoint, totalReturn, cagr } = chartResult;
+                      const { priceData, drawdownData, smaDistData, underwaterPeriods, maxPricePoint, minPricePoint, maxDrawdownPoint, maxSmaDistPoint, minSmaDistPoint, totalReturn, cagr } = chartResult;
+
+                      // --- Drawdown ("underwater") view of the price chart ---
+                      // Recharts can shade the gap between two lines if the data point carries a
+                      // [low, high] pair, so we hand it [price, high water mark]. When the price IS
+                      // the high water mark the pair collapses to a zero-height band and nothing shows —
+                      // which is exactly right: at a new all-time high there is no drawdown to shade.
+                      const priceChartMode = monthlyPriceChartMode;
+                      const priceChartData = priceChartMode === 'drawdown'
+                        ? priceData.map(d => ({ ...d, underwaterBand: [d.price, d.hwm] as [number, number] }))
+                        : priceData;
+                      // Only stretches of a year or more get a duration label — shorter ones would
+                      // just clutter the chart, and a two-month dip is not a story worth telling.
+                      const labelledUnderwaterPeriods = priceChartMode === 'drawdown'
+                        ? underwaterPeriods.filter(p => p.months >= 12)
+                        : [];
 
                       // --- Right-edge bubbles for the price chart ---
                       const lastRow = priceData[priceData.length - 1];
                       const priceBubbleDefs: BubbleDef[] = [];
                       if (lastRow) {
                         priceBubbleDefs.push({ value: lastRow.price, color: '#000000', label: formatPrice(lastRow.price) });
-                        if (lastRow.sma10 != null) {
+                        // Second bubble follows whichever overlay is on screen: the SMA in the
+                        // default view, the high water mark in the drawdown view.
+                        if (priceChartMode === 'drawdown') {
+                          priceBubbleDefs.push({ value: lastRow.hwm, color: CHART_PALETTE.rose, label: formatPrice(lastRow.hwm) });
+                        } else if (lastRow.sma10 != null) {
                           priceBubbleDefs.push({ value: lastRow.sma10, color: '#ef4444', label: formatPrice(lastRow.sma10) });
                         }
                       }
@@ -9088,9 +9152,29 @@ const PortfolioBacktester = () => {
                             );
                           })()}
 
-                          {/* Chart 1: Price + 10M SMA */}
-                          <ResponsiveContainer width="100%" height={350}>
-                            <LineChart data={priceData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
+                          {/* Overlay switch for the price chart: moving average, or underwater periods */}
+                          <div className="flex justify-end gap-1 mb-1 px-2">
+                            {([
+                              { key: 'sma', label: 'Price & 10m SMA' },
+                              { key: 'drawdown', label: 'Price & drawdowns' },
+                            ] as const).map(opt => (
+                              <button
+                                key={opt.key}
+                                onClick={() => setMonthlyPriceChartMode(opt.key)}
+                                className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                  monthlyPriceChartMode === opt.key
+                                    ? 'bg-slate-800 text-white border-slate-800'
+                                    : 'bg-white border-gray-300 hover:bg-gray-100'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Chart 1: Price + 10M SMA (or, in drawdown mode, price + high water mark) */}
+                          <ResponsiveContainer width="100%" height={525}>
+                            <ComposedChart data={priceChartData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
                               <CartesianGrid strokeDasharray="3 3" />
                               <XAxis
                                 dataKey="date"
@@ -9101,11 +9185,32 @@ const PortfolioBacktester = () => {
                               <Tooltip
                                 formatter={(value: number, name: string) => {
                                   if (value == null) return ['-', name];
+                                  // The underwater band carries a [low, high] pair rather than a single
+                                  // number; show it as a range so it never renders as "[1,2]".
+                                  if (Array.isArray(value)) {
+                                    const [lo, hi] = value as unknown as number[];
+                                    return [`${formatPrice(lo)} – ${formatPrice(hi)}`, name];
+                                  }
                                   return [formatPrice(value), name];
                                 }}
                               />
                               <Legend />
                               <Customized component={MonthlyPriceBubbles} />
+                              {/* Pink shading between the price and its high water mark — the gap the
+                                  asset still has to climb back. Drawn first so the lines sit on top. */}
+                              {priceChartMode === 'drawdown' && (
+                                <Area
+                                  type="monotone"
+                                  dataKey="underwaterBand"
+                                  name="Below peak"
+                                  stroke="none"
+                                  fill={CHART_PALETTE.rose}
+                                  fillOpacity={0.28}
+                                  activeDot={false}
+                                  legendType="none"
+                                  isAnimationActive={false}
+                                />
+                              )}
                               {/* Black price line */}
                               <Line
                                 type="monotone"
@@ -9116,16 +9221,50 @@ const PortfolioBacktester = () => {
                                 dot={false}
                                 connectNulls
                               />
-                              {/* Red 10-month SMA line */}
-                              <Line
-                                type="monotone"
-                                dataKey="sma10"
-                                name="10M SMA"
-                                stroke="#ef4444"
-                                strokeWidth={1.5}
-                                dot={false}
-                                connectNulls
-                              />
+                              {/* Red 10-month SMA line — the default overlay */}
+                              {priceChartMode === 'sma' && (
+                                <Line
+                                  type="monotone"
+                                  dataKey="sma10"
+                                  name="10M SMA"
+                                  stroke="#ef4444"
+                                  strokeWidth={1.5}
+                                  dot={false}
+                                  connectNulls
+                                />
+                              )}
+                              {/* High water mark — the ratchet of previous peaks, flat until a new high */}
+                              {priceChartMode === 'drawdown' && (
+                                <Line
+                                  type="monotone"
+                                  dataKey="hwm"
+                                  name="High water mark"
+                                  stroke={CHART_PALETTE.rose}
+                                  strokeWidth={2}
+                                  dot={false}
+                                  connectNulls
+                                />
+                              )}
+                              {/* "3y 4m" over the middle of every underwater stretch that lasted a year
+                                  or more. The dot itself is invisible (r=0) — it exists only to anchor
+                                  the text at the peak level, just above the pink area. */}
+                              {labelledUnderwaterPeriods.map(p => (
+                                <ReferenceDot
+                                  key={`uw-${p.startDate}`}
+                                  x={p.midDate}
+                                  y={p.peak}
+                                  r={0}
+                                  fill="none"
+                                  stroke="none"
+                                  label={{
+                                    value: formatPeriod(p.months),
+                                    position: 'top',
+                                    fontSize: 11,
+                                    fill: CHART_PALETTE.wine,
+                                    fontWeight: 600,
+                                  }}
+                                />
+                              ))}
                               {/* Green dot at highest price in the visible period */}
                               {maxPricePoint && (
                                 <ReferenceDot
@@ -9162,7 +9301,7 @@ const PortfolioBacktester = () => {
                                   }}
                                 />
                               )}
-                            </LineChart>
+                            </ComposedChart>
                           </ResponsiveContainer>
 
                           {/* Chart 2: Drawdown from All-Time High */}
