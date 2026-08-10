@@ -9598,7 +9598,7 @@ const PortfolioBacktester = () => {
                               ...(monthlySelectedTicker !== STRESS_BENCHMARK
                                 ? [{ key: 'vsMarket', label: `vs ${STRESS_BENCHMARK}` }] as const
                                 : []),
-                              { key: 'inflation', label: 'Inflation adjusted' },
+                              { key: 'inflation', label: 'vs Inflation' },
                             ] as const).map(opt => (
                               <button
                                 key={opt.key}
@@ -9706,6 +9706,24 @@ const PortfolioBacktester = () => {
                                   fillOpacity={0.28}
                                   activeDot={false}
                                   legendType="none"
+                                  isAnimationActive={false}
+                                />
+                              )}
+                              {/* Light grey fill under the price, matching the drawdown chart below
+                                  (black at 10% opacity). Drawn before the lines so they sit on top.
+                                  It carries no extra information — it gives the price line a body so
+                                  the eye follows it, which matters more now the gridlines are gone. */}
+                              {priceChartMode === 'sma' && (
+                                <Area
+                                  type="monotone"
+                                  dataKey="price"
+                                  name={monthlySelectedTicker}
+                                  stroke="none"
+                                  fill="#000000"
+                                  fillOpacity={0.1}
+                                  activeDot={false}
+                                  legendType="none"
+                                  tooltipType="none"
                                   isAnimationActive={false}
                                 />
                               )}
