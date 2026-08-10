@@ -737,6 +737,15 @@ const MONTHLY_CHART_PERIODS: MonthlyChartPeriod[] =
 // looks the same everywhere on the page.
 const MARKET_LINE_COLOR = '#F5A623';
 
+// Which consumer-price index belongs to which currency. Only three of the five currencies the
+// app can display have a CPI series in the sheet; EUR and CHF simply have none, so anything
+// inflation-adjusted is shown as "n.a." rather than guessed at from a neighbouring country.
+const CURRENCY_CPI: Record<string, string> = {
+  PLN: 'CPIMPL',   // Polish CPI
+  USD: 'CPIMUS',   // US CPI
+  SGD: 'CPIMSG',   // Singapore CPI
+};
+
 /**
  * Picks a tight, tidy Y-axis scale for a chart.
  *
@@ -1257,7 +1266,7 @@ const PortfolioBacktester = () => {
   //  'sma'       = price + the 10-month moving average (the original, default view)
   //  'drawdown'  = price + the high water mark, with the underwater stretches shaded pink
   //  'vsMarket'  = this asset against world equities, both rebased to 100 at the window start
-  const [monthlyPriceChartMode, setMonthlyPriceChartMode] = useState<'sma' | 'drawdown' | 'vsMarket'>('sma');
+  const [monthlyPriceChartMode, setMonthlyPriceChartMode] = useState<'sma' | 'drawdown' | 'vsMarket' | 'inflation'>('sma');
   // Linear (default) or logarithmic Y axis on that same chart. Log is what makes the early
   // years of a big winner readable — see niceLogAxisScale for why.
   const [monthlyPriceChartLog, setMonthlyPriceChartLog] = useState(false);
@@ -8714,6 +8723,31 @@ const PortfolioBacktester = () => {
 
                       const { priceData, drawdownData, smaDistData, underwaterPeriods, maxPricePoint, minPricePoint, maxDrawdownPoint, maxSmaDistPoint, minSmaDistPoint, totalReturn, cagr } = chartResult;
 
+                      // --- Inflation, for the "Real" statistics column and the inflation chart view ---
+                      // The CPI that matters is the one for the currency being DISPLAYED, not the
+                      // asset's home country: if you are looking at an American fund priced in zloty,
+                      // what erodes your purchasing power is Polish inflation.
+                      //
+                      // cpiAt() takes the most recent reading on or before a date rather than an exact
+                      // match, because a CPI print lands a few weeks after the month it describes — an
+                      // exact-date lookup would blank out the newest month or two of every series.
+                      const monthlyCpiTicker = CURRENCY_CPI[monthlyDisplayCurrency] || '';
+                      const cpiSeries = monthlyCpiTicker && assetData
+                        ? assetData
+                            .filter(r => Number(r[monthlyCpiTicker]) > 0)
+                            .map(r => ({ date: r.date as string, cpi: Number(r[monthlyCpiTicker]) }))
+                        : [];
+                      const cpiAt = (date: string): number | null => {
+                        // Binary search for the last reading at or before `date` (assetData is chronological)
+                        let lo = 0, hi = cpiSeries.length - 1, found: number | null = null;
+                        while (lo <= hi) {
+                          const mid = (lo + hi) >> 1;
+                          if (cpiSeries[mid].date <= date) { found = cpiSeries[mid].cpi; lo = mid + 1; }
+                          else hi = mid - 1;
+                        }
+                        return found;
+                      };
+
                       // --- "vs IWDA" view: this asset against world equities ---
                       // Both series are rebased to 100 at the first month they SHARE, which is the
                       // only honest way to compare two lines: it answers "what would 100 have become
@@ -8747,6 +8781,36 @@ const PortfolioBacktester = () => {
                         ? 'sma'
                         : monthlyPriceChartMode;
 
+                      // --- "Inflation adjusted" view ---
+                      // Three lines from 100: what the asset did, what prices in general did, and
+                      // the asset with that inflation taken back out — i.e. the return in constant
+                      // purchasing power. The gap between the black and the green line IS the
+                      // inflation line: money that grew but bought no more than before.
+                      // With no CPI for the displayed currency (EUR, CHF) only the asset is drawn.
+                      const inflationData = (() => {
+                        if (priceChartMode !== 'inflation' || priceData.length < 2) return null;
+                        const basePrice = priceData[0].price;
+                        const baseCpi = cpiAt(priceData[0].date);
+                        if (!basePrice) return null;
+                        return priceData.map(d => {
+                          const nominal = (d.price / basePrice) * 100;
+                          const cpi = baseCpi ? cpiAt(d.date) : null;
+                          const inflationIdx = cpi && baseCpi ? (cpi / baseCpi) * 100 : null;
+                          return {
+                            date: d.date,
+                            nominalIdx: nominal,
+                            inflationIdx,
+                            // Deflating by the SAME ratio the inflation line plots keeps the three
+                            // lines arithmetically consistent: nominal / inflation = real.
+                            realIdx: inflationIdx ? (nominal / inflationIdx) * 100 : null,
+                          };
+                        });
+                      })();
+                      const hasInflation = inflationData !== null && inflationData.some(d => d.inflationIdx !== null);
+                      // The two "indexed to 100" views. Anything expressed in PRICES — the price
+                      // line itself, the peak and trough dots — has no meaning on their axis.
+                      const isIndexView = priceChartMode === 'vsMarket' || priceChartMode === 'inflation';
+
                       // --- Drawdown ("underwater") view of the price chart ---
                       // Recharts can shade the gap between two lines if the data point carries a
                       // [low, high] pair, so we hand it [price, high water mark]. When the price IS
@@ -8766,9 +8830,12 @@ const PortfolioBacktester = () => {
                       // mark never exceeds it), so the price line fills the chart instead of
                       // floating in empty space above. In the vs-IWDA view the axis is in index
                       // points rather than prices, so it is built from both indexed series.
-                      const priceAxisValues: (number | null)[] = priceChartMode === 'vsMarket' && vsMarketData
-                        ? vsMarketData.flatMap(d => [d.assetIdx, d.marketIdx])
-                        : priceData.map(d => d.price);
+                      const priceAxisValues: (number | null)[] =
+                        priceChartMode === 'vsMarket' && vsMarketData
+                          ? vsMarketData.flatMap(d => [d.assetIdx, d.marketIdx])
+                        : priceChartMode === 'inflation' && inflationData
+                          ? inflationData.flatMap(d => [d.nominalIdx, d.inflationIdx, d.realIdx])
+                          : priceData.map(d => d.price);
                       if (priceChartMode === 'sma') priceAxisValues.push(...priceData.map(d => d.sma10));
                       // Log needs its own gridlines, and it cannot plot a zero or negative value —
                       // if the helper can't build one, quietly stay linear rather than break.
@@ -8784,6 +8851,15 @@ const PortfolioBacktester = () => {
                         const lastVs = vsMarketData[vsMarketData.length - 1];
                         priceBubbleDefs.push({ value: lastVs.assetIdx, color: '#000000', label: lastVs.assetIdx.toFixed(1) });
                         priceBubbleDefs.push({ value: lastVs.marketIdx, color: MARKET_LINE_COLOR, label: lastVs.marketIdx.toFixed(1) });
+                      } else if (priceChartMode === 'inflation' && inflationData) {
+                        const lastInf = inflationData[inflationData.length - 1];
+                        priceBubbleDefs.push({ value: lastInf.nominalIdx, color: '#000000', label: lastInf.nominalIdx.toFixed(1) });
+                        if (lastInf.realIdx !== null) {
+                          priceBubbleDefs.push({ value: lastInf.realIdx, color: CHART_PALETTE.teal, label: lastInf.realIdx.toFixed(1) });
+                        }
+                        if (lastInf.inflationIdx !== null) {
+                          priceBubbleDefs.push({ value: lastInf.inflationIdx, color: CHART_PALETTE.terracotta, label: lastInf.inflationIdx.toFixed(1) });
+                        }
                       } else if (lastRow) {
                         priceBubbleDefs.push({ value: lastRow.price, color: '#000000', label: formatPrice(lastRow.price) });
                         // Second bubble follows whichever overlay is on screen: the SMA in the
@@ -8982,6 +9058,27 @@ const PortfolioBacktester = () => {
                               // Value of 100 invested at the start of the period
                               const valueOf100 = (100 * statPoints[statPoints.length - 1].value / statPoints[0].value).toFixed(0);
 
+                              // ---- Real (inflation-adjusted) CAGR ----
+                              // Growth in purchasing power rather than in money: strip the CPI's own
+                              // growth out of the asset's before annualising. Note this is NOT
+                              // "CAGR minus inflation" — returns compound, so the two must be divided,
+                              // which is why 12.8% nominal against 4% inflation gives 8.5% and not 8.8%.
+                              // Uses the same elapsed-years basis as calculateStatistics' CAGR so the
+                              // two columns are directly comparable.
+                              const realCagr = (() => {
+                                if (!monthlyCpiTicker) return null;  // EUR / CHF: no CPI series exists
+                                const startCpi = cpiAt(series[0].date);
+                                const endCpi = cpiAt(series[series.length - 1].date);
+                                if (!startCpi || !endCpi || startCpi <= 0) return null;
+                                const yrs = (new Date(series[series.length - 1].date).getTime()
+                                           - new Date(series[0].date).getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+                                if (yrs <= 0) return null;
+                                const realGrowth = (statPoints[statPoints.length - 1].value / statPoints[0].value)
+                                                 * (startCpi / endCpi);
+                                if (realGrowth <= 0) return null;
+                                return (Math.pow(realGrowth, 1 / yrs) - 1) * 100;
+                              })();
+
                               // ---- Best / Worst calendar year within the visible period ----
                               // Group series by year, compute return for each year using the
                               // previous year-end price (or first price in window for the first year).
@@ -9130,7 +9227,7 @@ const PortfolioBacktester = () => {
                               const iwdaCorr = calcCorr('IWDA');
                               const vdtaCorr = calcCorr('VDTA');
 
-                              return { label, hint, stats, periodMonths, valueOf100, bestWorstYear,
+                              return { label, hint, stats, periodMonths, valueOf100, realCagr, bestWorstYear,
                                        iwdaBeta, iwdaDownBeta, iwdaDownMonths, iwdaCorr, vdtaCorr };
                             };
                             // ---- end of the per-series row builder ----
@@ -9215,15 +9312,30 @@ const PortfolioBacktester = () => {
 
                             return (
                               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
-                                <h3 className="text-md font-semibold text-gray-700 mb-2">Statistics</h3>
+                                {/* The window used to be a column repeated on every row. It is the same
+                                    fact for the whole table, so it belongs in the heading — the key part
+                                    dark, the exact dates and the basis as quieter supporting detail. */}
+                                <h3 className="text-md font-semibold text-gray-900 mb-2">
+                                  Statistics for period of {formatPeriod(assetRow.periodMonths)}
+                                  <span className="font-normal text-gray-500">
+                                    {' '}({windowStart.slice(0, 7)} / {windowEnd.slice(0, 7)}) based on month end prices
+                                  </span>
+                                </h3>
                                 <table className="w-full text-xs">
                                   <thead>
                                     <tr className="border-b-2 border-gray-200">
                                       <th className="text-left py-2 px-2">&nbsp;</th>
-                                      <th className="text-right py-2 px-2">Period</th>
                                       <th className="text-right py-2 px-2">Total Return</th>
                                       <th className="text-right py-2 px-2">100 → ?</th>
                                       <th className="text-right py-2 px-2">CAGR</th>
+                                      <th className="text-right py-2 px-2"
+                                          title={'Real CAGR — the annual growth in PURCHASING POWER, after the inflation of the currency shown above.\n\n'
+                                            + 'Returns compound, so this is not simply CAGR minus inflation: the two are divided, not subtracted. 12.8% nominal against 4.0% inflation is 8.5% real, not 8.8%.\n\n'
+                                            + (monthlyCpiTicker
+                                                ? `Using ${monthlyCpiTicker} (${monthlyDisplayCurrency} consumer prices) over the same months as the CAGR beside it.`
+                                                : `Shown as n.a. because there is no CPI series for ${monthlyDisplayCurrency} — only PLN, USD and SGD have one. Switch the currency above to see a real return.`)}>
+                                        Real
+                                      </th>
                                       <th className="text-right py-2 px-2">Vol</th>
                                       <th className="text-right py-2 px-2">Sharpe</th>
                                       <th className="text-right py-2 px-2">Max DD</th>
@@ -9265,18 +9377,26 @@ const PortfolioBacktester = () => {
                                       const isAsset = rowIdx === 0;
                                       return (
                                       <tr key={row.label} className={`border-b border-gray-100 ${isAsset ? '' : 'bg-gray-50/60'}`}>
+                                        {/* Each row's own span moves into the hover text. The heading
+                                            gives the asset's window, but a reference row can cover
+                                            fewer months if the benchmark lacks data, and that is
+                                            worth being able to check. */}
                                         <td className={`text-left py-2 px-2 whitespace-nowrap ${isAsset ? 'font-medium text-gray-800' : 'text-gray-500'}`}
-                                            title={row.hint}>
+                                            title={`${row.hint}\n\nMeasured over ${formatPeriod(row.periodMonths)}.`}>
                                           {!isAsset && (
                                             <span className="inline-block w-2 h-2 rounded-sm mr-1.5"
                                                   style={{ backgroundColor: rowIdx === 1 ? '#F5A623' : '#9ca3af' }} />
                                           )}
                                           {row.label}
                                         </td>
-                                        <td className="text-right py-2 px-2">{formatPeriod(row.periodMonths)}</td>
-                                      <td className="text-right py-2 px-2">{stats.totalReturn}%</td>
+                                        <td className="text-right py-2 px-2">{stats.totalReturn}%</td>
                                       <td className="text-right py-2 px-2 font-semibold">{row.valueOf100}</td>
                                       <td className="text-right py-2 px-2">{stats.cagr}%</td>
+                                      {/* Real CAGR. Grey "n.a." rather than a dash, so a missing CPI
+                                          reads as "not available here" and not as "zero". */}
+                                      <td className={`text-right py-2 px-2 ${row.realCagr === null ? 'text-gray-400' : ''}`}>
+                                        {row.realCagr !== null ? `${row.realCagr.toFixed(2)}%` : 'n.a.'}
+                                      </td>
                                       <td className="text-right py-2 px-2">{stats.volatility}%</td>
                                       <td className="text-right py-2 px-2">{stats.sharpeRatio}</td>
                                       <td className="text-right py-2 px-2 text-red-600">{stats.maxDrawdown}%</td>
@@ -9348,6 +9468,7 @@ const PortfolioBacktester = () => {
                               ...(monthlySelectedTicker !== STRESS_BENCHMARK
                                 ? [{ key: 'vsMarket', label: `vs ${STRESS_BENCHMARK}` }] as const
                                 : []),
+                              { key: 'inflation', label: 'Inflation adjusted' },
                             ] as const).map(opt => (
                               <button
                                 key={opt.key}
@@ -9395,7 +9516,11 @@ const PortfolioBacktester = () => {
                                 highest point can land exactly ON the top gridline, and the price label
                                 above it needs ~23px of room or it gets cut off by the canvas edge. */}
                             <ComposedChart
-                              data={priceChartMode === 'vsMarket' && vsMarketData ? vsMarketData : priceChartData}
+                              data={
+                                priceChartMode === 'vsMarket' && vsMarketData ? vsMarketData
+                                : priceChartMode === 'inflation' && inflationData ? inflationData
+                                : priceChartData
+                              }
                               margin={{ top: 28, right: 70, left: -5, bottom: 15 }}
                             >
                               <CartesianGrid strokeDasharray="3 3" />
@@ -9420,8 +9545,10 @@ const PortfolioBacktester = () => {
                                     const [lo, hi] = value as unknown as number[];
                                     return [`${formatPrice(lo)} – ${formatPrice(hi)}`, name];
                                   }
-                                  // vs-IWDA view is in index points (both lines start at 100), not money.
-                                  if (priceChartMode === 'vsMarket') return [value.toFixed(1), name];
+                                  // These views are in index points (every line starts at 100), not money.
+                                  if (priceChartMode === 'vsMarket' || priceChartMode === 'inflation') {
+                                    return [value.toFixed(1), name];
+                                  }
                                   // On the asset's own price line, add how far below its running peak
                                   // that month closed — the same figure the drawdown chart below plots.
                                   const peak = item?.payload?.hwm;
@@ -9457,7 +9584,7 @@ const PortfolioBacktester = () => {
                                   point at once. Morphing through that looks like the chart lurching,
                                   and leaves the line briefly drawn against the wrong scale. Redrawing
                                   straight away is both calmer and always self-consistent. */}
-                              {priceChartMode !== 'vsMarket' && (
+                              {!isIndexView && (
                                 <Line
                                   type="monotone"
                                   dataKey="price"
@@ -9490,6 +9617,47 @@ const PortfolioBacktester = () => {
                                 <Line
                                   type="monotone"
                                   dataKey="assetIdx"
+                                  name={monthlySelectedTicker}
+                                  stroke="#000000"
+                                  strokeWidth={2}
+                                  dot={false}
+                                  connectNulls
+                                  isAnimationActive={false}
+                                />
+                              )}
+                              {/* Inflation adjusted: the asset, general prices, and the asset with
+                                  that inflation taken back out — all from 100 at the window start. */}
+                              {priceChartMode === 'inflation' && inflationData && (
+                                <ReferenceLine y={100} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                              )}
+                              {priceChartMode === 'inflation' && inflationData && hasInflation && (
+                                <Line
+                                  type="monotone"
+                                  dataKey="inflationIdx"
+                                  name={`${monthlyDisplayCurrency} inflation (CPI)`}
+                                  stroke={CHART_PALETTE.terracotta}
+                                  strokeWidth={1.5}
+                                  dot={false}
+                                  connectNulls
+                                  isAnimationActive={false}
+                                />
+                              )}
+                              {priceChartMode === 'inflation' && inflationData && hasInflation && (
+                                <Line
+                                  type="monotone"
+                                  dataKey="realIdx"
+                                  name={`${monthlySelectedTicker} after inflation`}
+                                  stroke={CHART_PALETTE.teal}
+                                  strokeWidth={2}
+                                  dot={false}
+                                  connectNulls
+                                  isAnimationActive={false}
+                                />
+                              )}
+                              {priceChartMode === 'inflation' && inflationData && (
+                                <Line
+                                  type="monotone"
+                                  dataKey="nominalIdx"
                                   name={monthlySelectedTicker}
                                   stroke="#000000"
                                   strokeWidth={2}
@@ -9545,9 +9713,9 @@ const PortfolioBacktester = () => {
                                 />
                               ))}
                               {/* Green dot at highest price in the visible period. Hidden in the
-                                  vs-IWDA view: those are PRICES, and that chart's axis is in index
-                                  points, so they would land at meaningless heights. */}
-                              {priceChartMode !== 'vsMarket' && maxPricePoint && (
+                                  indexed views: those are PRICES, and those charts' axes are in
+                                  index points, so they would land at meaningless heights. */}
+                              {!isIndexView && maxPricePoint && (
                                 <ReferenceDot
                                   x={maxPricePoint.date}
                                   y={maxPricePoint.price}
@@ -9565,7 +9733,7 @@ const PortfolioBacktester = () => {
                                 />
                               )}
                               {/* Red dot at lowest price in the visible period */}
-                              {priceChartMode !== 'vsMarket' && minPricePoint && (
+                              {!isIndexView && minPricePoint && (
                                 <ReferenceDot
                                   x={minPricePoint.date}
                                   y={minPricePoint.price}
