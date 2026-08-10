@@ -726,21 +726,6 @@ const findFxDataIssues = (rows: AssetRow[] | null): FxDataIssue[] => {
   return issues;
 };
 
-// ---------------------------------------------------------------------------
-// CHART PALETTE (Positions tab)
-// ---------------------------------------------------------------------------
-// One muted, "heritage" palette shared by every Positions chart, so the graphs
-// feel like part of the same app as the slate-grey buttons instead of a set of
-// bright default web colors. Think of it as choosing a wardrobe: all the pieces
-// come from the same drawer, so anything you pull out matches.
-//
-// The eight hues were checked with a color-blindness / contrast validator: as a
-// running sequence every neighbouring pair is clearly distinguishable, and the
-// five asset-class colors are distinguishable from EVERY other one in that set
-// (which matters for a pie chart, where all slices are on screen at once).
-// The six currency colors can't fully clear that bar — no six-color set can —
-// so that chart keeps its text labels on each bar and % labels in each slice,
-// which is what carries the meaning if two colors ever look similar.
 /**
  * Picks a tight, tidy Y-axis scale for a chart.
  *
@@ -799,6 +784,21 @@ function niceAxisScale(
   return { domain: [lo, hi], ticks: [] };
 }
 
+// ---------------------------------------------------------------------------
+// CHART PALETTE (Positions tab)
+// ---------------------------------------------------------------------------
+// One muted, "heritage" palette shared by every Positions chart, so the graphs
+// feel like part of the same app as the slate-grey buttons instead of a set of
+// bright default web colors. Think of it as choosing a wardrobe: all the pieces
+// come from the same drawer, so anything you pull out matches.
+//
+// The eight hues were checked with a color-blindness / contrast validator: as a
+// running sequence every neighbouring pair is clearly distinguishable, and the
+// five asset-class colors are distinguishable from EVERY other one in that set
+// (which matters for a pie chart, where all slices are on screen at once).
+// The six currency colors can't fully clear that bar — no six-color set can —
+// so that chart keeps its text labels on each bar and % labels in each slice,
+// which is what carries the meaning if two colors ever look similar.
 const CHART_PALETTE = {
   blue:      '#2f6fa8', // steel blue
   terracotta:'#c25a2c', // burnt orange
@@ -9240,7 +9240,10 @@ const PortfolioBacktester = () => {
 
                           {/* Chart 1: Price + 10M SMA (or, in drawdown mode, price + high water mark) */}
                           <ResponsiveContainer width="100%" height={525}>
-                            <ComposedChart data={priceChartData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
+                            {/* top margin 28, not the usual 20: now that the Y axis hugs the data, the
+                                highest point can land exactly ON the top gridline, and the price label
+                                above it needs ~23px of room or it gets cut off by the canvas edge. */}
+                            <ComposedChart data={priceChartData} margin={{ top: 28, right: 70, left: -5, bottom: 15 }}>
                               <CartesianGrid strokeDasharray="3 3" />
                               <XAxis
                                 dataKey="date"
