@@ -741,6 +741,64 @@ const findFxDataIssues = (rows: AssetRow[] | null): FxDataIssue[] => {
 // The six currency colors can't fully clear that bar — no six-color set can —
 // so that chart keeps its text labels on each bar and % labels in each slice,
 // which is what carries the meaning if two colors ever look similar.
+/**
+ * Picks a tight, tidy Y-axis scale for a chart.
+ *
+ * Recharts' default `domain={['auto','auto']}` is generous to a fault: a series topping out
+ * at 11.16 gets an axis running all the way to 15, so a third of the chart is empty sky.
+ * This does the job by hand, the way a draughtsman would:
+ *   1. take the actual highest and lowest values on screen,
+ *   2. try candidate gridline steps from fine to coarse — 1, 2, 2.5 or 5 times a power of ten,
+ *   3. for each, round the low DOWN and the high UP to the nearest multiple of that step,
+ *   4. keep the FIRST (finest) one that still fits inside maxTicks gridlines.
+ *
+ * Finest-that-fits is what makes it tight: the axis never overshoots the data by more than
+ * one gridline at either end. Snapping to a multiple of the step is what makes it readable —
+ * 20, 30, 40 … rather than 21.4, 30.6, 39.8 — and guarantees every tick is the same distance
+ * from the last. Returns the domain plus the exact tick list for
+ * <YAxis domain={...} ticks={...} />.
+ */
+function niceAxisScale(
+  values: (number | null | undefined)[],
+  opts?: { maxTicks?: number }
+): { domain: [number, number]; ticks: number[] } | null {
+  const clean = values.filter((v): v is number => typeof v === 'number' && isFinite(v));
+  if (clean.length === 0) return null;
+
+  let lo = Math.min(...clean);
+  let hi = Math.max(...clean);
+  let span = hi - lo;
+  // A dead-flat series has no span at all; invent one so the line lands mid-chart
+  // instead of collapsing onto a single gridline.
+  if (span <= 0) {
+    span = Math.abs(hi) * 0.1 || 1;
+    lo = hi - span / 2;
+    hi = lo + span;
+  }
+
+  const maxTicks = opts?.maxTicks ?? 10;
+  // Start two orders of magnitude below the span — far finer than could ever fit — and walk
+  // upwards. The first step that fits is therefore the tightest possible nice axis.
+  const startExp = Math.floor(Math.log10(span)) - 2;
+  for (let exp = startExp; exp <= startExp + 6; exp++) {
+    for (const mantissa of [1, 2, 2.5, 5]) {
+      const step = mantissa * Math.pow(10, exp);
+      const axisLo = Math.floor(lo / step) * step;
+      const axisHi = Math.ceil(hi / step) * step;
+      const count = Math.round((axisHi - axisLo) / step) + 1;
+      if (count < 3 || count > maxTicks) continue;
+      // Floating-point arithmetic leaves crumbs like 6.000000000000001 — round them off
+      // to one decimal beyond the step's own precision.
+      const decimals = Math.max(0, -Math.floor(Math.log10(step)) + 1);
+      const ticks: number[] = [];
+      for (let i = 0; i < count; i++) ticks.push(parseFloat((axisLo + i * step).toFixed(decimals)));
+      return { domain: [ticks[0], ticks[ticks.length - 1]], ticks };
+    }
+  }
+  // Nothing nice fitted (very unusual) — fall back to the plain data range, no fixed ticks.
+  return { domain: [lo, hi], ticks: [] };
+}
+
 const CHART_PALETTE = {
   blue:      '#2f6fa8', // steel blue
   terracotta:'#c25a2c', // burnt orange
@@ -8596,6 +8654,14 @@ const PortfolioBacktester = () => {
                         ? underwaterPeriods.filter(p => p.months >= 12)
                         : [];
 
+                      // Y-axis scale for the price chart. Built from whichever lines are actually
+                      // on screen (the SMA can dip below the visible price range; the high water
+                      // mark never exceeds it), so the price line fills the chart instead of
+                      // floating in empty space above.
+                      const priceAxisValues: (number | null)[] = priceData.map(d => d.price);
+                      if (priceChartMode === 'sma') priceAxisValues.push(...priceData.map(d => d.sma10));
+                      const priceAxis = niceAxisScale(priceAxisValues);
+
                       // --- Right-edge bubbles for the price chart ---
                       const lastRow = priceData[priceData.length - 1];
                       const priceBubbleDefs: BubbleDef[] = [];
@@ -9181,7 +9247,12 @@ const PortfolioBacktester = () => {
                                 tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />}
                                 height={35}
                               />
-                              <YAxis tick={{ fontSize: 9 }} width={40} domain={['auto', 'auto']} />
+                              <YAxis
+                                tick={{ fontSize: 9 }}
+                                width={40}
+                                domain={priceAxis ? priceAxis.domain : ['auto', 'auto']}
+                                ticks={priceAxis && priceAxis.ticks.length > 0 ? priceAxis.ticks : undefined}
+                              />
                               <Tooltip
                                 formatter={(value: number, name: string) => {
                                   if (value == null) return ['-', name];
