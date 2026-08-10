@@ -726,6 +726,17 @@ const findFxDataIssues = (rows: AssetRow[] | null): FxDataIssue[] => {
   return issues;
 };
 
+// How much history the Monthly tab's charts show. Named once, so the button row, the
+// state and getMonthlyChartData's lookup table can never drift apart.
+type MonthlyChartPeriod = '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | 'max';
+const MONTHLY_CHART_PERIODS: MonthlyChartPeriod[] =
+  ['1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'max'];
+
+// The colour world equities are drawn in wherever they appear as a reference. It matches the
+// amber dot already used for the market row in the Monthly statistics table, so "the market"
+// looks the same everywhere on the page.
+const MARKET_LINE_COLOR = '#F5A623';
+
 /**
  * Picks a tight, tidy Y-axis scale for a chart.
  *
@@ -1182,11 +1193,12 @@ const PortfolioBacktester = () => {
   // Which asset's row is currently selected for chart display (empty = no chart)
   const [monthlySelectedTicker, setMonthlySelectedTicker] = useState<string>('');
   // How many years of data to show in the monthly charts (default: show everything)
-  const [monthlyChartPeriod, setMonthlyChartPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max'>('max');
-  // What the main price chart overlays on top of the price line:
-  //  'sma'      = the 10-month moving average (the original, default view)
-  //  'drawdown' = the high water mark, with the underwater stretches shaded pink
-  const [monthlyPriceChartMode, setMonthlyPriceChartMode] = useState<'sma' | 'drawdown'>('sma');
+  const [monthlyChartPeriod, setMonthlyChartPeriod] = useState<MonthlyChartPeriod>('max');
+  // What the main price chart shows:
+  //  'sma'       = price + the 10-month moving average (the original, default view)
+  //  'drawdown'  = price + the high water mark, with the underwater stretches shaded pink
+  //  'vsMarket'  = this asset against world equities, both rebased to 100 at the window start
+  const [monthlyPriceChartMode, setMonthlyPriceChartMode] = useState<'sma' | 'drawdown' | 'vsMarket'>('sma');
   // Which currency the selected asset's detail subsection is displayed in.
   // Defaults to the asset's own native currency (set when an asset is clicked),
   // so by default everything shows in the asset's original currency (no conversion).
@@ -4448,7 +4460,7 @@ const PortfolioBacktester = () => {
    */
   const getMonthlyChartData = (
     ticker: string,
-    period: '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | 'max',
+    period: MonthlyChartPeriod,
     cutoffDate?: string,  // Optional: if provided, treat this as the last month (for Graphs tab "End Date" filter)
     targetCurrency?: string  // Optional: convert every price into this currency (''/native = no conversion)
   ) => {
@@ -4503,7 +4515,8 @@ const PortfolioBacktester = () => {
     // 3. Apply period filter — slice the last N months for the visible window
     //    If endDate is provided, first truncate to end at that date, then take last N months
     const periodMonths: Record<string, number> = {
-      '1Y': 12, '2Y': 24, '3Y': 36, '4Y': 48, '5Y': 60, '6Y': 72
+      '1Y': 12, '2Y': 24, '3Y': 36, '4Y': 48, '5Y': 60, '6Y': 72,
+      '7Y': 84, '8Y': 96, '9Y': 108, '10Y': 120
     };
     // When cutoffDate is set, find the last entry on or before that date
     let effectiveData = fullData;
@@ -8639,12 +8652,44 @@ const PortfolioBacktester = () => {
 
                       const { priceData, drawdownData, smaDistData, underwaterPeriods, maxPricePoint, minPricePoint, maxDrawdownPoint, maxSmaDistPoint, minSmaDistPoint, totalReturn, cagr } = chartResult;
 
+                      // --- "vs IWDA" view: this asset against world equities ---
+                      // Both series are rebased to 100 at the first month they SHARE, which is the
+                      // only honest way to compare two lines: it answers "what would 100 have become
+                      // in each", so the gap between the lines is the relative performance and
+                      // nothing else. Prices are already in the selected display currency, and the
+                      // benchmark is fetched through the same helper with the same period and
+                      // currency — the identical pattern the statistics table above uses.
+                      const marketChart = monthlyPriceChartMode === 'vsMarket' && monthlySelectedTicker !== STRESS_BENCHMARK
+                        ? getMonthlyChartData(STRESS_BENCHMARK, monthlyChartPeriod, monthlyEndDate || undefined, monthlyDisplayCurrency)
+                        : null;
+                      const vsMarketData = (() => {
+                        if (!marketChart) return null;
+                        const marketByDate = new Map(marketChart.priceData.map(p => [p.date, p.price]));
+                        // Keep only the months BOTH have — an asset younger than the benchmark
+                        // would otherwise appear to start from nowhere.
+                        const shared = priceData.filter(p => marketByDate.has(p.date));
+                        if (shared.length < 2) return null;
+                        const assetBase = shared[0].price;
+                        const marketBase = marketByDate.get(shared[0].date)!;
+                        if (!assetBase || !marketBase) return null;
+                        return shared.map(p => ({
+                          date: p.date,
+                          assetIdx: (p.price / assetBase) * 100,
+                          marketIdx: (marketByDate.get(p.date)! / marketBase) * 100,
+                        }));
+                      })();
+                      // If the comparison can't be built (the asset IS the benchmark, or the two
+                      // never overlap), quietly fall back to the default view rather than blanking
+                      // the chart. Every branch below keys off this EFFECTIVE mode, not the raw state.
+                      const priceChartMode = monthlyPriceChartMode === 'vsMarket' && !vsMarketData
+                        ? 'sma'
+                        : monthlyPriceChartMode;
+
                       // --- Drawdown ("underwater") view of the price chart ---
                       // Recharts can shade the gap between two lines if the data point carries a
                       // [low, high] pair, so we hand it [price, high water mark]. When the price IS
                       // the high water mark the pair collapses to a zero-height band and nothing shows —
                       // which is exactly right: at a new all-time high there is no drawdown to shade.
-                      const priceChartMode = monthlyPriceChartMode;
                       const priceChartData = priceChartMode === 'drawdown'
                         ? priceData.map(d => ({ ...d, underwaterBand: [d.price, d.hwm] as [number, number] }))
                         : priceData;
@@ -8657,15 +8702,23 @@ const PortfolioBacktester = () => {
                       // Y-axis scale for the price chart. Built from whichever lines are actually
                       // on screen (the SMA can dip below the visible price range; the high water
                       // mark never exceeds it), so the price line fills the chart instead of
-                      // floating in empty space above.
-                      const priceAxisValues: (number | null)[] = priceData.map(d => d.price);
+                      // floating in empty space above. In the vs-IWDA view the axis is in index
+                      // points rather than prices, so it is built from both indexed series.
+                      const priceAxisValues: (number | null)[] = priceChartMode === 'vsMarket' && vsMarketData
+                        ? vsMarketData.flatMap(d => [d.assetIdx, d.marketIdx])
+                        : priceData.map(d => d.price);
                       if (priceChartMode === 'sma') priceAxisValues.push(...priceData.map(d => d.sma10));
                       const priceAxis = niceAxisScale(priceAxisValues);
 
                       // --- Right-edge bubbles for the price chart ---
                       const lastRow = priceData[priceData.length - 1];
                       const priceBubbleDefs: BubbleDef[] = [];
-                      if (lastRow) {
+                      if (priceChartMode === 'vsMarket' && vsMarketData) {
+                        // Two bubbles: where 100 ended up for each line.
+                        const lastVs = vsMarketData[vsMarketData.length - 1];
+                        priceBubbleDefs.push({ value: lastVs.assetIdx, color: '#000000', label: lastVs.assetIdx.toFixed(1) });
+                        priceBubbleDefs.push({ value: lastVs.marketIdx, color: MARKET_LINE_COLOR, label: lastVs.marketIdx.toFixed(1) });
+                      } else if (lastRow) {
                         priceBubbleDefs.push({ value: lastRow.price, color: '#000000', label: formatPrice(lastRow.price) });
                         // Second bubble follows whichever overlay is on screen: the SMA in the
                         // default view, the high water mark in the drawdown view.
@@ -8816,7 +8869,7 @@ const PortfolioBacktester = () => {
                               </div>
                               {/* Period buttons — how many years of history to show */}
                               <div className="flex gap-1">
-                                {(['1Y', '2Y', '3Y', '4Y', '5Y', '6Y', 'max'] as const).map(p => (
+                                {MONTHLY_CHART_PERIODS.map(p => (
                                   <button
                                     key={p}
                                     onClick={() => setMonthlyChartPeriod(p)}
@@ -9218,17 +9271,26 @@ const PortfolioBacktester = () => {
                             );
                           })()}
 
-                          {/* Overlay switch for the price chart: moving average, or underwater periods */}
+                          {/* View switch for the price chart: moving average, underwater periods,
+                              or the asset against world equities. The third is hidden when the
+                              selected asset IS the benchmark — comparing IWDA with itself would
+                              just draw one line on top of another. */}
                           <div className="flex justify-end gap-1 mb-1 px-2">
                             {([
                               { key: 'sma', label: 'Price & 10m SMA' },
                               { key: 'drawdown', label: 'Price & drawdowns' },
+                              ...(monthlySelectedTicker !== STRESS_BENCHMARK
+                                ? [{ key: 'vsMarket', label: `vs ${STRESS_BENCHMARK}` }] as const
+                                : []),
                             ] as const).map(opt => (
                               <button
                                 key={opt.key}
                                 onClick={() => setMonthlyPriceChartMode(opt.key)}
+                                // Highlights the EFFECTIVE mode, so that when a vs-IWDA view falls
+                                // back (e.g. you then select IWDA itself) the highlighted button
+                                // still matches the chart on screen instead of nothing being lit.
                                 className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                  monthlyPriceChartMode === opt.key
+                                  priceChartMode === opt.key
                                     ? 'bg-slate-800 text-white border-slate-800'
                                     : 'bg-white border-gray-300 hover:bg-gray-100'
                                 }`}
@@ -9243,7 +9305,10 @@ const PortfolioBacktester = () => {
                             {/* top margin 28, not the usual 20: now that the Y axis hugs the data, the
                                 highest point can land exactly ON the top gridline, and the price label
                                 above it needs ~23px of room or it gets cut off by the canvas edge. */}
-                            <ComposedChart data={priceChartData} margin={{ top: 28, right: 70, left: -5, bottom: 15 }}>
+                            <ComposedChart
+                              data={priceChartMode === 'vsMarket' && vsMarketData ? vsMarketData : priceChartData}
+                              margin={{ top: 28, right: 70, left: -5, bottom: 15 }}
+                            >
                               <CartesianGrid strokeDasharray="3 3" />
                               <XAxis
                                 dataKey="date"
@@ -9257,13 +9322,23 @@ const PortfolioBacktester = () => {
                                 ticks={priceAxis && priceAxis.ticks.length > 0 ? priceAxis.ticks : undefined}
                               />
                               <Tooltip
-                                formatter={(value: number, name: string) => {
+                                formatter={(value: number, name: string, item: { payload?: { hwm?: number } }) => {
                                   if (value == null) return ['-', name];
                                   // The underwater band carries a [low, high] pair rather than a single
                                   // number; show it as a range so it never renders as "[1,2]".
                                   if (Array.isArray(value)) {
                                     const [lo, hi] = value as unknown as number[];
                                     return [`${formatPrice(lo)} – ${formatPrice(hi)}`, name];
+                                  }
+                                  // vs-IWDA view is in index points (both lines start at 100), not money.
+                                  if (priceChartMode === 'vsMarket') return [value.toFixed(1), name];
+                                  // On the asset's own price line, add how far below its running peak
+                                  // that month closed — the same figure the drawdown chart below plots.
+                                  const peak = item?.payload?.hwm;
+                                  if (name === monthlySelectedTicker && typeof peak === 'number' && peak > 0) {
+                                    const dd = ((value - peak) / peak) * 100;
+                                    const ddText = dd < -0.05 ? `${dd.toFixed(1)}% below peak` : 'at peak';
+                                    return [`${formatPrice(value)}  (${ddText})`, name];
                                   }
                                   return [formatPrice(value), name];
                                 }}
@@ -9286,15 +9361,44 @@ const PortfolioBacktester = () => {
                                 />
                               )}
                               {/* Black price line */}
-                              <Line
-                                type="monotone"
-                                dataKey="price"
-                                name={monthlySelectedTicker}
-                                stroke="#000000"
-                                strokeWidth={2}
-                                dot={false}
-                                connectNulls
-                              />
+                              {priceChartMode !== 'vsMarket' && (
+                                <Line
+                                  type="monotone"
+                                  dataKey="price"
+                                  name={monthlySelectedTicker}
+                                  stroke="#000000"
+                                  strokeWidth={2}
+                                  dot={false}
+                                  connectNulls
+                                />
+                              )}
+                              {/* vs IWDA: both series rebased to 100, plus a dashed line at the
+                                  starting level so "ahead or behind where we began" reads instantly. */}
+                              {priceChartMode === 'vsMarket' && vsMarketData && (
+                                <ReferenceLine y={100} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                              )}
+                              {priceChartMode === 'vsMarket' && vsMarketData && (
+                                <Line
+                                  type="monotone"
+                                  dataKey="marketIdx"
+                                  name={`${STRESS_BENCHMARK} (world equities)`}
+                                  stroke={MARKET_LINE_COLOR}
+                                  strokeWidth={2}
+                                  dot={false}
+                                  connectNulls
+                                />
+                              )}
+                              {priceChartMode === 'vsMarket' && vsMarketData && (
+                                <Line
+                                  type="monotone"
+                                  dataKey="assetIdx"
+                                  name={monthlySelectedTicker}
+                                  stroke="#000000"
+                                  strokeWidth={2}
+                                  dot={false}
+                                  connectNulls
+                                />
+                              )}
                               {/* Red 10-month SMA line — the default overlay */}
                               {priceChartMode === 'sma' && (
                                 <Line
@@ -9339,8 +9443,10 @@ const PortfolioBacktester = () => {
                                   }}
                                 />
                               ))}
-                              {/* Green dot at highest price in the visible period */}
-                              {maxPricePoint && (
+                              {/* Green dot at highest price in the visible period. Hidden in the
+                                  vs-IWDA view: those are PRICES, and that chart's axis is in index
+                                  points, so they would land at meaningless heights. */}
+                              {priceChartMode !== 'vsMarket' && maxPricePoint && (
                                 <ReferenceDot
                                   x={maxPricePoint.date}
                                   y={maxPricePoint.price}
@@ -9358,7 +9464,7 @@ const PortfolioBacktester = () => {
                                 />
                               )}
                               {/* Red dot at lowest price in the visible period */}
-                              {minPricePoint && (
+                              {priceChartMode !== 'vsMarket' && minPricePoint && (
                                 <ReferenceDot
                                   x={minPricePoint.date}
                                   y={minPricePoint.price}
