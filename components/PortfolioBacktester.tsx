@@ -795,6 +795,65 @@ function niceAxisScale(
   return { domain: [lo, hi], ticks: [] };
 }
 
+/**
+ * The same job as niceAxisScale, but for a LOGARITHMIC axis.
+ *
+ * On a log axis equal DISTANCES mean equal PERCENTAGE moves, so a doubling looks the same
+ * whether it happened at 5 or at 500. That is what rescues an asset that has grown tenfold:
+ * on a normal axis the early years are squashed into a flat line at the bottom, because a
+ * move from 4 to 5 is 1 unit while a recent move is 50.
+ *
+ * Two things differ from the linear version:
+ *  - padding is MULTIPLICATIVE (divide/multiply by 2%), because on a log axis that is what
+ *    "a little breathing room" means;
+ *  - the gridlines are round numbers of the 1-2-5 family (…10, 20, 50, 100…) rather than a
+ *    constant step, since a constant step is not what looks even on this scale. How dense
+ *    that family needs to be depends on how many powers of ten the data covers.
+ *
+ * For a range narrow enough that log and linear are visually the same (say 2.95 to 4.62),
+ * the 1-2-5 family yields almost no gridlines, so we borrow the linear ones instead. They
+ * are still POSITIONED by the log scale — only the choice of label values comes from there.
+ */
+function niceLogAxisScale(
+  values: (number | null | undefined)[],
+  opts?: { maxTicks?: number }
+): { domain: [number, number]; ticks: number[] } | null {
+  // A log scale has no way to draw zero or a negative number — drop them, and give up
+  // entirely if nothing is left, so the caller can fall back to a linear axis.
+  const clean = values.filter((v): v is number => typeof v === 'number' && isFinite(v) && v > 0);
+  if (clean.length === 0) return null;
+
+  const maxTicks = opts?.maxTicks ?? 10;
+  const pad = 1.02;
+  const domLo = Math.min(...clean) / pad;
+  const domHi = Math.max(...clean) * pad;
+
+  const decades = Math.log10(domHi / domLo);
+  const mantissas =
+    decades >= 2 ? [1, 2, 5] :                          // wide range: decade markers only
+    decades >= 1 ? [1, 1.5, 2, 3, 5, 7] :               // about one decade
+                   [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8]; // less than a decade: finer
+  let ticks: number[] = [];
+  for (let exp = Math.floor(Math.log10(domLo)); exp <= Math.ceil(Math.log10(domHi)); exp++) {
+    for (const m of mantissas) {
+      // toPrecision(12) clears binary-floating-point crumbs such as 0.30000000000000004
+      const t = parseFloat((m * Math.pow(10, exp)).toPrecision(12));
+      if (t >= domLo && t <= domHi) ticks.push(t);
+    }
+  }
+  ticks.sort((a, b) => a - b);
+  while (ticks.length > maxTicks) ticks = ticks.filter((_, i) => i % 2 === 0);  // thin out
+
+  // Too sparse to read (a narrow range) — use the linear axis's round numbers instead.
+  if (ticks.length < 4) {
+    const linear = niceAxisScale(clean, { maxTicks });
+    const borrowed = linear ? linear.ticks.filter(t => t >= domLo && t <= domHi) : [];
+    if (borrowed.length > ticks.length) ticks = borrowed;
+  }
+
+  return { domain: [domLo, domHi], ticks };
+}
+
 // ---------------------------------------------------------------------------
 // CHART PALETTE (Positions tab)
 // ---------------------------------------------------------------------------
@@ -1199,6 +1258,9 @@ const PortfolioBacktester = () => {
   //  'drawdown'  = price + the high water mark, with the underwater stretches shaded pink
   //  'vsMarket'  = this asset against world equities, both rebased to 100 at the window start
   const [monthlyPriceChartMode, setMonthlyPriceChartMode] = useState<'sma' | 'drawdown' | 'vsMarket'>('sma');
+  // Linear (default) or logarithmic Y axis on that same chart. Log is what makes the early
+  // years of a big winner readable — see niceLogAxisScale for why.
+  const [monthlyPriceChartLog, setMonthlyPriceChartLog] = useState(false);
   // Which currency the selected asset's detail subsection is displayed in.
   // Defaults to the asset's own native currency (set when an asset is clicked),
   // so by default everything shows in the asset's original currency (no conversion).
@@ -8708,7 +8770,11 @@ const PortfolioBacktester = () => {
                         ? vsMarketData.flatMap(d => [d.assetIdx, d.marketIdx])
                         : priceData.map(d => d.price);
                       if (priceChartMode === 'sma') priceAxisValues.push(...priceData.map(d => d.sma10));
-                      const priceAxis = niceAxisScale(priceAxisValues);
+                      // Log needs its own gridlines, and it cannot plot a zero or negative value —
+                      // if the helper can't build one, quietly stay linear rather than break.
+                      const logAxis = monthlyPriceChartLog ? niceLogAxisScale(priceAxisValues) : null;
+                      const priceAxisIsLog = logAxis !== null;
+                      const priceAxis = logAxis ?? niceAxisScale(priceAxisValues);
 
                       // --- Right-edge bubbles for the price chart ---
                       const lastRow = priceData[priceData.length - 1];
@@ -9298,6 +9364,29 @@ const PortfolioBacktester = () => {
                                 {opt.label}
                               </button>
                             ))}
+                            {/* Axis scale, kept slightly apart because it applies to all three
+                                views above rather than being a fourth view of its own. */}
+                            <div className="flex gap-1 ml-3">
+                              {([
+                                { key: false, label: 'Linear' },
+                                { key: true, label: 'Log' },
+                              ] as const).map(opt => (
+                                <button
+                                  key={String(opt.key)}
+                                  onClick={() => setMonthlyPriceChartLog(opt.key)}
+                                  title={opt.key
+                                    ? 'Logarithmic: equal distances mean equal PERCENTAGE moves, so early years stay readable after an asset has multiplied'
+                                    : 'Normal scale: equal distances mean equal amounts of money'}
+                                  className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                    monthlyPriceChartLog === opt.key
+                                      ? 'bg-slate-800 text-white border-slate-800'
+                                      : 'bg-white border-gray-300 hover:bg-gray-100'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              ))}
+                            </div>
                           </div>
 
                           {/* Chart 1: Price + 10M SMA (or, in drawdown mode, price + high water mark) */}
@@ -9318,6 +9407,7 @@ const PortfolioBacktester = () => {
                               <YAxis
                                 tick={{ fontSize: 9 }}
                                 width={40}
+                                scale={priceAxisIsLog ? 'log' : 'auto'}
                                 domain={priceAxis ? priceAxis.domain : ['auto', 'auto']}
                                 ticks={priceAxis && priceAxis.ticks.length > 0 ? priceAxis.ticks : undefined}
                               />
@@ -9360,7 +9450,13 @@ const PortfolioBacktester = () => {
                                   isAnimationActive={false}
                                 />
                               )}
-                              {/* Black price line */}
+                              {/* Black price line.
+                                  isAnimationActive={false} on every line in THIS chart: Recharts
+                                  animates a line by morphing its path from the old shape to the new
+                                  one, and switching the axis between Linear and Log changes every
+                                  point at once. Morphing through that looks like the chart lurching,
+                                  and leaves the line briefly drawn against the wrong scale. Redrawing
+                                  straight away is both calmer and always self-consistent. */}
                               {priceChartMode !== 'vsMarket' && (
                                 <Line
                                   type="monotone"
@@ -9370,6 +9466,7 @@ const PortfolioBacktester = () => {
                                   strokeWidth={2}
                                   dot={false}
                                   connectNulls
+                                  isAnimationActive={false}
                                 />
                               )}
                               {/* vs IWDA: both series rebased to 100, plus a dashed line at the
@@ -9386,6 +9483,7 @@ const PortfolioBacktester = () => {
                                   strokeWidth={2}
                                   dot={false}
                                   connectNulls
+                                  isAnimationActive={false}
                                 />
                               )}
                               {priceChartMode === 'vsMarket' && vsMarketData && (
@@ -9397,6 +9495,7 @@ const PortfolioBacktester = () => {
                                   strokeWidth={2}
                                   dot={false}
                                   connectNulls
+                                  isAnimationActive={false}
                                 />
                               )}
                               {/* Red 10-month SMA line — the default overlay */}
@@ -9409,6 +9508,7 @@ const PortfolioBacktester = () => {
                                   strokeWidth={1.5}
                                   dot={false}
                                   connectNulls
+                                  isAnimationActive={false}
                                 />
                               )}
                               {/* High water mark — the ratchet of previous peaks, flat until a new high */}
@@ -9421,6 +9521,7 @@ const PortfolioBacktester = () => {
                                   strokeWidth={2}
                                   dot={false}
                                   connectNulls
+                                  isAnimationActive={false}
                                 />
                               )}
                               {/* "3y 4m" over the middle of every underwater stretch that lasted a year
