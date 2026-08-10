@@ -6993,9 +6993,9 @@ const PortfolioBacktester = () => {
               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
                 {/* Same heading treatment as the Monthly tab's statistics: what window these
                     numbers cover, and on what basis, rather than a bare "Statistics". The window
-                    is read from the results themselves, not from the date pickers above — a
-                    portfolio whose assets start late is backtested from the first month it can
-                    actually be held, which is not necessarily the start date requested. */}
+                    is read from the results themselves rather than from the date pickers above,
+                    so it always describes the months the statistics were actually computed over —
+                    which is the requested range trimmed to the rows the data really has. */}
                 <h3 className="text-md font-semibold text-gray-900 mb-2">
                   Statistics
                   {(() => {
@@ -8813,9 +8813,6 @@ const PortfolioBacktester = () => {
                           marketIdx: (marketByDate.get(p.date)! / marketBase) * 100,
                         }));
                       })();
-                      // If the comparison can't be built (the asset IS the benchmark, or the two
-                      // never overlap), quietly fall back to the default view rather than blanking
-                      // the chart. Every branch below keys off this EFFECTIVE mode, not the raw state.
                       // --- Real (inflation-adjusted) prices, for the real drawdown view ---
                       // Every month restated in the purchasing power of the window's FIRST month:
                       // price x (CPI then / CPI now). The line therefore starts at the same place as
@@ -8823,19 +8820,29 @@ const PortfolioBacktester = () => {
                       // series are the honest ones — recovering your money is not the same as
                       // recovering what your money could buy, so real recoveries take longer and
                       // some nominal "new highs" turn out not to be highs at all.
-                      const realPriceData = (() => {
-                        if (!monthlyCpiTicker || priceData.length === 0) return null;
-                        const baseCpi = cpiAt(priceData[0].date);
-                        if (!baseCpi) return null;
-                        const deflated: { date: string; price: number }[] = [];
-                        for (const d of priceData) {
-                          const cpi = cpiAt(d.date);
-                          if (!cpi) return null;   // a gap would silently distort the peaks
-                          deflated.push({ date: d.date, price: d.price * (baseCpi / cpi) });
-                        }
-                        return withHighWaterMark(deflated);
-                      })();
+                      //
+                      // canDeflate is one binary search rather than one per month: cpiAt only comes
+                      // back empty for dates BEFORE the first CPI reading, so if the window's first
+                      // month has one then every later month does too. It gates the button as well,
+                      // so the view is never offered when it would silently show nothing new.
+                      const canDeflate = monthlyCpiTicker !== '' && priceData.length > 0
+                        && cpiAt(priceData[0].date) !== null;
+                      const realPriceData = monthlyPriceChartMode === 'drawdownReal' && canDeflate
+                        ? (() => {
+                            const baseCpi = cpiAt(priceData[0].date)!;
+                            const deflated: { date: string; price: number }[] = [];
+                            for (const d of priceData) {
+                              const cpi = cpiAt(d.date);
+                              if (!cpi) return null;   // unreachable given canDeflate, but a gap would distort the peaks
+                              deflated.push({ date: d.date, price: d.price * (baseCpi / cpi) });
+                            }
+                            return withHighWaterMark(deflated);
+                          })()
+                        : null;
 
+                      // If a view can't be built (the asset IS the benchmark, or there is no CPI for
+                      // this currency), quietly fall back rather than blanking the chart. Every
+                      // branch below keys off this EFFECTIVE mode, not the raw state.
                       const priceChartMode =
                         monthlyPriceChartMode === 'vsMarket' && !vsMarketData ? 'sma'
                         // No CPI for this currency (EUR, CHF) — the real view has nothing to show,
@@ -9548,8 +9555,8 @@ const PortfolioBacktester = () => {
                             {([
                               { key: 'sma', label: 'Price & 10m SMA' },
                               { key: 'drawdown', label: 'Price & drawdowns' },
-                              // Needs a CPI for the displayed currency; EUR and CHF have none.
-                              ...(monthlyCpiTicker
+                              // Needs a CPI covering this window; EUR and CHF have none at all.
+                              ...(canDeflate
                                 ? [{ key: 'drawdownReal', label: 'Price & drawdowns inflation adjusted' }] as const
                                 : []),
                               ...(monthlySelectedTicker !== STRESS_BENCHMARK
