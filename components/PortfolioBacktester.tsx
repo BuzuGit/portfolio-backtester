@@ -737,6 +737,10 @@ const MONTHLY_CHART_PERIODS: MonthlyChartPeriod[] =
 // looks the same everywhere on the page.
 const MARKET_LINE_COLOR = '#F5A623';
 
+// And the 50/50 blend of the asset with the market. Matches the grey dot on that row of the
+// Monthly statistics table, for the same reason.
+const BLEND_LINE_COLOR = '#9ca3af';
+
 /**
  * Adds the running "high water mark" to a price series: the highest price seen SO FAR,
  * walking left to right. Think of it as a ratchet that only ever clicks upwards. Whenever
@@ -8807,12 +8811,41 @@ const PortfolioBacktester = () => {
                         const assetBase = shared[0].price;
                         const marketBase = marketByDate.get(shared[0].date)!;
                         if (!assetBase || !marketBase) return null;
-                        return shared.map(p => ({
-                          date: p.date,
-                          assetIdx: (p.price / assetBase) * 100,
-                          marketIdx: (marketByDate.get(p.date)! / marketBase) * 100,
-                        }));
+
+                        // Third line: half the asset, half the market, rebalanced once a year.
+                        // Deliberately run through calculatePortfolioReturns — the Backtest tab's
+                        // own engine, with the same settings the statistics table's 50/50 row uses —
+                        // rather than a lookalike averaged here. That is what makes the line END
+                        // exactly where that row's "100 → ?" says it should, instead of merely near it.
+                        const blendByDate = (() => {
+                          if (!assetData || monthlySelectedTicker === STRESS_BENCHMARK) return null;
+                          const blendPortfolio = {
+                            id: -1, name: `50/50 ${monthlySelectedTicker}/${STRESS_BENCHMARK}`,
+                            assets: [
+                              { asset: monthlySelectedTicker, weight: 50 },
+                              { asset: STRESS_BENCHMARK, weight: 50 },
+                            ],
+                            color: '#000000', nameManuallyEdited: false,
+                            inflationAdj: '', baseCurrency: monthlyDisplayCurrency,
+                          } as Portfolio;
+                          const pts = calculatePortfolioReturns(blendPortfolio, assetData,
+                            { start: shared[0].date, end: shared[shared.length - 1].date, rebalanceFreq: 'yearly' });
+                          if (!pts || pts.length < 2) return null;
+                          return new Map(pts.map(p => [p.date, p.value]));
+                        })();
+                        const blendBase = blendByDate?.get(shared[0].date) ?? null;
+
+                        return shared.map(p => {
+                          const blendValue = blendByDate?.get(p.date);
+                          return {
+                            date: p.date,
+                            assetIdx: (p.price / assetBase) * 100,
+                            marketIdx: (marketByDate.get(p.date)! / marketBase) * 100,
+                            blendIdx: blendValue != null && blendBase ? (blendValue / blendBase) * 100 : null,
+                          };
+                        });
                       })();
+                      const hasBlend = vsMarketData !== null && vsMarketData.some(d => d.blendIdx !== null);
                       // --- Real (inflation-adjusted) prices, for the real drawdown view ---
                       // Every month restated in the purchasing power of the window's FIRST month:
                       // price x (CPI then / CPI now). The line therefore starts at the same place as
@@ -8918,7 +8951,7 @@ const PortfolioBacktester = () => {
                       // points rather than prices, so it is built from both indexed series.
                       const priceAxisValues: (number | null)[] =
                         priceChartMode === 'vsMarket' && vsMarketData
-                          ? vsMarketData.flatMap(d => [d.assetIdx, d.marketIdx])
+                          ? vsMarketData.flatMap(d => [d.assetIdx, d.marketIdx, d.blendIdx])
                         : priceChartMode === 'inflation' && inflationData
                           ? inflationData.flatMap(d => [d.nominalIdx, d.inflationIdx, d.realIdx])
                           : ddSeries.map(d => d.price);
@@ -8933,10 +8966,13 @@ const PortfolioBacktester = () => {
                       const lastRow = ddSeries[ddSeries.length - 1];
                       const priceBubbleDefs: BubbleDef[] = [];
                       if (priceChartMode === 'vsMarket' && vsMarketData) {
-                        // Two bubbles: where 100 ended up for each line.
+                        // Where 100 ended up for each line.
                         const lastVs = vsMarketData[vsMarketData.length - 1];
                         priceBubbleDefs.push({ value: lastVs.assetIdx, color: '#000000', label: lastVs.assetIdx.toFixed(1) });
                         priceBubbleDefs.push({ value: lastVs.marketIdx, color: MARKET_LINE_COLOR, label: lastVs.marketIdx.toFixed(1) });
+                        if (lastVs.blendIdx !== null) {
+                          priceBubbleDefs.push({ value: lastVs.blendIdx, color: BLEND_LINE_COLOR, label: lastVs.blendIdx.toFixed(1) });
+                        }
                       } else if (priceChartMode === 'inflation' && inflationData) {
                         const lastInf = inflationData[inflationData.length - 1];
                         priceBubbleDefs.push({ value: lastInf.nominalIdx, color: '#000000', label: lastInf.nominalIdx.toFixed(1) });
@@ -9617,7 +9653,9 @@ const PortfolioBacktester = () => {
                               }
                               margin={{ top: 28, right: 70, left: -5, bottom: 15 }}
                             >
-                              <CartesianGrid strokeDasharray="3 3" />
+                              {/* No CartesianGrid here on purpose: the axis labels carry the levels,
+                                  and an empty background lets the lines themselves read clearly.
+                                  The two charts below keep their grids. */}
                               <XAxis
                                 dataKey="date"
                                 tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />}
@@ -9695,6 +9733,18 @@ const PortfolioBacktester = () => {
                               {priceChartMode === 'vsMarket' && vsMarketData && (
                                 <ReferenceLine y={100} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
                               )}
+                              {priceChartMode === 'vsMarket' && vsMarketData && hasBlend && (
+                                <Line
+                                  type="monotone"
+                                  dataKey="blendIdx"
+                                  name={`50/50 ${monthlySelectedTicker}/${STRESS_BENCHMARK}`}
+                                  stroke={BLEND_LINE_COLOR}
+                                  strokeWidth={1.5}
+                                  dot={false}
+                                  connectNulls
+                                  isAnimationActive={false}
+                                />
+                              )}
                               {priceChartMode === 'vsMarket' && vsMarketData && (
                                 <Line
                                   type="monotone"
@@ -9758,6 +9808,18 @@ const PortfolioBacktester = () => {
                                   dot={false}
                                   connectNulls
                                   isAnimationActive={false}
+                                />
+                              )}
+                              {/* Today's price, extended back across the whole chart. Wherever the
+                                  black line crosses it, the asset was last worth what it is worth
+                                  now — which turns "how long have I been going sideways?" into
+                                  something you can read off at a glance. */}
+                              {priceChartMode === 'sma' && lastRow && (
+                                <ReferenceLine
+                                  y={lastRow.price}
+                                  stroke="#9ca3af"
+                                  strokeDasharray="5 4"
+                                  strokeWidth={1}
                                 />
                               )}
                               {/* Red 10-month SMA line — the default overlay */}
