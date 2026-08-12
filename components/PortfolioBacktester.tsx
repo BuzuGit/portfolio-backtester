@@ -9053,7 +9053,7 @@ const PortfolioBacktester = () => {
 
                       // --- Compute periodic returns (monthly / quarterly / annual) ---
                       // (uses module-level MONTH_ABBR constant declared at top of file)
-                      const computeReturnsData = (): { label: string; return: number; range?: string }[] => {
+                      const computeReturnsData = (): { label: string; return: number; range?: string; startPrice?: number; endPrice?: number }[] => {
                         if (priceData.length < 2) return [];
 
                         // --- Rolling CAGR views ---
@@ -9070,7 +9070,7 @@ const PortfolioBacktester = () => {
                           const idxByMonth = new Map<string, number>();
                           priceData.forEach((p, i) => idxByMonth.set(toYM(new Date(p.date)), i));
 
-                          const results: { label: string; return: number; range?: string }[] = [];
+                          const results: { label: string; return: number; range?: string; startPrice?: number; endPrice?: number }[] = [];
                           for (let i = 0; i < priceData.length; i++) {
                             const startDate = new Date(priceData[i].date);
                             const endKey = `${startDate.getFullYear() + rolling.years}-${String(startDate.getMonth() + 1).padStart(2, '0')}`;
@@ -9088,6 +9088,11 @@ const PortfolioBacktester = () => {
                               label: fmt(startDate),
                               return: parseFloat(cagr.toFixed(1)),
                               range: `${fmt(startDate)} → ${fmt(endDate)}`,
+                              // Carried through so the tooltip can show the two prices the
+                              // CAGR was computed from — the arithmetic is then checkable
+                              // on the spot rather than taken on trust.
+                              startPrice,
+                              endPrice,
                             });
                           }
                           return results;
@@ -10496,8 +10501,10 @@ const PortfolioBacktester = () => {
                               ) : (
                               /* height 300 = 50% taller than the original 200 for easier reading */
                               <ResponsiveContainer width="100%" height={300}>
+                                {/* No CartesianGrid, matching the price and drawdown charts above:
+                                    the bars themselves carry the shape, and the dashed zero line
+                                    below is the only reference level that actually matters here. */}
                                 <BarChart data={returnsData} margin={{ top: 20, right: 10, left: -5, bottom: 15 }}>
-                                  <CartesianGrid strokeDasharray="3 3" />
                                   <XAxis
                                     dataKey="label"
                                     tick={(props: { x: number; y: number; payload: { value: string } }) => {
@@ -10532,9 +10539,27 @@ const PortfolioBacktester = () => {
                                     ]}
                                     {...(rollingView ? {
                                       // On a rolling view the X label alone ("Dec 09") is only half
-                                      // the story, so the tooltip spells out the whole window.
-                                      labelFormatter: (label: string, payload: readonly { payload?: { range?: string } }[]) =>
-                                        payload?.[0]?.payload?.range || label,
+                                      // the story, so the tooltip spells out the whole window and the
+                                      // two month-end prices the CAGR was worked out from.
+                                      labelFormatter: (label: string,
+                                                       payload: readonly { payload?: { range?: string; startPrice?: number; endPrice?: number } }[]) => {
+                                        const p = payload?.[0]?.payload;
+                                        if (!p?.range) return label;
+                                        return (
+                                          <>
+                                            {p.range}
+                                            {p.startPrice !== undefined && p.endPrice !== undefined && (
+                                              <>
+                                                <br />
+                                                <span style={{ fontWeight: 400, color: '#6b7280' }}>
+                                                  {formatPrice(p.startPrice)} → {formatPrice(p.endPrice)}
+                                                  {' '}{monthlyDisplayCurrency || selectedAssetCcy}
+                                                </span>
+                                              </>
+                                            )}
+                                          </>
+                                        );
+                                      },
                                     } : {})}
                                   />
                                   <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
