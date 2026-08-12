@@ -732,6 +732,23 @@ type MonthlyChartPeriod = '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' 
 const MONTHLY_CHART_PERIODS: MonthlyChartPeriod[] =
   ['1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'max'];
 
+// What the Monthly tab's returns bar chart is showing. The first three are ordinary
+// calendar returns (one bar per month / quarter / year). The "rolling" ones answer a
+// different question: "if I had bought in month X and held for N years, what annual
+// return would I have earned?" — so each bar is one COMPLETE N-year holding period,
+// plotted against the month it started. Think of it as sliding an N-year window along
+// the price history one month at a time and taking a photo at every stop.
+type ReturnsChartPeriod =
+  'monthly' | 'quarterly' | 'annual' | 'rolling1Y' | 'rolling3Y' | 'rolling5Y' | 'rolling10Y';
+// The rolling views and their window length in years. One place, so the buttons, the
+// maths and the labels can never disagree about what "Rolling 3Y" means.
+const ROLLING_RETURN_YEARS: { period: ReturnsChartPeriod; years: number }[] = [
+  { period: 'rolling1Y', years: 1 },
+  { period: 'rolling3Y', years: 3 },
+  { period: 'rolling5Y', years: 5 },
+  { period: 'rolling10Y', years: 10 },
+];
+
 // The colour world equities are drawn in wherever they appear as a reference. It matches the
 // amber dot already used for the market row in the Monthly statistics table, so "the market"
 // looks the same everywhere on the page.
@@ -1340,8 +1357,12 @@ const PortfolioBacktester = () => {
   // switch asset, so you can hold a year fixed and click down the list comparing how
   // each holding behaved in it.
   const [stressYear, setStressYear] = useState<number>(2022);
-  // Which return period to show in the periodic returns bar chart (Monthly/Quarterly/Annual)
-  const [returnsChartPeriod, setReturnsChartPeriod] = useState<'monthly' | 'quarterly' | 'annual'>('quarterly');
+  // Which return period to show in the periodic returns bar chart
+  // (Monthly/Quarterly/Annual, or one of the rolling-CAGR views — see ReturnsChartPeriod)
+  const [returnsChartPeriod, setReturnsChartPeriod] = useState<ReturnsChartPeriod>('quarterly');
+  // Monthly tab statistics table: false = show only the selected asset's row, hiding the
+  // IWDA and 50/50 reference rows. Expanded by default, so nothing changes until you click.
+  const [monthlyStatsExpanded, setMonthlyStatsExpanded] = useState(true);
   // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
   const [graphsPeriod, setGraphsPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | 'max'>('2Y');
   // End date for the Graphs tab ('' = most recent month in data)
@@ -9032,8 +9053,45 @@ const PortfolioBacktester = () => {
 
                       // --- Compute periodic returns (monthly / quarterly / annual) ---
                       // (uses module-level MONTH_ABBR constant declared at top of file)
-                      const computeReturnsData = (): { label: string; return: number }[] => {
+                      const computeReturnsData = (): { label: string; return: number; range?: string }[] => {
                         if (priceData.length < 2) return [];
+
+                        // --- Rolling CAGR views ---
+                        // Slide an N-year window along the visible history one month at a time.
+                        // Each bar = one complete N-year holding period, labelled with the month
+                        // it STARTED. So on "Rolling 3Y" the first bar is Dec-09 → Dec-12, the
+                        // next Jan-10 → Jan-13, and so on; the last bar is the newest window that
+                        // has a full N years of data behind it.
+                        const rolling = ROLLING_RETURN_YEARS.find(r => r.period === returnsChartPeriod);
+                        if (rolling) {
+                          // Index every month by its YYYY-MM key so we can jump exactly N calendar
+                          // years forward. Counting N*12 array slots instead would quietly measure
+                          // the wrong span if the price history ever has a gap.
+                          const idxByMonth = new Map<string, number>();
+                          priceData.forEach((p, i) => idxByMonth.set(toYM(new Date(p.date)), i));
+
+                          const results: { label: string; return: number; range?: string }[] = [];
+                          for (let i = 0; i < priceData.length; i++) {
+                            const startDate = new Date(priceData[i].date);
+                            const endKey = `${startDate.getFullYear() + rolling.years}-${String(startDate.getMonth() + 1).padStart(2, '0')}`;
+                            const endIdx = idxByMonth.get(endKey);
+                            if (endIdx === undefined) continue;   // window runs past the end of the data
+                            const startPrice = priceData[i].price;
+                            const endPrice = priceData[endIdx].price;
+                            if (!(startPrice > 0) || !(endPrice > 0)) continue;
+                            // CAGR: the steady annual rate that turns the start price into the end
+                            // price over N years. Nth root of the growth multiple, minus 1.
+                            const cagr = (Math.pow(endPrice / startPrice, 1 / rolling.years) - 1) * 100;
+                            const endDate = new Date(priceData[endIdx].date);
+                            const fmt = (d: Date) => `${MONTH_ABBR[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
+                            results.push({
+                              label: fmt(startDate),
+                              return: parseFloat(cagr.toFixed(1)),
+                              range: `${fmt(startDate)} → ${fmt(endDate)}`,
+                            });
+                          }
+                          return results;
+                        }
 
                         if (returnsChartPeriod === 'monthly') {
                           // Monthly: % change from one month to the next
@@ -9082,8 +9140,12 @@ const PortfolioBacktester = () => {
                         return results;
                       };
                       const returnsData = computeReturnsData();
-                      // Show bar labels unless monthly view with too many bars (≥48 = 4+ years)
-                      const showReturnLabels = returnsChartPeriod !== 'monthly' || returnsData.length < 48;
+                      // Is a rolling-CAGR view selected? Several bits of the chart below (labels,
+                      // tick spacing, tooltip wording) behave like the monthly view when it is,
+                      // because a rolling view also produces one bar per month.
+                      const rollingView = ROLLING_RETURN_YEARS.find(r => r.period === returnsChartPeriod);
+                      // Show bar labels unless there are too many bars to read (≥48 = 4+ years)
+                      const showReturnLabels = (returnsChartPeriod !== 'monthly' && !rollingView) || returnsData.length < 48;
 
                       // Build ReturnPoint[] from raw asset prices so we can reuse
                       // calculateMonthlyReturns() for the calendar-style returns table
@@ -9410,7 +9472,12 @@ const PortfolioBacktester = () => {
                                 pts.map(p => ({ drawdown: p.drawdown })));
                             })();
 
-                            const statsRows = [assetRow, benchRow, blendRow].filter((r): r is NonNullable<typeof assetRow> => r !== null);
+                            const allStatsRows = [assetRow, benchRow, blendRow].filter((r): r is NonNullable<typeof assetRow> => r !== null);
+                            // Collapsed = just the asset's own line, with the two reference rows
+                            // (IWDA and the 50/50 blend) folded away behind the +/- in the header.
+                            const statsRows = monthlyStatsExpanded ? allStatsRows : allStatsRows.slice(0, 1);
+                            // Only worth offering the toggle when there is something to fold away.
+                            const hasReferenceRows = allStatsRows.length > 1;
 
                             // ---- The currency caveat, written once and shown on every column it applies to ----
                             // Correlation and beta both change when you switch the display currency, and
@@ -9450,7 +9517,22 @@ const PortfolioBacktester = () => {
                                 <table className="w-full text-xs">
                                   <thead>
                                     <tr className="border-b-2 border-gray-200">
-                                      <th className="text-left py-2 px-2">&nbsp;</th>
+                                      {/* +/- folds the two reference rows (IWDA and the 50/50 blend)
+                                          away, leaving just the selected asset. Expanded by default. */}
+                                      <th className="text-left py-2 px-2">
+                                        {hasReferenceRows ? (
+                                          <button
+                                            onClick={() => setMonthlyStatsExpanded(v => !v)}
+                                            title={monthlyStatsExpanded
+                                              ? 'Hide the IWDA and 50/50 comparison rows'
+                                              : 'Show the IWDA and 50/50 comparison rows'}
+                                            aria-expanded={monthlyStatsExpanded}
+                                            className="w-4 h-4 leading-none flex items-center justify-center rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100 transition-colors"
+                                          >
+                                            {monthlyStatsExpanded ? '−' : '+'}
+                                          </button>
+                                        ) : <>&nbsp;</>}
+                                      </th>
                                       <th className="text-right py-2 px-2">Total Return</th>
                                       <th className="text-right py-2 px-2">100 → ?</th>
                                       <th className="text-right py-2 px-2">CAGR</th>
@@ -9572,7 +9654,8 @@ const PortfolioBacktester = () => {
                                 </table>
                                 {/* How to reproduce the 50/50 row in the Backtest tab. Without the exact
                                     window you would have to guess which months the period covers. */}
-                                {blendRow && (
+                                {/* Hidden along with the row it explains when the table is collapsed. */}
+                                {blendRow && monthlyStatsExpanded && (
                                   <p className="text-[10px] text-gray-400 mt-2">
                                     50/50 row = this asset and IWDA at 50% each, rebalanced annually, run through the
                                     Backtest tab&apos;s own engine. To reproduce it there: Start {windowStart}, End {windowEnd},
@@ -9930,8 +10013,10 @@ const PortfolioBacktester = () => {
                           {/* Chart 2: Drawdown from All-Time High */}
                           <div className="mt-2">
                             <ResponsiveContainer width="100%" height={180}>
+                              {/* No CartesianGrid on purpose — same as the price chart above it.
+                                  The Y-axis labels and the dashed zero line carry the levels, and
+                                  the shaded underwater area reads more cleanly without a mesh. */}
                               <AreaChart data={drawdownData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
-                                <CartesianGrid strokeDasharray="3 3" />
                                 <XAxis
                                   dataKey="date"
                                   tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />}
@@ -10361,11 +10446,14 @@ const PortfolioBacktester = () => {
                             </div>
                           )}
 
-                          {/* Chart 4: Periodic Returns bar chart (Monthly / Quarterly / Annual) */}
-                          {returnsData.length > 0 && (
+                          {/* Chart 4: Periodic Returns bar chart (Monthly / Quarterly / Annual / Rolling CAGR) */}
+                          {/* The rolling views are allowed through even with no bars, so a window
+                              longer than the visible history shows an explanation rather than
+                              silently taking the buttons away with it. */}
+                          {(returnsData.length > 0 || rollingView) && (
                             <div className="mt-2">
-                              {/* Toggle buttons: Monthly | Quarterly | Annual */}
-                              <div className="flex items-center gap-2 mb-1 px-2">
+                              {/* Toggle buttons: Monthly | Quarterly | Annual, then the rolling views */}
+                              <div className="flex items-center gap-2 mb-1 px-2 flex-wrap">
                                 <span className="text-xs font-semibold text-gray-500">Returns:</span>
                                 {(['monthly', 'quarterly', 'annual'] as const).map(p => (
                                   <button
@@ -10380,8 +10468,33 @@ const PortfolioBacktester = () => {
                                     {p === 'monthly' ? 'Monthly' : p === 'quarterly' ? 'Quarterly' : 'Annual'}
                                   </button>
                                 ))}
+                                {/* Rolling CAGR buttons — same look, kept in their own group after a
+                                    divider because they answer a different question to the three above. */}
+                                <span className="w-px h-4 bg-gray-300" />
+                                {ROLLING_RETURN_YEARS.map(r => (
+                                  <button
+                                    key={r.period}
+                                    onClick={() => setReturnsChartPeriod(r.period)}
+                                    title={`Rolling ${r.years}-year CAGR: every bar is the annual return you would have earned buying in that month and holding for ${r.years} year${r.years === 1 ? '' : 's'}. The X axis is the month the holding period STARTED.`}
+                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                      returnsChartPeriod === r.period
+                                        ? 'bg-slate-800 text-white border-slate-800'
+                                        : 'bg-white border-gray-300 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    Rolling {r.years}Y
+                                  </button>
+                                ))}
                               </div>
-                              {/* height 300 = 50% taller than the original 200 for easier reading */}
+                              {/* A rolling window needs at least that many years of history to draw
+                                  a single bar; say so instead of showing an empty chart. */}
+                              {returnsData.length === 0 ? (
+                                <p className="text-xs text-gray-500 px-2 py-6">
+                                  Not enough history in the visible period for a {rollingView?.years}-year rolling window.
+                                  Pick a longer period above (or Max), or a shorter rolling window.
+                                </p>
+                              ) : (
+                              /* height 300 = 50% taller than the original 200 for easier reading */
                               <ResponsiveContainer width="100%" height={300}>
                                 <BarChart data={returnsData} margin={{ top: 20, right: 10, left: -5, bottom: 15 }}>
                                   <CartesianGrid strokeDasharray="3 3" />
@@ -10403,7 +10516,7 @@ const PortfolioBacktester = () => {
                                       return <text x={x} y={y + 10} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
                                     }}
                                     height={35}
-                                    interval={returnsChartPeriod === 'monthly' && returnsData.length > 24
+                                    interval={(returnsChartPeriod === 'monthly' || rollingView) && returnsData.length > 24
                                       ? Math.max(0, Math.floor(returnsData.length / 20) - 1)
                                       : 0}
                                   />
@@ -10415,8 +10528,14 @@ const PortfolioBacktester = () => {
                                   <Tooltip
                                     formatter={(value: number) => [
                                       `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`,
-                                      'Return',
+                                      rollingView ? `${rollingView.years}Y CAGR` : 'Return',
                                     ]}
+                                    {...(rollingView ? {
+                                      // On a rolling view the X label alone ("Dec 09") is only half
+                                      // the story, so the tooltip spells out the whole window.
+                                      labelFormatter: (label: string, payload: readonly { payload?: { range?: string } }[]) =>
+                                        payload?.[0]?.payload?.range || label,
+                                    } : {})}
                                   />
                                   <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
                                   <Bar dataKey="return" isAnimationActive={false}>
@@ -10445,6 +10564,7 @@ const PortfolioBacktester = () => {
                                   </Bar>
                                 </BarChart>
                               </ResponsiveContainer>
+                              )}
                             </div>
                           )}
 
