@@ -748,6 +748,15 @@ const ROLLING_RETURN_YEARS: { period: ReturnsChartPeriod; years: number }[] = [
   { period: 'rolling5Y', years: 5 },
   { period: 'rolling10Y', years: 10 },
 ];
+// One bar of that chart. `range` and the two prices are only filled in by the rolling
+// views — a calendar-return bar has no single pair of prices behind it to quote.
+type ReturnsBar = {
+  label: string;
+  return: number;
+  range?: string;
+  startPrice?: number;
+  endPrice?: number;
+};
 
 // The colour world equities are drawn in wherever they appear as a reference. It matches the
 // amber dot already used for the market row in the Monthly statistics table, so "the market"
@@ -9051,9 +9060,14 @@ const PortfolioBacktester = () => {
                         ? 0.5
                         : smaDistMax / (smaDistMax - smaDistMin);
 
-                      // --- Compute periodic returns (monthly / quarterly / annual) ---
+                      // Is a rolling-CAGR view selected, and over how many years? Looked up once
+                      // and reused by the maths below and by the chart itself (labels, tick
+                      // spacing, tooltip wording), so the two can never disagree about the view.
+                      const rollingView = ROLLING_RETURN_YEARS.find(r => r.period === returnsChartPeriod);
+
+                      // --- Compute periodic returns (monthly / quarterly / annual / rolling CAGR) ---
                       // (uses module-level MONTH_ABBR constant declared at top of file)
-                      const computeReturnsData = (): { label: string; return: number; range?: string; startPrice?: number; endPrice?: number }[] => {
+                      const computeReturnsData = (): ReturnsBar[] => {
                         if (priceData.length < 2) return [];
 
                         // --- Rolling CAGR views ---
@@ -9062,18 +9076,20 @@ const PortfolioBacktester = () => {
                         // it STARTED. So on "Rolling 3Y" the first bar is Dec-09 → Dec-12, the
                         // next Jan-10 → Jan-13, and so on; the last bar is the newest window that
                         // has a full N years of data behind it.
-                        const rolling = ROLLING_RETURN_YEARS.find(r => r.period === returnsChartPeriod);
-                        if (rolling) {
+                        if (rollingView) {
+                          const years = rollingView.years;
                           // Index every month by its YYYY-MM key so we can jump exactly N calendar
                           // years forward. Counting N*12 array slots instead would quietly measure
                           // the wrong span if the price history ever has a gap.
                           const idxByMonth = new Map<string, number>();
                           priceData.forEach((p, i) => idxByMonth.set(toYM(new Date(p.date)), i));
 
-                          const results: { label: string; return: number; range?: string; startPrice?: number; endPrice?: number }[] = [];
+                          // "Dec 09" — the same short form the monthly view uses on its X axis.
+                          const fmt = (d: Date) => `${MONTH_ABBR[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
+                          const results: ReturnsBar[] = [];
                           for (let i = 0; i < priceData.length; i++) {
                             const startDate = new Date(priceData[i].date);
-                            const endKey = `${startDate.getFullYear() + rolling.years}-${String(startDate.getMonth() + 1).padStart(2, '0')}`;
+                            const endKey = `${startDate.getFullYear() + years}-${String(startDate.getMonth() + 1).padStart(2, '0')}`;
                             const endIdx = idxByMonth.get(endKey);
                             if (endIdx === undefined) continue;   // window runs past the end of the data
                             const startPrice = priceData[i].price;
@@ -9081,9 +9097,8 @@ const PortfolioBacktester = () => {
                             if (!(startPrice > 0) || !(endPrice > 0)) continue;
                             // CAGR: the steady annual rate that turns the start price into the end
                             // price over N years. Nth root of the growth multiple, minus 1.
-                            const cagr = (Math.pow(endPrice / startPrice, 1 / rolling.years) - 1) * 100;
+                            const cagr = (Math.pow(endPrice / startPrice, 1 / years) - 1) * 100;
                             const endDate = new Date(priceData[endIdx].date);
-                            const fmt = (d: Date) => `${MONTH_ABBR[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
                             results.push({
                               label: fmt(startDate),
                               return: parseFloat(cagr.toFixed(1)),
@@ -9145,10 +9160,8 @@ const PortfolioBacktester = () => {
                         return results;
                       };
                       const returnsData = computeReturnsData();
-                      // Is a rolling-CAGR view selected? Several bits of the chart below (labels,
-                      // tick spacing, tooltip wording) behave like the monthly view when it is,
-                      // because a rolling view also produces one bar per month.
-                      const rollingView = ROLLING_RETURN_YEARS.find(r => r.period === returnsChartPeriod);
+                      // A rolling view produces one bar per month, like the monthly view, so it
+                      // shares the monthly view's crowding rules for labels and axis ticks.
                       // Show bar labels unless there are too many bars to read (≥48 = 4+ years)
                       const showReturnLabels = (returnsChartPeriod !== 'monthly' && !rollingView) || returnsData.length < 48;
 
