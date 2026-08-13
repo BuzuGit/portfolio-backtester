@@ -1386,6 +1386,13 @@ const PortfolioBacktester = () => {
   // returnsChartPeriod above so the two charts don't yank each other around. Defaults to
   // 'annual' — the only view this chart had before it gained the buttons.
   const [backtestReturnsPeriod, setBacktestReturnsPeriod] = useState<ReturnsChartPeriod>('annual');
+  // The head-to-head chart below it: which period, and which two portfolios are being
+  // compared (stored as positions in backtestResults, like the detail dropdowns above).
+  // No rolling views here — a difference of two CAGRs is a different animal to a
+  // difference of two period returns, and mixing them in one control would blur that.
+  const [deltaChartPeriod, setDeltaChartPeriod] = useState<'monthly' | 'quarterly' | 'annual'>('annual');
+  const [deltaPortfolioA, setDeltaPortfolioA] = useState(0);
+  const [deltaPortfolioB, setDeltaPortfolioB] = useState(1);
   // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
   const [graphsPeriod, setGraphsPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | 'max'>('2Y');
   // End date for the Graphs tab ('' = most recent month in data)
@@ -7629,6 +7636,194 @@ const PortfolioBacktester = () => {
                   );
                 })()}
               </div>
+
+              {/* Head-to-head: one portfolio MINUS another, period by period.
+                  Only worth showing when there are two portfolios to compare. */}
+              {backtestResults.length >= 2 && (() => {
+                // Guard the stored positions: a portfolio can be removed between runs,
+                // which would otherwise leave a dropdown pointing at nothing.
+                const aIdx = backtestResults[deltaPortfolioA] ? deltaPortfolioA : 0;
+                const bIdx = backtestResults[deltaPortfolioB] ? deltaPortfolioB : 1;
+                const a = backtestResults[aIdx].portfolio;
+                const b = backtestResults[bIdx].portfolio;
+                const sameTwice = a.id === b.id;
+
+                // Built from the SAME helper as the returns chart above, so a bar here is
+                // always exactly the difference of two bars up there — and in the annual
+                // view, exactly the Δ column of the table. Nothing is recomputed.
+                const periodRows = sameTwice
+                  ? []
+                  : getPeriodicReturnsChartData(backtestResults, selectedDateRange.start, deltaChartPeriod);
+                const rows = periodRows
+                  .map(row => {
+                    const aVal = row[a.name];
+                    const bVal = row[b.name];
+                    if (typeof aVal !== 'number' || typeof bVal !== 'number') return null;
+                    // Percentage POINTS: both sides are already percentages, so beating
+                    // 10% with 12% is +2pp. Never call that +2%, which would mean 10.2%.
+                    return { label: row.label, delta: parseFloat((aVal - bVal).toFixed(2)), aVal, bVal };
+                  })
+                  .filter((r): r is { label: string; delta: number; aVal: number; bVal: number } => r !== null);
+
+                const aWins = rows.filter(r => r.delta > 0).length;
+                const periodNoun = deltaChartPeriod === 'annual' ? 'years'
+                  : deltaChartPeriod === 'quarterly' ? 'quarters' : 'months';
+                // Same crowding rule as the chart above: one series here, so it is simply
+                // the bar count that decides whether a label on each one stays readable.
+                const showLabels = rows.length < 48;
+
+                return (
+                  <div className="bg-white p-4 rounded-lg shadow mt-4">
+                    <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                      <h3 className="text-md font-semibold text-gray-700">Head to Head</h3>
+                      {/* Which two portfolios, in which direction. Positive bars always
+                          mean the FIRST dropdown is ahead. */}
+                      <div className="flex items-center gap-2 text-sm">
+                        <select
+                          className="border rounded px-2 py-1 text-sm"
+                          value={aIdx}
+                          onChange={(e) => setDeltaPortfolioA(parseInt(e.target.value))}
+                        >
+                          {backtestResults.map((result, idx) => (
+                            <option key={idx} value={idx}>{result.portfolio.name}</option>
+                          ))}
+                        </select>
+                        <span className="text-gray-500">vs</span>
+                        <select
+                          className="border rounded px-2 py-1 text-sm"
+                          value={bIdx}
+                          onChange={(e) => setDeltaPortfolioB(parseInt(e.target.value))}
+                        >
+                          {backtestResults.map((result, idx) => (
+                            <option key={idx} value={idx}>{result.portfolio.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Period buttons — the same three the chart above has, minus the
+                        rolling views (see the state declaration for why). */}
+                    <div className="flex items-center gap-2 mb-2 px-2 flex-wrap">
+                      <span className="text-xs font-semibold text-gray-500">Returns:</span>
+                      {(['monthly', 'quarterly', 'annual'] as const).map(p => (
+                        <button
+                          key={p}
+                          onClick={() => setDeltaChartPeriod(p)}
+                          className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                            deltaChartPeriod === p
+                              ? 'bg-slate-800 text-white border-slate-800'
+                              : 'bg-white border-gray-300 hover:bg-gray-100'
+                          }`}
+                        >
+                          {p === 'monthly' ? 'Monthly' : p === 'quarterly' ? 'Quarterly' : 'Annual'}
+                        </button>
+                      ))}
+                    </div>
+
+                    {sameTwice ? (
+                      <p className="text-xs text-gray-500 px-2 py-6">
+                        Pick two different portfolios to compare.
+                      </p>
+                    ) : rows.length === 0 ? (
+                      <p className="text-xs text-gray-500 px-2 py-6">
+                        No overlapping periods to compare for these two portfolios.
+                      </p>
+                    ) : (
+                      <>
+                        {/* How often the first one came out ahead — the headline the bars
+                            below are the detail of. */}
+                        <p className="text-xs text-gray-600 mb-1 px-2">
+                          <span className="font-semibold" style={{ color: a.color }}>{a.name}</span>
+                          {' '}ahead in {aWins} of {rows.length} {periodNoun}
+                          {' '}({Math.round((aWins / rows.length) * 100)}%)
+                        </p>
+                        {/* Says which way is which, so a bar's direction needs no decoding.
+                            Repeated under the chart for the downside, per the same idea. */}
+                        <p className="text-xs font-medium px-2" style={{ color: a.color }}>
+                          ▲ {a.name} outperforms {b.name}
+                        </p>
+                        <ResponsiveContainer width="100%" height={300}>
+                          {/* Gridless, matching every other chart on this page */}
+                          <BarChart data={rows} margin={{ top: 20, right: 5, left: 5, bottom: 5 }}>
+                            <XAxis
+                              dataKey="label"
+                              tick={(props: { x: number; y: number; payload: { value: string } }) => {
+                                const { x, y, payload } = props;
+                                const parts = String(payload.value).split('\n');
+                                if (parts.length === 2) {
+                                  // Two-line label (quarterly: "2Q\n2024")
+                                  return (
+                                    <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">
+                                      <tspan x={x} dy="0.5em">{parts[0]}</tspan>
+                                      <tspan x={x} dy="1.2em">{parts[1]}</tspan>
+                                    </text>
+                                  );
+                                }
+                                return <text x={x} y={y + 10} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
+                              }}
+                              height={35}
+                              interval={deltaChartPeriod === 'monthly' && rows.length > 24
+                                ? Math.max(0, Math.floor(rows.length / 20) - 1)
+                                : 0}
+                            />
+                            <YAxis
+                              tick={{ fontSize: 9 }}
+                              width={45}
+                              tickFormatter={(v: number) => `${v.toFixed(0)}pp`}
+                            />
+                            <Tooltip
+                              formatter={(value: number) => [
+                                `${value >= 0 ? '+' : ''}${value.toFixed(2)}pp`,
+                                value >= 0 ? `${a.name} ahead` : `${b.name} ahead`,
+                              ]}
+                              labelFormatter={(label: string, payload: readonly { payload?: { aVal?: number; bVal?: number } }[]) => {
+                                const p = payload?.[0]?.payload;
+                                const period = String(label).replace('\n', ' ');
+                                // Show both sides' own returns, so the difference can be
+                                // checked against the chart above without leaving the page.
+                                return typeof p?.aVal === 'number' && typeof p?.bVal === 'number'
+                                  ? `${period}  —  ${a.name} ${p.aVal.toFixed(1)}%, ${b.name} ${p.bVal.toFixed(1)}%`
+                                  : period;
+                              }}
+                            />
+                            <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                            <Bar dataKey="delta" isAnimationActive={false}>
+                              {/* Each bar wears the colour of whoever won that period */}
+                              {rows.map((row, index) => (
+                                <Cell key={index} fill={row.delta >= 0 ? a.color : b.color} />
+                              ))}
+                              {/* Two label lists so each side's numbers carry its own colour */}
+                              {showLabels && (
+                                <LabelList
+                                  dataKey="delta"
+                                  position="top"
+                                  formatter={(value: number) => value >= 0 ? `+${value.toFixed(1)}` : ''}
+                                  style={{ fontSize: '9px', fill: a.color }}
+                                />
+                              )}
+                              {showLabels && (
+                                <LabelList
+                                  dataKey="delta"
+                                  position="bottom"
+                                  formatter={(value: number) => value < 0 ? value.toFixed(1) : ''}
+                                  style={{ fontSize: '9px', fill: b.color }}
+                                />
+                              )}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                        <p className="text-xs font-medium px-2" style={{ color: b.color }}>
+                          ▼ {b.name} outperforms {a.name}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-2 px-2">
+                          Bars are the difference between the two portfolios&apos; returns for that period, in
+                          percentage points (pp). Beating 10% with 12% is +2pp.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Monthly Returns Tables */}
               {backtestResults.map((result, idx) => {
