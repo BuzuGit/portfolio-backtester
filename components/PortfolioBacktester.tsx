@@ -3872,6 +3872,46 @@ const PortfolioBacktester = () => {
   };
 
   /**
+   * Best and worst CALENDAR YEAR for each portfolio, keyed by portfolio name.
+   *
+   * Deliberately read off the very same getAnnualReturnsChartData() that feeds the
+   * Annual Returns chart and its table further down the page, rather than worked out
+   * again here. The Best Year figure has to be the tallest bar in that chart — anyone
+   * reading the page will check exactly that — and reusing the numbers makes it true
+   * by construction instead of by two pieces of arithmetic happening to agree.
+   *
+   * Note this inherits that helper's definition of a year, which includes a partial
+   * first year (when the backtest starts mid-year) and the partial current year. The
+   * year itself is returned so the cell can name it on hover.
+   */
+  const getBestWorstYears = (
+    results: BacktestResult[],
+    startDate: string,
+  ): Record<string, { best: number; bestYear: string; worst: number; worstYear: string }> => {
+    const out: Record<string, { best: number; bestYear: string; worst: number; worstYear: string }> = {};
+    if (!results || results.length === 0) return out;
+    const rows = getAnnualReturnsChartData(results, startDate);
+
+    results.forEach(result => {
+      const name = result.portfolio.name;
+      let best: { v: number; year: string } | null = null;
+      let worst: { v: number; year: string } | null = null;
+      for (const row of rows) {
+        const v = row[name];
+        if (typeof v !== 'number') continue;   // portfolio has no data for that year
+        const year = String(row.year);
+        if (!best || v > best.v) best = { v, year };
+        if (!worst || v < worst.v) worst = { v, year };
+      }
+      if (best && worst) {
+        out[name] = { best: best.v, bestYear: best.year, worst: worst.v, worstYear: worst.year };
+      }
+    });
+
+    return out;
+  };
+
+  /**
    * Builds the Backtest tab's returns bar chart data at ANY period — calendar
    * months, quarters, years, or one of the rolling-CAGR windows. It is the
    * grouped, multi-portfolio counterpart of the Monthly tab's computeReturnsData.
@@ -7184,12 +7224,20 @@ const PortfolioBacktester = () => {
                       <th className="text-right py-2 px-2">Max DD</th>
                       <th className="text-right py-2 px-2">Longest DD</th>
                       <th className="text-right py-2 px-2">Curr DD</th>
+                      {/* Best / worst calendar year, the same figures as the Annual Returns
+                          chart below — its tallest and shortest bar for that portfolio. */}
+                      <th className="text-right py-2 px-2">Best Year</th>
+                      <th className="text-right py-2 px-2">Worst Year</th>
                       <th className="text-right py-2 px-2">End Val</th>
                       <th className="text-right py-2 px-2">End Post W</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {backtestResults.map((result, idx) => (
+                    {(() => {
+                    // Worked out once for the whole table rather than per row, since the
+                    // helper walks every portfolio's yearly returns each time it is called.
+                    const bestWorst = getBestWorstYears(backtestResults, selectedDateRange.start);
+                    return backtestResults.map((result, idx) => (
                       <tr key={idx} className="border-b border-gray-100">
                         <td className="py-2 px-2 font-medium" style={{ color: result.portfolio.color }}>
                           {result.stats.name}
@@ -7201,6 +7249,22 @@ const PortfolioBacktester = () => {
                         <td className="text-right py-2 px-2 text-red-600">{result.stats.maxDrawdown}%</td>
                         <td className="text-right py-2 px-2 text-purple-700">{result.stats.longestDrawdown}</td>
                         <td className="text-right py-2 px-2 text-orange-600">{result.stats.currentDrawdown}%</td>
+                        {/* Best / worst year. Coloured like the same two columns on the
+                            Monthly tab, and naming the year on hover — worth having,
+                            because the best or worst year is often a part-year at either
+                            end of the backtest rather than a full twelve months. */}
+                        <td className="text-right py-2 px-2 text-green-600"
+                            title={bestWorst[result.portfolio.name] ? `Best calendar year: ${bestWorst[result.portfolio.name].bestYear}` : undefined}>
+                          {bestWorst[result.portfolio.name]
+                            ? `${bestWorst[result.portfolio.name].best >= 0 ? '+' : ''}${bestWorst[result.portfolio.name].best.toFixed(1)}%`
+                            : '—'}
+                        </td>
+                        <td className="text-right py-2 px-2 text-red-600"
+                            title={bestWorst[result.portfolio.name] ? `Worst calendar year: ${bestWorst[result.portfolio.name].worstYear}` : undefined}>
+                          {bestWorst[result.portfolio.name]
+                            ? `${bestWorst[result.portfolio.name].worst >= 0 ? '+' : ''}${bestWorst[result.portfolio.name].worst.toFixed(1)}%`
+                            : '—'}
+                        </td>
                         <td className="text-right py-2 px-2 font-semibold">{CURRENCY_SYMBOLS[result.portfolio.baseCurrency] || '$'}{parseFloat(result.stats.endingValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                         <td className="text-right py-2 px-2 font-semibold">
                           {(() => {
@@ -7211,7 +7275,8 @@ const PortfolioBacktester = () => {
                           })()}
                         </td>
                       </tr>
-                    ))}
+                    ));
+                    })()}
                   </tbody>
                 </table>
               </div>
