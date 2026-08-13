@@ -757,6 +757,16 @@ type ReturnsBar = {
   startPrice?: number;
   endPrice?: number;
 };
+// One bar of the Backtest tab's version of that chart. Same idea, but GROUPED: each row
+// carries one entry per portfolio, keyed by the portfolio's name, which is the shape
+// Recharts wants for side-by-side bars. `key` is a sortable stamp ('2013-04', '2013-Q2')
+// kept separate from `label`, because a display label like "2Q\n2013" does not sort.
+type PeriodicReturnsRow = {
+  key: string;
+  label: string;
+  range?: string;
+  [portfolioName: string]: string | number | undefined;
+};
 
 // The colour world equities are drawn in wherever they appear as a reference. It matches the
 // amber dot already used for the market row in the Monthly statistics table, so "the market"
@@ -1372,6 +1382,10 @@ const PortfolioBacktester = () => {
   // Monthly tab statistics table: false = show only the selected asset's row, hiding the
   // IWDA and 50/50 reference rows. Expanded by default, so nothing changes until you click.
   const [monthlyStatsExpanded, setMonthlyStatsExpanded] = useState(true);
+  // Which period the BACKTEST tab's returns bar chart shows. Kept separate from
+  // returnsChartPeriod above so the two charts don't yank each other around. Defaults to
+  // 'annual' — the only view this chart had before it gained the buttons.
+  const [backtestReturnsPeriod, setBacktestReturnsPeriod] = useState<ReturnsChartPeriod>('annual');
   // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
   const [graphsPeriod, setGraphsPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | 'max'>('2Y');
   // End date for the Graphs tab ('' = most recent month in data)
@@ -3855,6 +3869,119 @@ const PortfolioBacktester = () => {
       }));
 
     return chartData;
+  };
+
+  /**
+   * Builds the Backtest tab's returns bar chart data at ANY period — calendar
+   * months, quarters, years, or one of the rolling-CAGR windows. It is the
+   * grouped, multi-portfolio counterpart of the Monthly tab's computeReturnsData.
+   *
+   * Example output (quarterly, two portfolios):
+   * [
+   *   { key: '2023-Q1', label: '1Q\n2023', 'Portfolio 1': 4.2, 'Portfolio 2': -1.1 },
+   *   ...
+   * ]
+   *
+   * The 'annual' case DELEGATES to getAnnualReturnsChartData rather than working the
+   * numbers out again, so the default view is guaranteed to keep showing exactly what
+   * it showed before this chart gained its buttons — including that helper's rule
+   * about dropping a December start year (one data point, would read as 0%).
+   *
+   * @param results - the backtested portfolios
+   * @param startDate - backtest start, only used by the annual path above
+   * @param period - which view the buttons have selected
+   * @returns one row per bar, sorted oldest to newest
+   */
+  const getPeriodicReturnsChartData = (
+    results: BacktestResult[],
+    startDate: string,
+    period: ReturnsChartPeriod,
+  ): PeriodicReturnsRow[] => {
+    if (!results || results.length === 0) return [];
+
+    if (period === 'annual') {
+      return getAnnualReturnsChartData(results, startDate)
+        .map(row => ({ ...row, key: String(row.year), label: String(row.year) }));
+    }
+
+    const rolling = ROLLING_RETURN_YEARS.find(r => r.period === period);
+
+    // Portfolios are merged into shared rows so a bar group lines up on one X value.
+    // A portfolio missing that period simply has no entry, and Recharts draws no bar.
+    const rowsByKey = new Map<string, PeriodicReturnsRow>();
+    const rowFor = (key: string, label: string, range?: string): PeriodicReturnsRow => {
+      let row = rowsByKey.get(key);
+      if (!row) {
+        row = range ? { key, label, range } : { key, label };
+        rowsByKey.set(key, row);
+      }
+      return row;
+    };
+    const fmtMonth = (d: Date) => `${MONTH_ABBR[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
+
+    results.forEach(result => {
+      const name = result.portfolio.name;
+
+      // Last value per calendar month, oldest first. The engine already emits one point
+      // per month; going through a map keeps this true even if that ever changes.
+      const byMonth = new Map<string, { date: string; value: number }>();
+      for (const p of result.returns) byMonth.set(toYM(new Date(p.date)), { date: p.date, value: p.value });
+      const months = Array.from(byMonth.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+      if (rolling) {
+        // Same method as the Monthly tab: look the window's end month up BY NAME rather
+        // than counting 12*N slots forward, so a bar is either exactly N years or absent.
+        const idxByMonth = new Map<string, number>();
+        months.forEach(([ym], i) => idxByMonth.set(ym, i));
+        for (let i = 0; i < months.length; i++) {
+          const startD = new Date(months[i][1].date);
+          const endKey = `${startD.getFullYear() + rolling.years}-${String(startD.getMonth() + 1).padStart(2, '0')}`;
+          const endIdx = idxByMonth.get(endKey);
+          if (endIdx === undefined) continue;   // window runs past the end of the backtest
+          const startValue = months[i][1].value;
+          const endValue = months[endIdx][1].value;
+          if (!(startValue > 0) || !(endValue > 0)) continue;
+          const cagr = (Math.pow(endValue / startValue, 1 / rolling.years) - 1) * 100;
+          const endD = new Date(months[endIdx][1].date);
+          const row = rowFor(months[i][0], fmtMonth(startD), `${fmtMonth(startD)} → ${fmtMonth(endD)}`);
+          row[name] = parseFloat(cagr.toFixed(1));
+          // The two portfolio values behind the CAGR, so the tooltip can show its
+          // working the way the Monthly tab's shows the two prices.
+          row[`${name}__start`] = startValue;
+          row[`${name}__end`] = endValue;
+        }
+        return;
+      }
+
+      if (period === 'monthly') {
+        for (let i = 1; i < months.length; i++) {
+          const prev = months[i - 1][1].value;
+          const curr = months[i][1].value;
+          if (!(prev > 0)) continue;
+          const row = rowFor(months[i][0], fmtMonth(new Date(months[i][1].date)));
+          row[name] = parseFloat((((curr - prev) / prev) * 100).toFixed(1));
+        }
+        return;
+      }
+
+      // Quarterly: last value in each calendar quarter, then quarter over quarter.
+      const byQuarter = new Map<string, number>();
+      for (const [, p] of months) {
+        const d = new Date(p.date);
+        byQuarter.set(`${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`, p.value);
+      }
+      const quarters = Array.from(byQuarter.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+      for (let i = 1; i < quarters.length; i++) {
+        const prev = quarters[i - 1][1];
+        const curr = quarters[i][1];
+        if (!(prev > 0)) continue;
+        const [yr, qPart] = quarters[i][0].split('-');
+        const row = rowFor(quarters[i][0], `${qPart.replace('Q', '')}Q\n${yr}`);
+        row[name] = parseFloat((((curr - prev) / prev) * 100).toFixed(1));
+      }
+    });
+
+    return Array.from(rowsByKey.values()).sort((a, b) => a.key.localeCompare(b.key));
   };
 
   // ----------------------------------------
@@ -7173,48 +7300,168 @@ const PortfolioBacktester = () => {
                 </ResponsiveContainer>
               </div>
 
-              {/* Annual Returns Bar Chart */}
-              {/* Shows grouped bars for each year, one bar per portfolio, colored to match line charts */}
+              {/* Returns Bar Chart — the same views as the Monthly tab's chart, applied to the
+                  backtested portfolios: grouped bars for each period, one bar per portfolio. */}
               <div className="bg-white p-4 rounded-lg shadow mt-4">
-                <h3 className="text-md font-semibold text-gray-700 mb-2">Annual Returns</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart
-                    data={getAnnualReturnsChartData(backtestResults, selectedDateRange.start)}
-                    margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="year" />
-                    <YAxis hide domain={['auto', 'auto']} />
-                    <Tooltip
-                      formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
-                      labelFormatter={(label) => `Year: ${label}`}
-                    />
-                    <Legend />
-                    {/* Create one Bar component for each portfolio */}
-                    {backtestResults.map((result) => (
-                      <Bar
-                        key={result.portfolio.id}
-                        dataKey={result.portfolio.name}
-                        fill={result.portfolio.color}
-                      >
-                        {/* Labels for positive returns - positioned above bar */}
-                        <LabelList
-                          dataKey={result.portfolio.name}
-                          position="top"
-                          formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                          style={{ fontSize: '11px', fill: '#666' }}
-                        />
-                        {/* Labels for negative returns - positioned below bar in red */}
-                        <LabelList
-                          dataKey={result.portfolio.name}
-                          position="bottom"
-                          formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                          style={{ fontSize: '11px', fill: '#ef4444' }}
-                        />
-                      </Bar>
-                    ))}
-                  </BarChart>
-                </ResponsiveContainer>
+                {(() => {
+                  const rolling = ROLLING_RETURN_YEARS.find(r => r.period === backtestReturnsPeriod);
+                  const rows = getPeriodicReturnsChartData(backtestResults, selectedDateRange.start, backtestReturnsPeriod);
+                  // ONE portfolio gets the Monthly tab's look exactly — black bars, red when
+                  // negative. TWO OR MORE keep their own colours, because telling the portfolios
+                  // apart is the entire point of this chart and one colour per sign would erase it.
+                  const singleSeries = backtestResults.length === 1;
+                  // The annual view keeps a label on every bar, exactly as it always had. The
+                  // other views can run to hundreds of bars, so it is the TOTAL number of labels
+                  // (bars x portfolios) that decides whether they would still be readable.
+                  const showLabels = backtestReturnsPeriod === 'annual'
+                    || rows.length * backtestResults.length < 48;
+                  const heading = backtestReturnsPeriod === 'annual' ? 'Annual Returns'
+                    : backtestReturnsPeriod === 'monthly' ? 'Monthly Returns'
+                    : backtestReturnsPeriod === 'quarterly' ? 'Quarterly Returns'
+                    : `Rolling ${rolling?.years}Y CAGR`;
+                  // Portfolio values are money, not prices, so they get thousands separators
+                  // rather than the Monthly tab's decimal-place-by-magnitude treatment.
+                  const fmtValue = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+                  return (
+                    <>
+                      <h3 className="text-md font-semibold text-gray-700 mb-2">{heading}</h3>
+                      {/* Period buttons, laid out and styled exactly like the Monthly tab's */}
+                      <div className="flex items-center gap-2 mb-2 px-2 flex-wrap">
+                        <span className="text-xs font-semibold text-gray-500">Returns:</span>
+                        {(['monthly', 'quarterly', 'annual'] as const).map(p => (
+                          <button
+                            key={p}
+                            onClick={() => setBacktestReturnsPeriod(p)}
+                            className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                              backtestReturnsPeriod === p
+                                ? 'bg-slate-800 text-white border-slate-800'
+                                : 'bg-white border-gray-300 hover:bg-gray-100'
+                            }`}
+                          >
+                            {p === 'monthly' ? 'Monthly' : p === 'quarterly' ? 'Quarterly' : 'Annual'}
+                          </button>
+                        ))}
+                        <span className="w-px h-4 bg-gray-300" />
+                        {ROLLING_RETURN_YEARS.map(r => (
+                          <button
+                            key={r.period}
+                            onClick={() => setBacktestReturnsPeriod(r.period)}
+                            title={`Rolling ${r.years}-year CAGR: every bar is the annual return the portfolio would have earned starting in that month and holding for ${r.years} year${r.years === 1 ? '' : 's'}. The X axis is the month the holding period STARTED.`}
+                            className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                              backtestReturnsPeriod === r.period
+                                ? 'bg-slate-800 text-white border-slate-800'
+                                : 'bg-white border-gray-300 hover:bg-gray-100'
+                            }`}
+                          >
+                            Rolling {r.years}Y
+                          </button>
+                        ))}
+                      </div>
+                      {rows.length === 0 ? (
+                        <p className="text-xs text-gray-500 px-2 py-6">
+                          The backtest is not long enough for a {rolling?.years}-year rolling window.
+                          Widen the date range above, or pick a shorter rolling window.
+                        </p>
+                      ) : (
+                      <ResponsiveContainer width="100%" height={300}>
+                        {/* No CartesianGrid, matching the Monthly tab's returns chart */}
+                        <BarChart data={rows} margin={{ top: 20, right: 5, left: 5, bottom: 5 }}>
+                          <XAxis
+                            dataKey="label"
+                            tick={(props: { x: number; y: number; payload: { value: string } }) => {
+                              const { x, y, payload } = props;
+                              const parts = String(payload.value).split('\n');
+                              if (parts.length === 2) {
+                                // Two-line label (quarterly: "2Q\n2024")
+                                return (
+                                  <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">
+                                    <tspan x={x} dy="0.5em">{parts[0]}</tspan>
+                                    <tspan x={x} dy="1.2em">{parts[1]}</tspan>
+                                  </text>
+                                );
+                              }
+                              // Single-line label (monthly/rolling: "Jan 25", annual: "2024")
+                              return <text x={x} y={y + 10} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
+                            }}
+                            height={35}
+                            interval={(backtestReturnsPeriod === 'monthly' || rolling) && rows.length > 24
+                              ? Math.max(0, Math.floor(rows.length / 20) - 1)
+                              : 0}
+                          />
+                          {/* The axis stays hidden while every bar carries its own label — that is
+                              how this chart has always looked. Once the labels are too dense to
+                              draw, it appears, so the bars never lose their scale entirely. */}
+                          {showLabels
+                            ? <YAxis hide domain={['auto', 'auto']} />
+                            : <YAxis tick={{ fontSize: 9 }} width={40} tickFormatter={(v: number) => `${v.toFixed(0)}%`} />}
+                          <Tooltip
+                            formatter={(value: number, name: string, props: { payload?: PeriodicReturnsRow }) => {
+                              const pct = `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
+                              if (!rolling) return [pct, name];
+                              // On a rolling view, show the two portfolio values the CAGR came
+                              // from — the same "here is the working" idea as the Monthly tab.
+                              const from = props?.payload?.[`${name}__start`];
+                              const to = props?.payload?.[`${name}__end`];
+                              return [
+                                typeof from === 'number' && typeof to === 'number'
+                                  ? `${pct}  (${fmtValue(from)} → ${fmtValue(to)})`
+                                  : pct,
+                                name,
+                              ];
+                            }}
+                            labelFormatter={(label: string, payload: readonly { payload?: PeriodicReturnsRow }[]) => {
+                              if (rolling) return payload?.[0]?.payload?.range || label;
+                              if (backtestReturnsPeriod === 'annual') return `Year: ${label}`;
+                              return String(label).replace('\n', ' ');
+                            }}
+                          />
+                          <Legend />
+                          <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                          {/* Create one Bar component for each portfolio */}
+                          {backtestResults.map((result) => (
+                            <Bar
+                              key={result.portfolio.id}
+                              dataKey={result.portfolio.name}
+                              fill={singleSeries ? '#000000' : result.portfolio.color}
+                              isAnimationActive={false}
+                            >
+                              {/* Single portfolio: colour each bar by sign, like the Monthly tab */}
+                              {singleSeries && rows.map((row, index) => (
+                                <Cell key={index} fill={Number(row[result.portfolio.name]) < 0 ? '#ef4444' : '#000000'} />
+                              ))}
+                              {/* Labels for positive returns - positioned above bar */}
+                              {showLabels && (
+                                <LabelList
+                                  dataKey={result.portfolio.name}
+                                  position="top"
+                                  formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                                  style={{ fontSize: '11px', fill: '#666' }}
+                                />
+                              )}
+                              {/* Labels for negative returns - positioned below bar in red */}
+                              {showLabels && (
+                                <LabelList
+                                  dataKey={result.portfolio.name}
+                                  position="bottom"
+                                  formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                                  style={{ fontSize: '11px', fill: '#ef4444' }}
+                                />
+                              )}
+                            </Bar>
+                          ))}
+                        </BarChart>
+                      </ResponsiveContainer>
+                      )}
+                      {/* The table below always shows CALENDAR YEARS, whatever the chart is
+                          showing, so say so rather than let the two look like they disagree. */}
+                      {backtestReturnsPeriod !== 'annual' && (
+                        <p className="text-[10px] text-gray-400 mt-2">
+                          The table below always shows calendar-year returns, regardless of the view selected above.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
                 {/* Same numbers as the bars above, in table form: one row per year, one column
                     per portfolio. It reads from the SAME getAnnualReturnsChartData() helper the
                     chart uses, so the table and the bars can never drift apart — including the
