@@ -738,8 +738,13 @@ const MONTHLY_CHART_PERIODS: MonthlyChartPeriod[] =
 // return would I have earned?" — so each bar is one COMPLETE N-year holding period,
 // plotted against the month it started. Think of it as sliding an N-year window along
 // the price history one month at a time and taking a photo at every stop.
+// The last two are different again: not returns at all but STREAK COUNTERS, one bar per
+// month, whose height is how many months the run has lasted. They reset to zero the moment
+// it breaks, so a long flat stretch of zeros is itself the finding — that is the asset
+// going nowhere near its high, or never stringing two green months together.
 type ReturnsChartPeriod =
-  'monthly' | 'quarterly' | 'annual' | 'rolling1Y' | 'rolling3Y' | 'rolling5Y' | 'rolling10Y';
+  'monthly' | 'quarterly' | 'annual' | 'rolling1Y' | 'rolling3Y' | 'rolling5Y' | 'rolling10Y'
+  | 'athStreak' | 'upStreak';
 // The rolling views and their window length in years. One place, so the buttons, the
 // maths and the labels can never disagree about what "Rolling 3Y" means.
 const ROLLING_RETURN_YEARS: { period: ReturnsChartPeriod; years: number }[] = [
@@ -747,6 +752,27 @@ const ROLLING_RETURN_YEARS: { period: ReturnsChartPeriod; years: number }[] = [
   { period: 'rolling3Y', years: 3 },
   { period: 'rolling5Y', years: 5 },
   { period: 'rolling10Y', years: 10 },
+];
+// The streak views, likewise named once and shared by both tabs' charts.
+const STREAK_VIEWS: { period: ReturnsChartPeriod; label: string; noun: string; hint: string }[] = [
+  {
+    period: 'athStreak',
+    label: 'ATHs',
+    noun: 'consecutive months at an all-time high',
+    hint: 'Consecutive months at an all-time high. The bar grows by one for every month that '
+        + 'closes at or above the highest month-end seen so far, and drops to zero the month it '
+        + 'closes below. Long flat stretches of zero are the interesting part: that is time spent '
+        + 'below a previous peak. Measured over the visible period, the same high-water mark the '
+        + 'drawdown chart uses, so the first month of the window counts as a high.',
+  },
+  {
+    period: 'upStreak',
+    label: 'Up Months',
+    noun: 'consecutive positive months',
+    hint: 'Consecutive months with a positive return, whether or not they set a new high. The bar '
+        + 'grows by one for each month that finishes up on the one before, and drops to zero on '
+        + 'any month that finishes flat or down.',
+  },
 ];
 // One bar of that chart. `range` and the two prices are only filled in by the rolling
 // views — a calendar-return bar has no single pair of prices behind it to quote.
@@ -3953,6 +3979,7 @@ const PortfolioBacktester = () => {
     }
 
     const rolling = ROLLING_RETURN_YEARS.find(r => r.period === period);
+    const streak = STREAK_VIEWS.find(s => s.period === period);
 
     // Portfolios are merged into shared rows so a bar group lines up on one X value.
     // A portfolio missing that period simply has no entry, and Recharts draws no bar.
@@ -3975,6 +4002,28 @@ const PortfolioBacktester = () => {
       const byMonth = new Map<string, { date: string; value: number }>();
       for (const p of result.returns) byMonth.set(toYM(new Date(p.date)), { date: p.date, value: p.value });
       const months = Array.from(byMonth.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+      if (streak) {
+        // Same counters as the Monthly tab, run on portfolio VALUE instead of price.
+        // The high-water mark starts at the first month of the backtest, so that month
+        // counts as a high — the same convention the drawdown figures use.
+        let peak = -Infinity;
+        let run = 0;
+        for (let i = 0; i < months.length; i++) {
+          const value = months[i][1].value;
+          let onRun: boolean;
+          if (period === 'athStreak') {
+            onRun = value >= peak;              // at the mark counts, matching drawdown == 0
+            if (value > peak) peak = value;
+          } else {
+            onRun = i > 0 && value > months[i - 1][1].value;   // strictly up on last month
+          }
+          run = onRun ? run + 1 : 0;
+          const row = rowFor(months[i][0], fmtMonth(new Date(months[i][1].date)));
+          row[name] = run;
+        }
+        return;
+      }
 
       if (rolling) {
         // Same method as the Monthly tab: look the window's end month up BY NAME rather
@@ -7378,6 +7427,7 @@ const PortfolioBacktester = () => {
               <div className="bg-white p-4 rounded-lg shadow mt-4">
                 {(() => {
                   const rolling = ROLLING_RETURN_YEARS.find(r => r.period === backtestReturnsPeriod);
+                  const streak = STREAK_VIEWS.find(s => s.period === backtestReturnsPeriod);
                   const rows = getPeriodicReturnsChartData(backtestResults, selectedDateRange.start, backtestReturnsPeriod);
                   // ONE portfolio gets the Monthly tab's look exactly — black bars, red when
                   // negative. TWO OR MORE keep their own colours, because telling the portfolios
@@ -7391,6 +7441,7 @@ const PortfolioBacktester = () => {
                   const heading = backtestReturnsPeriod === 'annual' ? 'Annual Returns'
                     : backtestReturnsPeriod === 'monthly' ? 'Monthly Returns'
                     : backtestReturnsPeriod === 'quarterly' ? 'Quarterly Returns'
+                    : streak ? (streak.period === 'athStreak' ? 'Consecutive Months at an All-Time High' : 'Consecutive Up Months')
                     : `Rolling ${rolling?.years}Y CAGR`;
                   // Portfolio values are money, not prices, so they get thousands separators
                   // rather than the Monthly tab's decimal-place-by-magnitude treatment.
@@ -7429,11 +7480,28 @@ const PortfolioBacktester = () => {
                             Rolling {r.years}Y
                           </button>
                         ))}
+                        {/* Streak counters — months, not percentages, hence their own group */}
+                        <span className="w-px h-4 bg-gray-300" />
+                        {STREAK_VIEWS.map(s => (
+                          <button
+                            key={s.period}
+                            onClick={() => setBacktestReturnsPeriod(s.period)}
+                            title={s.hint}
+                            className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                              backtestReturnsPeriod === s.period
+                                ? 'bg-slate-800 text-white border-slate-800'
+                                : 'bg-white border-gray-300 hover:bg-gray-100'
+                            }`}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
                       </div>
                       {rows.length === 0 ? (
                         <p className="text-xs text-gray-500 px-2 py-6">
-                          The backtest is not long enough for a {rolling?.years}-year rolling window.
-                          Widen the date range above, or pick a shorter rolling window.
+                          {rolling
+                            ? `The backtest is not long enough for a ${rolling.years}-year rolling window. Widen the date range above, or pick a shorter rolling window.`
+                            : 'No periods to show for this backtest.'}
                         </p>
                       ) : (
                       <ResponsiveContainer width="100%" height={300}>
@@ -7457,18 +7525,20 @@ const PortfolioBacktester = () => {
                               return <text x={x} y={y + 10} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
                             }}
                             height={35}
-                            interval={(backtestReturnsPeriod === 'monthly' || rolling) && rows.length > 24
+                            interval={(backtestReturnsPeriod === 'monthly' || rolling || streak) && rows.length > 24
                               ? Math.max(0, Math.floor(rows.length / 20) - 1)
                               : 0}
                           />
                           {/* The axis stays hidden while every bar carries its own label — that is
                               how this chart has always looked. Once the labels are too dense to
-                              draw, it appears, so the bars never lose their scale entirely. */}
+                              draw, it appears, so the bars never lose their scale entirely.
+                              Streaks are a count of months, so it drops the % sign. */}
                           {showLabels
                             ? <YAxis hide domain={['auto', 'auto']} />
-                            : <YAxis tick={{ fontSize: 9 }} width={40} tickFormatter={(v: number) => `${v.toFixed(0)}%`} />}
+                            : <YAxis tick={{ fontSize: 9 }} width={40} tickFormatter={(v: number) => streak ? v.toFixed(0) : `${v.toFixed(0)}%`} />}
                           <Tooltip
                             formatter={(value: number, name: string, props: { payload?: PeriodicReturnsRow }) => {
+                              if (streak) return [`${value} month${value === 1 ? '' : 's'}`, name];
                               const pct = `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
                               if (!rolling) return [pct, name];
                               // On a rolling view, show the two portfolio values the CAGR came
@@ -7502,12 +7572,15 @@ const PortfolioBacktester = () => {
                               {singleSeries && rows.map((row, index) => (
                                 <Cell key={index} fill={Number(row[result.portfolio.name]) < 0 ? '#ef4444' : '#000000'} />
                               ))}
-                              {/* Labels for positive returns - positioned above bar */}
+                              {/* Labels for positive returns - positioned above bar.
+                                  A streak label is a plain month count, not a percentage. */}
                               {showLabels && (
                                 <LabelList
                                   dataKey={result.portfolio.name}
                                   position="top"
-                                  formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                                  formatter={(value: number) => streak
+                                    ? (value > 0 ? String(value) : '')
+                                    : (value >= 0 ? `${value.toFixed(1)}%` : '')}
                                   style={{ fontSize: '11px', fill: '#666' }}
                                 />
                               )}
@@ -7554,11 +7627,16 @@ const PortfolioBacktester = () => {
                 // same thing", not a row of zero-height bars that looks like a broken chart.
                 const sameTwice = a.id === b.id || a.name === b.name;
                 const deltaRolling = ROLLING_RETURN_YEARS.find(r => r.period === backtestReturnsPeriod);
+                // The streak views have no sensible difference. Subtracting one run length
+                // from another — seven months at a high minus three — produces a number that
+                // reads like a quantity but means nothing, so this chart sits those views out
+                // and says so rather than drawing bars nobody could interpret.
+                const deltaStreak = STREAK_VIEWS.find(s => s.period === backtestReturnsPeriod);
 
                 // Built from the SAME helper as the returns chart above, so a bar here is
                 // always exactly the difference of two bars up there — and in the annual
                 // view, exactly the Δ column of the table. Nothing is recomputed.
-                const periodRows = sameTwice
+                const periodRows = (sameTwice || deltaStreak)
                   ? []
                   : getPeriodicReturnsChartData(backtestResults, selectedDateRange.start, backtestReturnsPeriod);
                 // One bar of this chart: the gap, plus both sides' own returns and (on a
@@ -7628,7 +7706,12 @@ const PortfolioBacktester = () => {
 
                     {/* No period buttons of its own: the row above the previous chart drives
                         this one too, which is the point of having them adjacent. */}
-                    {sameTwice ? (
+                    {deltaStreak ? (
+                      <p className="text-xs text-gray-500 px-2 py-6">
+                        Not applicable to the {deltaStreak.label} view — a streak minus a streak is not a
+                        meaningful number. Pick one of the returns views above to compare these two portfolios.
+                      </p>
+                    ) : sameTwice ? (
                       <p className="text-xs text-gray-500 px-2 py-6">
                         Pick two different portfolios to compare.
                       </p>
@@ -9586,11 +9669,47 @@ const PortfolioBacktester = () => {
                       // and reused by the maths below and by the chart itself (labels, tick
                       // spacing, tooltip wording), so the two can never disagree about the view.
                       const rollingView = ROLLING_RETURN_YEARS.find(r => r.period === returnsChartPeriod);
+                      // Likewise for the two streak counters, which are counts of months rather
+                      // than percentages and so need their own axis, tooltip and labels.
+                      const streakView = STREAK_VIEWS.find(s => s.period === returnsChartPeriod);
 
-                      // --- Compute periodic returns (monthly / quarterly / annual / rolling CAGR) ---
+                      // --- Compute periodic returns (monthly / quarterly / annual / rolling CAGR / streaks) ---
                       // (uses module-level MONTH_ABBR constant declared at top of file)
                       const computeReturnsData = (): ReturnsBar[] => {
                         if (priceData.length < 2) return [];
+
+                        // --- Streak views ---
+                        // One bar per month; its height is how many months the run has lasted.
+                        // Both reset to zero the moment it breaks.
+                        if (streakView) {
+                          const results: ReturnsBar[] = [];
+                          // Highest month-end SO FAR IN THE VISIBLE WINDOW — the same high-water
+                          // mark the drawdown chart above uses, so the two charts agree about
+                          // when the asset was at a peak. On "Max" that is the true all-time high.
+                          let peak = -Infinity;
+                          let streak = 0;
+                          for (let i = 0; i < priceData.length; i++) {
+                            const price = priceData[i].price;
+                            let onRun: boolean;
+                            if (streakView.period === 'athStreak') {
+                              // "At a high" means not below the mark, matching drawdown == 0,
+                              // so a month that merely holds the peak still counts.
+                              onRun = price >= peak;
+                              if (price > peak) peak = price;
+                            } else {
+                              // Strictly up on the previous month. The first month of the window
+                              // has nothing before it, so it can never start an up-run.
+                              onRun = i > 0 && price > priceData[i - 1].price;
+                            }
+                            streak = onRun ? streak + 1 : 0;
+                            const d = new Date(priceData[i].date);
+                            results.push({
+                              label: `${MONTH_ABBR[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`,
+                              return: streak,
+                            });
+                          }
+                          return results;
+                        }
 
                         // --- Rolling CAGR views ---
                         // Slide an N-year window along the visible history one month at a time.
@@ -9682,10 +9801,11 @@ const PortfolioBacktester = () => {
                         return results;
                       };
                       const returnsData = computeReturnsData();
-                      // A rolling view produces one bar per month, like the monthly view, so it
-                      // shares the monthly view's crowding rules for labels and axis ticks.
+                      // Rolling and streak views produce one bar per month, like the monthly view,
+                      // so they share the monthly view's crowding rules for labels and axis ticks.
                       // Show bar labels unless there are too many bars to read (≥48 = 4+ years)
-                      const showReturnLabels = (returnsChartPeriod !== 'monthly' && !rollingView) || returnsData.length < 48;
+                      const monthlyGrained = returnsChartPeriod === 'monthly' || !!rollingView || !!streakView;
+                      const showReturnLabels = !monthlyGrained || returnsData.length < 48;
 
                       // Build ReturnPoint[] from raw asset prices so we can reuse
                       // calculateMonthlyReturns() for the calendar-style returns table
@@ -11025,6 +11145,22 @@ const PortfolioBacktester = () => {
                                     Rolling {r.years}Y
                                   </button>
                                 ))}
+                                {/* Streak counters — months, not percentages, hence their own group */}
+                                <span className="w-px h-4 bg-gray-300" />
+                                {STREAK_VIEWS.map(s => (
+                                  <button
+                                    key={s.period}
+                                    onClick={() => setReturnsChartPeriod(s.period)}
+                                    title={s.hint}
+                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                      returnsChartPeriod === s.period
+                                        ? 'bg-slate-800 text-white border-slate-800'
+                                        : 'bg-white border-gray-300 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    {s.label}
+                                  </button>
+                                ))}
                               </div>
                               {/* A rolling window needs at least that many years of history to draw
                                   a single bar; say so instead of showing an empty chart. */}
@@ -11058,20 +11194,23 @@ const PortfolioBacktester = () => {
                                       return <text x={x} y={y + 10} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
                                     }}
                                     height={35}
-                                    interval={(returnsChartPeriod === 'monthly' || rollingView) && returnsData.length > 24
+                                    interval={monthlyGrained && returnsData.length > 24
                                       ? Math.max(0, Math.floor(returnsData.length / 20) - 1)
                                       : 0}
                                   />
+                                  {/* Streaks are a count of months, so the axis drops the % sign */}
                                   <YAxis
                                     tick={{ fontSize: 9 }}
                                     width={40}
-                                    tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+                                    tickFormatter={(v: number) => streakView ? v.toFixed(0) : `${v.toFixed(0)}%`}
                                   />
                                   <Tooltip
-                                    formatter={(value: number) => [
-                                      `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`,
-                                      rollingView ? `${rollingView.years}Y CAGR` : 'Return',
-                                    ]}
+                                    formatter={(value: number) => streakView
+                                      ? [`${value} month${value === 1 ? '' : 's'}`, streakView.noun]
+                                      : [
+                                        `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`,
+                                        rollingView ? `${rollingView.years}Y CAGR` : 'Return',
+                                      ]}
                                     {...(rollingView ? {
                                       // On a rolling view the X label alone ("Dec 09") is only half
                                       // the story, so the tooltip spells out the whole window and the
@@ -11103,12 +11242,15 @@ const PortfolioBacktester = () => {
                                     {returnsData.map((entry, index) => (
                                       <Cell key={index} fill={entry.return >= 0 ? '#000000' : '#ef4444'} />
                                     ))}
-                                    {/* Labels above positive bars */}
+                                    {/* Labels above positive bars — a plain month count on a streak
+                                        view, where a "%" would be nonsense */}
                                     {showReturnLabels && (
                                       <LabelList
                                         dataKey="return"
                                         position="top"
-                                        formatter={(value: number) => value >= 0 ? `+${value.toFixed(1)}%` : ''}
+                                        formatter={(value: number) => streakView
+                                          ? (value > 0 ? String(value) : '')
+                                          : (value >= 0 ? `+${value.toFixed(1)}%` : '')}
                                         style={{ fontSize: '9px', fill: '#666' }}
                                       />
                                     )}
