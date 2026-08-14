@@ -1386,12 +1386,12 @@ const PortfolioBacktester = () => {
   // returnsChartPeriod above so the two charts don't yank each other around. Defaults to
   // 'annual' — the only view this chart had before it gained the buttons.
   const [backtestReturnsPeriod, setBacktestReturnsPeriod] = useState<ReturnsChartPeriod>('annual');
-  // The head-to-head chart below it: which period, and which two portfolios are being
-  // compared (stored as positions in backtestResults, like the detail dropdowns above).
-  // The rolling views measure a different quantity to the calendar ones — the gap between
-  // two ANNUALISED returns over the same window, so percentage points PER YEAR rather than
-  // per period. The axis, tooltip and footnote all say so rather than leaving it implied.
-  const [deltaChartPeriod, setDeltaChartPeriod] = useState<ReturnsChartPeriod>('annual');
+  // The head-to-head chart sits directly under that one and READS THE SAME PERIOD — one row
+  // of buttons drives both, so the two charts can never be showing different periods while
+  // stacked on top of each other. Only the pair being compared is its own state.
+  // Note the rolling views measure a different quantity to the calendar ones there: the gap
+  // between two ANNUALISED returns over one window, so percentage points PER YEAR rather
+  // than per period. Its axis, tooltip and footnote all say so rather than leaving it implied.
   const [deltaPortfolioA, setDeltaPortfolioA] = useState(0);
   const [deltaPortfolioB, setDeltaPortfolioB] = useState(1);
   // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
@@ -7548,14 +7548,14 @@ const PortfolioBacktester = () => {
                 const a = backtestResults[aIdx].portfolio;
                 const b = backtestResults[bIdx].portfolio;
                 const sameTwice = a.id === b.id;
-                const deltaRolling = ROLLING_RETURN_YEARS.find(r => r.period === deltaChartPeriod);
+                const deltaRolling = ROLLING_RETURN_YEARS.find(r => r.period === backtestReturnsPeriod);
 
                 // Built from the SAME helper as the returns chart above, so a bar here is
                 // always exactly the difference of two bars up there — and in the annual
                 // view, exactly the Δ column of the table. Nothing is recomputed.
                 const periodRows = sameTwice
                   ? []
-                  : getPeriodicReturnsChartData(backtestResults, selectedDateRange.start, deltaChartPeriod);
+                  : getPeriodicReturnsChartData(backtestResults, selectedDateRange.start, backtestReturnsPeriod);
                 // One bar of this chart: the gap, plus both sides' own returns and (on a
                 // rolling view) the window the gap was measured over, for the tooltip.
                 type DeltaBar = { label: string; range?: string; delta: number; aVal: number; bVal: number };
@@ -7579,8 +7579,8 @@ const PortfolioBacktester = () => {
 
                 const aWins = rows.filter(r => r.delta > 0).length;
                 const periodNoun = deltaRolling ? `${deltaRolling.years}-year windows`
-                  : deltaChartPeriod === 'annual' ? 'years'
-                  : deltaChartPeriod === 'quarterly' ? 'quarters' : 'months';
+                  : backtestReturnsPeriod === 'annual' ? 'years'
+                  : backtestReturnsPeriod === 'quarterly' ? 'quarters' : 'months';
                 // Rolling bars are annualised, so their unit carries a "per year".
                 const unit = deltaRolling ? 'pp/yr' : 'pp';
                 // Same crowding rule as the chart above: one series here, so it is simply
@@ -7619,39 +7619,8 @@ const PortfolioBacktester = () => {
                       </div>
                     </div>
 
-                    {/* Period buttons — the same set the chart above has */}
-                    <div className="flex items-center gap-2 mb-2 px-2 flex-wrap">
-                      <span className="text-xs font-semibold text-gray-500">Returns:</span>
-                      {(['monthly', 'quarterly', 'annual'] as const).map(p => (
-                        <button
-                          key={p}
-                          onClick={() => setDeltaChartPeriod(p)}
-                          className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                            deltaChartPeriod === p
-                              ? 'bg-slate-800 text-white border-slate-800'
-                              : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
-                        >
-                          {p === 'monthly' ? 'Monthly' : p === 'quarterly' ? 'Quarterly' : 'Annual'}
-                        </button>
-                      ))}
-                      <span className="w-px h-4 bg-gray-300" />
-                      {ROLLING_RETURN_YEARS.map(r => (
-                        <button
-                          key={r.period}
-                          onClick={() => setDeltaChartPeriod(r.period)}
-                          title={`Rolling ${r.years}-year CAGR gap: for every ${r.years}-year holding period, how many percentage points PER YEAR one portfolio compounded ahead of the other. The X axis is the month the window started.`}
-                          className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                            deltaChartPeriod === r.period
-                              ? 'bg-slate-800 text-white border-slate-800'
-                              : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
-                        >
-                          Rolling {r.years}Y
-                        </button>
-                      ))}
-                    </div>
-
+                    {/* No period buttons of its own: the row above the previous chart drives
+                        this one too, which is the point of having them adjacent. */}
                     {sameTwice ? (
                       <p className="text-xs text-gray-500 px-2 py-6">
                         Pick two different portfolios to compare.
@@ -7696,7 +7665,7 @@ const PortfolioBacktester = () => {
                                 return <text x={x} y={y + 10} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
                               }}
                               height={35}
-                              interval={(deltaChartPeriod === 'monthly' || deltaRolling) && rows.length > 24
+                              interval={(backtestReturnsPeriod === 'monthly' || deltaRolling) && rows.length > 24
                                 ? Math.max(0, Math.floor(rows.length / 20) - 1)
                                 : 0}
                             />
