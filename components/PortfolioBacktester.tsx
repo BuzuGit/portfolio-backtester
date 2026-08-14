@@ -10724,6 +10724,170 @@ const PortfolioBacktester = () => {
                             </ResponsiveContainer>
                           </div>
 
+                          {/* Chart 3: Periodic Returns bar chart (Monthly / Quarterly / Annual / Rolling CAGR) */}
+                          {/* The rolling views are allowed through even with no bars, so a window
+                              longer than the visible history shows an explanation rather than
+                              silently taking the buttons away with it. */}
+                          {(returnsData.length > 0 || rollingView) && (
+                            <div className="mt-2">
+                              {/* Toggle buttons: Monthly | Quarterly | Annual, then the rolling views */}
+                              <div className="flex items-center gap-2 mb-1 px-2 flex-wrap">
+                                <span className="text-xs font-semibold text-gray-500">Returns:</span>
+                                {(['monthly', 'quarterly', 'annual'] as const).map(p => (
+                                  <button
+                                    key={p}
+                                    onClick={() => setReturnsChartPeriod(p)}
+                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                      returnsChartPeriod === p
+                                        ? 'bg-slate-800 text-white border-slate-800'
+                                        : 'bg-white border-gray-300 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    {p === 'monthly' ? 'Monthly' : p === 'quarterly' ? 'Quarterly' : 'Annual'}
+                                  </button>
+                                ))}
+                                {/* Rolling CAGR buttons — same look, kept in their own group after a
+                                    divider because they answer a different question to the three above. */}
+                                <span className="w-px h-4 bg-gray-300" />
+                                {ROLLING_RETURN_YEARS.map(r => (
+                                  <button
+                                    key={r.period}
+                                    onClick={() => setReturnsChartPeriod(r.period)}
+                                    title={`Rolling ${r.years}-year CAGR: every bar is the annual return you would have earned buying in that month and holding for ${r.years} year${r.years === 1 ? '' : 's'}. The X axis is the month the holding period STARTED.`}
+                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                      returnsChartPeriod === r.period
+                                        ? 'bg-slate-800 text-white border-slate-800'
+                                        : 'bg-white border-gray-300 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    Rolling {r.years}Y
+                                  </button>
+                                ))}
+                                {/* Streak counters — months, not percentages, hence their own group */}
+                                <span className="w-px h-4 bg-gray-300" />
+                                {STREAK_VIEWS.map(s => (
+                                  <button
+                                    key={s.period}
+                                    onClick={() => setReturnsChartPeriod(s.period)}
+                                    title={s.hint}
+                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                      returnsChartPeriod === s.period
+                                        ? 'bg-slate-800 text-white border-slate-800'
+                                        : 'bg-white border-gray-300 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    {s.label}
+                                  </button>
+                                ))}
+                              </div>
+                              {/* A rolling window needs at least that many years of history to draw
+                                  a single bar; say so instead of showing an empty chart. */}
+                              {returnsData.length === 0 ? (
+                                <p className="text-xs text-gray-500 px-2 py-6">
+                                  Not enough history in the visible period for a {rollingView?.years}-year rolling window.
+                                  Pick a longer period above (or Max), or a shorter rolling window.
+                                </p>
+                              ) : (
+                              /* height 300 = 50% taller than the original 200 for easier reading */
+                              <ResponsiveContainer width="100%" height={300}>
+                                {/* No CartesianGrid, matching the price and drawdown charts above:
+                                    the bars themselves carry the shape, and the dashed zero line
+                                    below is the only reference level that actually matters here. */}
+                                <BarChart data={returnsData} margin={{ top: 20, right: 10, left: -5, bottom: 15 }}>
+                                  <XAxis
+                                    dataKey="label"
+                                    tick={(props: { x: number; y: number; payload: { value: string } }) => {
+                                      const { x, y, payload } = props;
+                                      const parts = String(payload.value).split('\n');
+                                      if (parts.length === 2) {
+                                        // Two-line label (quarterly: "2Q\n2024")
+                                        return (
+                                          <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">
+                                            <tspan x={x} dy="0.5em">{parts[0]}</tspan>
+                                            <tspan x={x} dy="1.2em">{parts[1]}</tspan>
+                                          </text>
+                                        );
+                                      }
+                                      // Single-line label (monthly: "Jan 25", annual: "2024")
+                                      return <text x={x} y={y + 10} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
+                                    }}
+                                    height={35}
+                                    interval={monthlyGrained && returnsData.length > 24
+                                      ? Math.max(0, Math.floor(returnsData.length / 20) - 1)
+                                      : 0}
+                                  />
+                                  {/* Streaks are a count of months, so the axis drops the % sign */}
+                                  <YAxis
+                                    tick={{ fontSize: 9 }}
+                                    width={40}
+                                    tickFormatter={(v: number) => streakView ? v.toFixed(0) : `${v.toFixed(0)}%`}
+                                  />
+                                  <Tooltip
+                                    formatter={(value: number) => streakView
+                                      ? [`${value} month${value === 1 ? '' : 's'}`, streakView.noun]
+                                      : [
+                                        `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`,
+                                        rollingView ? `${rollingView.years}Y CAGR` : 'Return',
+                                      ]}
+                                    {...(rollingView ? {
+                                      // On a rolling view the X label alone ("Dec 09") is only half
+                                      // the story, so the tooltip spells out the whole window and the
+                                      // two month-end prices the CAGR was worked out from.
+                                      labelFormatter: (label: string,
+                                                       payload: readonly { payload?: { range?: string; startPrice?: number; endPrice?: number } }[]) => {
+                                        const p = payload?.[0]?.payload;
+                                        if (!p?.range) return label;
+                                        return (
+                                          <>
+                                            {p.range}
+                                            {p.startPrice !== undefined && p.endPrice !== undefined && (
+                                              <>
+                                                <br />
+                                                <span style={{ fontWeight: 400, color: '#6b7280' }}>
+                                                  {formatPrice(p.startPrice)} → {formatPrice(p.endPrice)}
+                                                  {' '}{monthlyDisplayCurrency || selectedAssetCcy}
+                                                </span>
+                                              </>
+                                            )}
+                                          </>
+                                        );
+                                      },
+                                    } : {})}
+                                  />
+                                  <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                                  <Bar dataKey="return" isAnimationActive={false}>
+                                    {/* Color each bar: black for positive, red for negative */}
+                                    {returnsData.map((entry, index) => (
+                                      <Cell key={index} fill={entry.return >= 0 ? '#000000' : '#ef4444'} />
+                                    ))}
+                                    {/* Labels above positive bars — a plain month count on a streak
+                                        view, where a "%" would be nonsense */}
+                                    {showReturnLabels && (
+                                      <LabelList
+                                        dataKey="return"
+                                        position="top"
+                                        formatter={(value: number) => streakView
+                                          ? (value > 0 ? String(value) : '')
+                                          : (value >= 0 ? `+${value.toFixed(1)}%` : '')}
+                                        style={{ fontSize: '9px', fill: '#666' }}
+                                      />
+                                    )}
+                                    {/* Labels below negative bars */}
+                                    {showReturnLabels && (
+                                      <LabelList
+                                        dataKey="return"
+                                        position="bottom"
+                                        formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                                        style={{ fontSize: '9px', fill: '#ef4444' }}
+                                      />
+                                    )}
+                                  </Bar>
+                                </BarChart>
+                              </ResponsiveContainer>
+                              )}
+                            </div>
+                          )}
+
                           {/* === DURING STRESS — this asset vs world equities, month by month === */}
                           {(() => {
                             // Years world equities had a hard time. 2020 and 2015 finished UP overall,
@@ -11013,7 +11177,7 @@ const PortfolioBacktester = () => {
                             );
                           })()}
 
-                          {/* Chart 3: SMA Distance — how far price is from 10-month SMA (in %) */}
+                          {/* Chart 4: SMA Distance — how far price is from 10-month SMA (in %) */}
                           {smaDistData.length > 0 && (
                             <div className="mt-2">
                               <ResponsiveContainer width="100%" height={180}>
@@ -11103,170 +11267,6 @@ const PortfolioBacktester = () => {
                                   )}
                                 </AreaChart>
                               </ResponsiveContainer>
-                            </div>
-                          )}
-
-                          {/* Chart 4: Periodic Returns bar chart (Monthly / Quarterly / Annual / Rolling CAGR) */}
-                          {/* The rolling views are allowed through even with no bars, so a window
-                              longer than the visible history shows an explanation rather than
-                              silently taking the buttons away with it. */}
-                          {(returnsData.length > 0 || rollingView) && (
-                            <div className="mt-2">
-                              {/* Toggle buttons: Monthly | Quarterly | Annual, then the rolling views */}
-                              <div className="flex items-center gap-2 mb-1 px-2 flex-wrap">
-                                <span className="text-xs font-semibold text-gray-500">Returns:</span>
-                                {(['monthly', 'quarterly', 'annual'] as const).map(p => (
-                                  <button
-                                    key={p}
-                                    onClick={() => setReturnsChartPeriod(p)}
-                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                      returnsChartPeriod === p
-                                        ? 'bg-slate-800 text-white border-slate-800'
-                                        : 'bg-white border-gray-300 hover:bg-gray-100'
-                                    }`}
-                                  >
-                                    {p === 'monthly' ? 'Monthly' : p === 'quarterly' ? 'Quarterly' : 'Annual'}
-                                  </button>
-                                ))}
-                                {/* Rolling CAGR buttons — same look, kept in their own group after a
-                                    divider because they answer a different question to the three above. */}
-                                <span className="w-px h-4 bg-gray-300" />
-                                {ROLLING_RETURN_YEARS.map(r => (
-                                  <button
-                                    key={r.period}
-                                    onClick={() => setReturnsChartPeriod(r.period)}
-                                    title={`Rolling ${r.years}-year CAGR: every bar is the annual return you would have earned buying in that month and holding for ${r.years} year${r.years === 1 ? '' : 's'}. The X axis is the month the holding period STARTED.`}
-                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                      returnsChartPeriod === r.period
-                                        ? 'bg-slate-800 text-white border-slate-800'
-                                        : 'bg-white border-gray-300 hover:bg-gray-100'
-                                    }`}
-                                  >
-                                    Rolling {r.years}Y
-                                  </button>
-                                ))}
-                                {/* Streak counters — months, not percentages, hence their own group */}
-                                <span className="w-px h-4 bg-gray-300" />
-                                {STREAK_VIEWS.map(s => (
-                                  <button
-                                    key={s.period}
-                                    onClick={() => setReturnsChartPeriod(s.period)}
-                                    title={s.hint}
-                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                      returnsChartPeriod === s.period
-                                        ? 'bg-slate-800 text-white border-slate-800'
-                                        : 'bg-white border-gray-300 hover:bg-gray-100'
-                                    }`}
-                                  >
-                                    {s.label}
-                                  </button>
-                                ))}
-                              </div>
-                              {/* A rolling window needs at least that many years of history to draw
-                                  a single bar; say so instead of showing an empty chart. */}
-                              {returnsData.length === 0 ? (
-                                <p className="text-xs text-gray-500 px-2 py-6">
-                                  Not enough history in the visible period for a {rollingView?.years}-year rolling window.
-                                  Pick a longer period above (or Max), or a shorter rolling window.
-                                </p>
-                              ) : (
-                              /* height 300 = 50% taller than the original 200 for easier reading */
-                              <ResponsiveContainer width="100%" height={300}>
-                                {/* No CartesianGrid, matching the price and drawdown charts above:
-                                    the bars themselves carry the shape, and the dashed zero line
-                                    below is the only reference level that actually matters here. */}
-                                <BarChart data={returnsData} margin={{ top: 20, right: 10, left: -5, bottom: 15 }}>
-                                  <XAxis
-                                    dataKey="label"
-                                    tick={(props: { x: number; y: number; payload: { value: string } }) => {
-                                      const { x, y, payload } = props;
-                                      const parts = String(payload.value).split('\n');
-                                      if (parts.length === 2) {
-                                        // Two-line label (quarterly: "2Q\n2024")
-                                        return (
-                                          <text x={x} y={y} textAnchor="middle" fontSize={9} fill="#6B7280">
-                                            <tspan x={x} dy="0.5em">{parts[0]}</tspan>
-                                            <tspan x={x} dy="1.2em">{parts[1]}</tspan>
-                                          </text>
-                                        );
-                                      }
-                                      // Single-line label (monthly: "Jan 25", annual: "2024")
-                                      return <text x={x} y={y + 10} textAnchor="middle" fontSize={9} fill="#6B7280">{payload.value}</text>;
-                                    }}
-                                    height={35}
-                                    interval={monthlyGrained && returnsData.length > 24
-                                      ? Math.max(0, Math.floor(returnsData.length / 20) - 1)
-                                      : 0}
-                                  />
-                                  {/* Streaks are a count of months, so the axis drops the % sign */}
-                                  <YAxis
-                                    tick={{ fontSize: 9 }}
-                                    width={40}
-                                    tickFormatter={(v: number) => streakView ? v.toFixed(0) : `${v.toFixed(0)}%`}
-                                  />
-                                  <Tooltip
-                                    formatter={(value: number) => streakView
-                                      ? [`${value} month${value === 1 ? '' : 's'}`, streakView.noun]
-                                      : [
-                                        `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`,
-                                        rollingView ? `${rollingView.years}Y CAGR` : 'Return',
-                                      ]}
-                                    {...(rollingView ? {
-                                      // On a rolling view the X label alone ("Dec 09") is only half
-                                      // the story, so the tooltip spells out the whole window and the
-                                      // two month-end prices the CAGR was worked out from.
-                                      labelFormatter: (label: string,
-                                                       payload: readonly { payload?: { range?: string; startPrice?: number; endPrice?: number } }[]) => {
-                                        const p = payload?.[0]?.payload;
-                                        if (!p?.range) return label;
-                                        return (
-                                          <>
-                                            {p.range}
-                                            {p.startPrice !== undefined && p.endPrice !== undefined && (
-                                              <>
-                                                <br />
-                                                <span style={{ fontWeight: 400, color: '#6b7280' }}>
-                                                  {formatPrice(p.startPrice)} → {formatPrice(p.endPrice)}
-                                                  {' '}{monthlyDisplayCurrency || selectedAssetCcy}
-                                                </span>
-                                              </>
-                                            )}
-                                          </>
-                                        );
-                                      },
-                                    } : {})}
-                                  />
-                                  <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
-                                  <Bar dataKey="return" isAnimationActive={false}>
-                                    {/* Color each bar: black for positive, red for negative */}
-                                    {returnsData.map((entry, index) => (
-                                      <Cell key={index} fill={entry.return >= 0 ? '#000000' : '#ef4444'} />
-                                    ))}
-                                    {/* Labels above positive bars — a plain month count on a streak
-                                        view, where a "%" would be nonsense */}
-                                    {showReturnLabels && (
-                                      <LabelList
-                                        dataKey="return"
-                                        position="top"
-                                        formatter={(value: number) => streakView
-                                          ? (value > 0 ? String(value) : '')
-                                          : (value >= 0 ? `+${value.toFixed(1)}%` : '')}
-                                        style={{ fontSize: '9px', fill: '#666' }}
-                                      />
-                                    )}
-                                    {/* Labels below negative bars */}
-                                    {showReturnLabels && (
-                                      <LabelList
-                                        dataKey="return"
-                                        position="bottom"
-                                        formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                        style={{ fontSize: '9px', fill: '#ef4444' }}
-                                      />
-                                    )}
-                                  </Bar>
-                                </BarChart>
-                              </ResponsiveContainer>
-                              )}
                             </div>
                           )}
 
