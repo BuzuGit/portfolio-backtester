@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 /*
   PORTFOLIO BACKTESTER COMPONENT
 
@@ -7525,118 +7525,18 @@ const PortfolioBacktester = () => {
                         </BarChart>
                       </ResponsiveContainer>
                       )}
-                      {/* The table below always shows CALENDAR YEARS, whatever the chart is
-                          showing, so say so rather than let the two look like they disagree. */}
+                      {/* The Δ table further down always shows CALENDAR YEARS, whatever this
+                          chart is showing, so say so rather than let the two look like they
+                          disagree. It is no longer the next thing on the page — the
+                          head-to-head chart sits between — hence "further down". */}
                       {backtestReturnsPeriod !== 'annual' && (
                         <p className="text-[10px] text-gray-400 mt-2">
-                          The table below always shows calendar-year returns, regardless of the view selected above.
+                          The year-by-year table further down always shows calendar-year returns, regardless of the view selected above.
                         </p>
                       )}
                     </>
                   );
                 })()}
-                {/* Same numbers as the bars above, in table form: one row per year, one column
-                    per portfolio. It reads from the SAME getAnnualReturnsChartData() helper the
-                    chart uses, so the table and the bars can never drift apart — including the
-                    rule that drops a December start year (only one data point, would show 0%). */}
-                {(() => {
-                  const annualRows = getAnnualReturnsChartData(backtestResults, selectedDateRange.start);
-                  if (annualRows.length === 0) return null;
-                  // The chart runs oldest -> newest left to right; the table puts the newest year
-                  // on top, matching the Returns tables further down the page.
-                  const rowsNewestFirst = [...annualRows].reverse();
-                  // The FIRST portfolio is the benchmark. Every other portfolio gets an extra
-                  // "Δ" column: its return minus the benchmark's, for the same year. Because
-                  // both numbers are already percentages, the difference is in percentage
-                  // POINTS (pp) — beating 10% with 12% is +2pp, not +2%.
-                  const benchmark = backtestResults[0];
-                  const challengers = backtestResults.slice(1);  // empty when there's only one portfolio
-                  return (
-                    <div className="overflow-x-auto mt-3">
-                      {/* Spell out what the Δ columns mean, so nobody has to guess the direction */}
-                      {challengers.length > 0 && (
-                        <p className="text-xs text-gray-500 mb-1">
-                          Δ columns = that portfolio minus <span className="font-medium" style={{ color: benchmark.portfolio.color }}>{benchmark.portfolio.name}</span> (benchmark), in percentage points.
-                        </p>
-                      )}
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="border-b-2 border-gray-200">
-                            <th className="text-left py-2 px-2 bg-gray-100 sticky left-0">Year</th>
-                            {/* One column per portfolio, its name in the same colour as its bar */}
-                            {backtestResults.map(result => (
-                              <th
-                                key={result.portfolio.id}
-                                className="text-right py-2 px-2 bg-gray-100 font-semibold"
-                                style={{ color: result.portfolio.color }}
-                                title={result.portfolio.id === benchmark.portfolio.id && challengers.length > 0
-                                  ? 'Benchmark — the Δ columns are measured against this portfolio'
-                                  : undefined}
-                              >
-                                {result.portfolio.name}
-                              </th>
-                            ))}
-                            {/* Then the Δ columns, one per non-benchmark portfolio */}
-                            {challengers.map(result => (
-                              <th
-                                key={`delta-${result.portfolio.id}`}
-                                className="text-right py-2 px-2 bg-gray-100 font-semibold border-l border-gray-300"
-                                style={{ color: result.portfolio.color }}
-                                title={`${result.portfolio.name} minus ${benchmark.portfolio.name} (benchmark), in percentage points`}
-                              >
-                                Δ {result.portfolio.name}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rowsNewestFirst.map(row => (
-                            <tr key={row.year} className="border-b border-gray-100">
-                              <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0">{row.year}</td>
-                              {backtestResults.map(result => {
-                                const ret = row[result.portfolio.name];
-                                // A portfolio with no return for this year (shouldn't normally happen,
-                                // since all portfolios share one date range) shows a dash, not a 0%
-                                if (typeof ret !== 'number') {
-                                  return <td key={result.portfolio.id} className="text-right py-2 px-2 text-gray-300">-</td>;
-                                }
-                                // Same green/red shading as the monthly Returns tables below
-                                const bgColor = ret >= 0 ? 'bg-green-50' : 'bg-red-50';
-                                const textColor = ret >= 0 ? 'text-green-700' : 'text-red-700';
-                                return (
-                                  <td key={result.portfolio.id} className={`text-right py-2 px-2 ${bgColor} ${textColor}`}>
-                                    {ret.toFixed(2)}%
-                                  </td>
-                                );
-                              })}
-                              {/* Δ vs benchmark. Deliberately NOT shaded like the columns above —
-                                  plain coloured text plus a divider line keeps the two blocks
-                                  visually separate, so a green cell always means "beat the benchmark"
-                                  here and "made money" over there. */}
-                              {challengers.map(result => {
-                                const base = row[benchmark.portfolio.name];
-                                const own = row[result.portfolio.name];
-                                if (typeof base !== 'number' || typeof own !== 'number') {
-                                  return <td key={`delta-${result.portfolio.id}`} className="text-right py-2 px-2 text-gray-300 border-l border-gray-300">-</td>;
-                                }
-                                const delta = own - base;
-                                return (
-                                  <td
-                                    key={`delta-${result.portfolio.id}`}
-                                    className={`text-right py-2 px-2 font-medium border-l border-gray-300 ${delta >= 0 ? 'text-green-700' : 'text-red-700'}`}
-                                  >
-                                    {delta >= 0 ? '+' : ''}{delta.toFixed(2)}pp
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  );
-                })()}
-              </div>
 
               {/* Head-to-head: one portfolio MINUS another, period by period.
                   Only worth showing when there are two portfolios to compare. */}
@@ -7688,7 +7588,10 @@ const PortfolioBacktester = () => {
                 const showLabels = rows.length < 48;
 
                 return (
-                  <div className="bg-white p-4 rounded-lg shadow mt-4">
+                  // A section of the returns card rather than a card of its own, so this
+                  // chart sits directly under the one it is derived from. A hairline rule
+                  // separates them, the way the Monthly tab divides its own sections.
+                  <div className="mt-6 border-t border-gray-200 pt-4">
                     <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                       <h3 className="text-md font-semibold text-gray-700">Head to Head</h3>
                       {/* Which two portfolios, in which direction. Positive bars always
@@ -7858,6 +7761,108 @@ const PortfolioBacktester = () => {
                   </div>
                 );
               })()}
+                {/* Same numbers as the bars above, in table form: one row per year, one column
+                    per portfolio. It reads from the SAME getAnnualReturnsChartData() helper the
+                    chart uses, so the table and the bars can never drift apart — including the
+                    rule that drops a December start year (only one data point, would show 0%). */}
+                {(() => {
+                  const annualRows = getAnnualReturnsChartData(backtestResults, selectedDateRange.start);
+                  if (annualRows.length === 0) return null;
+                  // The chart runs oldest -> newest left to right; the table puts the newest year
+                  // on top, matching the Returns tables further down the page.
+                  const rowsNewestFirst = [...annualRows].reverse();
+                  // The FIRST portfolio is the benchmark. Every other portfolio gets an extra
+                  // "Δ" column: its return minus the benchmark's, for the same year. Because
+                  // both numbers are already percentages, the difference is in percentage
+                  // POINTS (pp) — beating 10% with 12% is +2pp, not +2%.
+                  const benchmark = backtestResults[0];
+                  const challengers = backtestResults.slice(1);  // empty when there's only one portfolio
+                  return (
+                    <div className="overflow-x-auto mt-3">
+                      {/* Spell out what the Δ columns mean, so nobody has to guess the direction */}
+                      {challengers.length > 0 && (
+                        <p className="text-xs text-gray-500 mb-1">
+                          Δ columns = that portfolio minus <span className="font-medium" style={{ color: benchmark.portfolio.color }}>{benchmark.portfolio.name}</span> (benchmark), in percentage points.
+                        </p>
+                      )}
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b-2 border-gray-200">
+                            <th className="text-left py-2 px-2 bg-gray-100 sticky left-0">Year</th>
+                            {/* One column per portfolio, its name in the same colour as its bar */}
+                            {backtestResults.map(result => (
+                              <th
+                                key={result.portfolio.id}
+                                className="text-right py-2 px-2 bg-gray-100 font-semibold"
+                                style={{ color: result.portfolio.color }}
+                                title={result.portfolio.id === benchmark.portfolio.id && challengers.length > 0
+                                  ? 'Benchmark — the Δ columns are measured against this portfolio'
+                                  : undefined}
+                              >
+                                {result.portfolio.name}
+                              </th>
+                            ))}
+                            {/* Then the Δ columns, one per non-benchmark portfolio */}
+                            {challengers.map(result => (
+                              <th
+                                key={`delta-${result.portfolio.id}`}
+                                className="text-right py-2 px-2 bg-gray-100 font-semibold border-l border-gray-300"
+                                style={{ color: result.portfolio.color }}
+                                title={`${result.portfolio.name} minus ${benchmark.portfolio.name} (benchmark), in percentage points`}
+                              >
+                                Δ {result.portfolio.name}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rowsNewestFirst.map(row => (
+                            <tr key={row.year} className="border-b border-gray-100">
+                              <td className="py-2 px-2 font-medium bg-gray-50 sticky left-0">{row.year}</td>
+                              {backtestResults.map(result => {
+                                const ret = row[result.portfolio.name];
+                                // A portfolio with no return for this year (shouldn't normally happen,
+                                // since all portfolios share one date range) shows a dash, not a 0%
+                                if (typeof ret !== 'number') {
+                                  return <td key={result.portfolio.id} className="text-right py-2 px-2 text-gray-300">-</td>;
+                                }
+                                // Same green/red shading as the monthly Returns tables below
+                                const bgColor = ret >= 0 ? 'bg-green-50' : 'bg-red-50';
+                                const textColor = ret >= 0 ? 'text-green-700' : 'text-red-700';
+                                return (
+                                  <td key={result.portfolio.id} className={`text-right py-2 px-2 ${bgColor} ${textColor}`}>
+                                    {ret.toFixed(2)}%
+                                  </td>
+                                );
+                              })}
+                              {/* Δ vs benchmark. Deliberately NOT shaded like the columns above —
+                                  plain coloured text plus a divider line keeps the two blocks
+                                  visually separate, so a green cell always means "beat the benchmark"
+                                  here and "made money" over there. */}
+                              {challengers.map(result => {
+                                const base = row[benchmark.portfolio.name];
+                                const own = row[result.portfolio.name];
+                                if (typeof base !== 'number' || typeof own !== 'number') {
+                                  return <td key={`delta-${result.portfolio.id}`} className="text-right py-2 px-2 text-gray-300 border-l border-gray-300">-</td>;
+                                }
+                                const delta = own - base;
+                                return (
+                                  <td
+                                    key={`delta-${result.portfolio.id}`}
+                                    className={`text-right py-2 px-2 font-medium border-l border-gray-300 ${delta >= 0 ? 'text-green-700' : 'text-red-700'}`}
+                                  >
+                                    {delta >= 0 ? '+' : ''}{delta.toFixed(2)}pp
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+              </div>
 
               {/* Monthly Returns Tables */}
               {backtestResults.map((result, idx) => {
