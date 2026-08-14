@@ -7547,7 +7547,12 @@ const PortfolioBacktester = () => {
                 const bIdx = backtestResults[deltaPortfolioB] ? deltaPortfolioB : 1;
                 const a = backtestResults[aIdx].portfolio;
                 const b = backtestResults[bIdx].portfolio;
-                const sameTwice = a.id === b.id;
+                // Same portfolio picked twice — or two portfolios sharing a name, which the
+                // chart data is keyed by. An auto-generated name covers assets, currency and
+                // inflation adjustment, and rebalancing is a global setting, so a shared name
+                // means genuinely identical portfolios: the honest answer is "these are the
+                // same thing", not a row of zero-height bars that looks like a broken chart.
+                const sameTwice = a.id === b.id || a.name === b.name;
                 const deltaRolling = ROLLING_RETURN_YEARS.find(r => r.period === backtestReturnsPeriod);
 
                 // Built from the SAME helper as the returns chart above, so a bar here is
@@ -7598,6 +7603,7 @@ const PortfolioBacktester = () => {
                           mean the FIRST dropdown is ahead. */}
                       <div className="flex items-center gap-2 text-sm">
                         <select
+                          aria-label="Portfolio shown as positive bars"
                           className="border rounded px-2 py-1 text-sm"
                           value={aIdx}
                           onChange={(e) => setDeltaPortfolioA(parseInt(e.target.value))}
@@ -7608,6 +7614,7 @@ const PortfolioBacktester = () => {
                         </select>
                         <span className="text-gray-500">vs</span>
                         <select
+                          aria-label="Portfolio shown as negative bars"
                           className="border rounded px-2 py-1 text-sm"
                           value={bIdx}
                           onChange={(e) => setDeltaPortfolioB(parseInt(e.target.value))}
