@@ -9587,15 +9587,11 @@ const PortfolioBacktester = () => {
                             ? findUnderwaterPeriods(realPriceData)
                             : underwaterPeriods
                           ).filter(p => p.months >= 12);
-                      // Peak and trough of whichever series is drawn, so the two dots stay on the line.
-                      const ddMaxPoint = isDrawdownView
-                        ? ddSeries.reduce((best, d) => (!best || d.price > best.price ? d : best), null as (typeof ddSeries)[number] | null)
-                        : null;
-                      const ddMinPoint = isDrawdownView
-                        ? ddSeries.reduce((worst, d) => (!worst || d.price < worst.price ? d : worst), null as (typeof ddSeries)[number] | null)
-                        : null;
-                      const shownMaxPoint = isDrawdownView ? ddMaxPoint : maxPricePoint;
-                      const shownMinPoint = isDrawdownView ? ddMinPoint : minPricePoint;
+                      // The green/red highest- and lowest-price dots. The drawdown views leave them
+                      // off: those charts are already telling a story in percentages — peaks, troughs
+                      // and depths — and a raw price marker on top of it is noise.
+                      const shownMaxPoint = isDrawdownView ? null : maxPricePoint;
+                      const shownMinPoint = isDrawdownView ? null : minPricePoint;
 
                       // Y-axis scale for the price chart. Built from whichever lines are actually
                       // on screen (the SMA can dip below the visible price range; the high water
@@ -10664,10 +10660,7 @@ const PortfolioBacktester = () => {
                                   label={{
                                     value: `${p.depthPct.toFixed(1)}% after ${formatPeriod(p.troughMonths)}`,
                                     position: 'bottom',
-                                    // When this trough is also the window's lowest price, the red dot
-                                    // already prints its price right underneath — drop a line further
-                                    // down so the two labels don't sit on top of each other.
-                                    offset: shownMinPoint && shownMinPoint.date === p.troughDate ? 26 : 6,
+                                    offset: 6,
                                     fontSize: 11,
                                     fill: CHART_PALETTE.wine,
                                     fontWeight: 600,
