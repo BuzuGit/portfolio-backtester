@@ -825,6 +825,10 @@ interface UnderwaterPeriod {
   midDate: string;     // middle of the stretch — where the duration label is drawn
   months: number;      // how many months were spent underwater
   peak: number;        // the price level that had to be won back
+  troughDate: string;  // the month the price bottomed out inside this stretch
+  troughPrice: number; // the lowest close of the stretch
+  troughMonths: number;// months from the old peak down to that trough
+  depthPct: number;    // how far below the peak the trough sat, e.g. -32.4
 }
 
 /**
@@ -837,14 +841,28 @@ function findUnderwaterPeriods(series: { date: string; price: number; hwm: numbe
   const periods: UnderwaterPeriod[] = [];
   let runStart = -1;  // index where the current stretch began (-1 = not underwater)
   const closeRun = (startIdx: number, endIdx: number) => {
+    // The high water mark cannot move while underwater, so any index in the run gives
+    // the same peak — the one the price is trying to climb back to.
+    const peak = series[startIdx].hwm;
+    // Walk the stretch to find its lowest close: the bottom of the dip. That splits the
+    // stretch into its two halves of the story — the fall (peak to trough) and the climb
+    // back (trough to recovery).
+    let troughIdx = startIdx;
+    for (let i = startIdx + 1; i <= endIdx; i++) {
+      if (series[i].price < series[troughIdx].price) troughIdx = i;
+    }
     periods.push({
       startDate: series[startIdx].date,
       endDate: series[endIdx].date,
       midDate: series[Math.floor((startIdx + endIdx) / 2)].date,
       months: endIdx - startIdx + 1,
-      // The high water mark cannot move while underwater, so any index in the run gives
-      // the same peak — the one the price is trying to climb back to.
-      peak: series[startIdx].hwm,
+      peak,
+      troughDate: series[troughIdx].date,
+      troughPrice: series[troughIdx].price,
+      // Counted the same way as `months` above: the number of months elapsed since the
+      // peak month, so "1y 5m" means the trough came 1y 5m after the old all-time high.
+      troughMonths: troughIdx - startIdx + 1,
+      depthPct: (series[troughIdx].price / peak - 1) * 100,
     });
   };
   for (let i = 0; i < series.length; i++) {
@@ -10623,6 +10641,33 @@ const PortfolioBacktester = () => {
                                   label={{
                                     value: formatPeriod(p.months),
                                     position: 'top',
+                                    fontSize: 11,
+                                    fill: CHART_PALETTE.wine,
+                                    fontWeight: 600,
+                                  }}
+                                />
+                              ))}
+                              {/* The other half of each of those stretches: how far and how fast the
+                                  fall was. Sits just under the price line at the bottom of the dip and
+                                  reads "-32.4% after 1y 5m" — the depth below the old peak, and how long
+                                  it took to get there. The label above answers "how long back to a new
+                                  high?"; this one answers "how bad did it get, and how quickly?".
+                                  Same invisible-anchor trick (r=0) as above. */}
+                              {labelledUnderwaterPeriods.map(p => (
+                                <ReferenceDot
+                                  key={`uw-trough-${p.startDate}`}
+                                  x={p.troughDate}
+                                  y={p.troughPrice}
+                                  r={0}
+                                  fill="none"
+                                  stroke="none"
+                                  label={{
+                                    value: `${p.depthPct.toFixed(1)}% after ${formatPeriod(p.troughMonths)}`,
+                                    position: 'bottom',
+                                    // When this trough is also the window's lowest price, the red dot
+                                    // already prints its price right underneath — drop a line further
+                                    // down so the two labels don't sit on top of each other.
+                                    offset: shownMinPoint && shownMinPoint.date === p.troughDate ? 26 : 6,
                                     fontSize: 11,
                                     fill: CHART_PALETTE.wine,
                                     fontWeight: 600,
