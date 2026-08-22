@@ -372,6 +372,52 @@ interface BubbleDef {
   label: string;   // formatted text to display inside the bubble
 }
 
+/** One buy or sell marker on a position's price-history chart.
+ *  Two prices, deliberately:
+ *   - `price`      the month-END price, i.e. exactly where the black price line sits that
+ *                  month. This is where the stem that ties the dot back to the line ends.
+ *   - `tradePrice` what you actually paid or received per share. The dot itself is drawn
+ *                  here, so it floats above the line on a bad fill and below it on a good
+ *                  one, while staying in the correct month horizontally. */
+interface TradeDot {
+  date: string;
+  price: number;
+  tradePrice: number;
+}
+
+/** Adds one real trade price into a month bucket. A month can hold several trades, so each
+ *  bucket is a list and every entry becomes its own dot. Non-positive prices are ignored —
+ *  a missing price would otherwise drag a dot down to zero. */
+function pushTradePrice(map: Map<string, number[]>, ym: string, price: number) {
+  if (!(price > 0)) return;
+  const existing = map.get(ym);
+  if (existing) existing.push(price);
+  else map.set(ym, [price]);
+}
+
+/** Two fills within half a percent of each other land on the same pixel, so drawing both
+ *  gives you one dot with two price labels printed on top of each other — unreadable. This
+ *  is purely a legibility rule, not an accounting one: fills that actually differ still get
+ *  their own dot, but a batch that filled at effectively one price is shown once, at the
+ *  average of that batch. It also collapses the common case of one sale closing five lots,
+ *  which arrives here as the same sell price repeated five times. */
+const TRADE_DOT_MERGE_TOLERANCE = 0.005;
+function collapseTradePrices(prices: number[]): number[] {
+  if (prices.length < 2) return prices;
+  const sorted = [...prices].sort((a, b) => a - b);
+  const merged: number[] = [];
+  let group: number[] = [];
+  const flush = () => { if (group.length) merged.push(group.reduce((s, p) => s + p, 0) / group.length); };
+  for (const p of sorted) {
+    // Compare against the LOWEST price in the current group, so a long chain of tiny steps
+    // can't quietly drift a whole percent away from where the group started.
+    if (group.length === 0 || (p - group[0]) / group[0] <= TRADE_DOT_MERGE_TOLERANCE) group.push(p);
+    else { flush(); group = [p]; }
+  }
+  flush();
+  return merged;
+}
+
 // Shared constants for all right-edge bubbles across charts
 const BUBBLE_W = 62;   // width of the bubble rectangle in pixels
 const BUBBLE_H = 20;   // height of the bubble rectangle
@@ -2105,13 +2151,27 @@ const PortfolioBacktester = () => {
    * - sellDots: array of {date, price} for red sell markers
    */
   const getClosedChartData = (ticker: string) => {
-    if (!assetData) return { chartData: [] as { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number; shares: number }[], buyDots: [] as { date: string; price: number }[], sellDots: [] as { date: string; price: number }[] };
+    if (!assetData) return { chartData: [] as { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number; shares: number }[], buyDots: [] as TradeDot[], sellDots: [] as TradeDot[] };
 
     const transactions = getFilteredClosedTransactions(ticker);
 
     // Collect buy and sell months in YYYY-MM format for matching against monthly price data
     const buyMonths = new Set(transactions.map(t => toYM(new Date(t.invDate))));
     const sellMonths = new Set(transactions.map(t => toYM(new Date(t.divDate))));
+
+    // The price you ACTUALLY paid / received, per transaction, bucketed by month.
+    // The price line itself only knows month-END prices, but a trade almost never happens
+    // on the last day of the month — so the real fill sits above or below the line. These
+    // maps let each dot be drawn at its true price. A month can hold several trades, so the
+    // value is a list, and each entry gets its own dot stacked at that month.
+    const buyPricesByMonth = new Map<string, number[]>();
+    const sellPricesByMonth = new Map<string, number[]>();
+    for (const t of transactions) {
+      // Sheet columns `Buy Price` / `Sell price` are already per-share and exclude commission,
+      // which matches how the Transaction History table shows them.
+      if (t.buyPrice > 0) pushTradePrice(buyPricesByMonth, toYM(new Date(t.invDate)), t.buyPrice);
+      if (t.sellPrice > 0) pushTradePrice(sellPricesByMonth, toYM(new Date(t.divDate)), t.sellPrice);
+    }
 
     // Determine date boundaries for "Since Invested" and "Until Sold" toggles
     const sortedBuyDates = transactions.map(t => t.invDate).sort();
@@ -2248,8 +2308,8 @@ const PortfolioBacktester = () => {
 
     // Now build chart data, carrying the avg prices forward through months
     const chartData: { date: string; price: number; avgBuyPrice?: number; avgSellPrice?: number; shares: number; investedCapital: number }[] = [];
-    const buyDots: { date: string; price: number }[] = [];
-    const sellDots: { date: string; price: number }[] = [];
+    const buyDots: TradeDot[] = [];
+    const sellDots: TradeDot[] = [];
 
     let currentAvgPrice: number | undefined = undefined;
     let currentAvgSellPrice: number | undefined = undefined;
@@ -2310,9 +2370,19 @@ const PortfolioBacktester = () => {
         investedCapital: currentInvested,
       });
 
-      // Mark buy/sell months with dots
-      if (buyMonths.has(rowYM)) buyDots.push({ date: row.date, price });
-      if (sellMonths.has(rowYM)) sellDots.push({ date: row.date, price });
+      // Mark buy/sell months with dots — one dot per transaction, each at its real fill price.
+      // If the sheet has no usable price for a trade we fall back to the month-end price, which
+      // is what these dots showed before, so such a dot simply sits on the line as it used to.
+      if (buyMonths.has(rowYM)) {
+        const fills = collapseTradePrices(buyPricesByMonth.get(rowYM) ?? []);
+        if (fills.length > 0) fills.forEach(tp => buyDots.push({ date: row.date, price, tradePrice: tp }));
+        else buyDots.push({ date: row.date, price, tradePrice: price });
+      }
+      if (sellMonths.has(rowYM)) {
+        const fills = collapseTradePrices(sellPricesByMonth.get(rowYM) ?? []);
+        if (fills.length > 0) fills.forEach(tp => sellDots.push({ date: row.date, price, tradePrice: tp }));
+        else sellDots.push({ date: row.date, price, tradePrice: price });
+      }
     }
 
     return { chartData, buyDots, sellDots };
@@ -2694,13 +2764,22 @@ const PortfolioBacktester = () => {
    * - Chart extends to the latest available data month (no "Until Sold" cutoff)
    */
   const getOpenChartData = (ticker: string) => {
-    if (!assetData) return { chartData: [] as { date: string; price: number; avgBuyPrice?: number; shares: number }[], buyDots: [] as { date: string; price: number }[] };
+    if (!assetData) return { chartData: [] as { date: string; price: number; avgBuyPrice?: number; shares: number }[], buyDots: [] as TradeDot[] };
 
     const purchases = getFilteredOpenPurchases(ticker);
     const dividends = getOpenDividends(ticker);
 
     // Collect buy months for green dot markers
     const buyMonths = new Set(purchases.map(t => toYM(new Date(t.date))));
+
+    // The price actually paid per share, per purchase, bucketed by month — so each dot can be
+    // drawn at its true fill rather than on the month-end price line. The transactions sheet
+    // has no price column, so we derive it the same way the Transaction History table does:
+    // `amount` is the all-in cost, so stripping the commission back out leaves the share price.
+    const buyPricesByMonth = new Map<string, number[]>();
+    for (const t of purchases) {
+      if (t.qty > 0) pushTradePrice(buyPricesByMonth, toYM(new Date(t.date)), (t.amount - t.commAbs) / t.qty);
+    }
 
     // The asset's FULL trade history — shares still held plus any round trips completed years
     // ago — exactly the list the Transaction History table renders. The Shares Held bars are
@@ -2752,7 +2831,7 @@ const PortfolioBacktester = () => {
 
     // Build chart data, carrying the avg price forward through months
     const chartData: { date: string; price: number; avgBuyPrice?: number; shares: number; investedCapital: number; fifoAvgPrice?: number | null }[] = [];
-    const buyDots: { date: string; price: number }[] = [];
+    const buyDots: TradeDot[] = [];
     let currentAvg: number | undefined = undefined;
     // Shares held and capital invested, carried forward. Both start at 0 so months before the
     // first purchase read as zero.
@@ -2805,8 +2884,13 @@ const PortfolioBacktester = () => {
         fifoAvgPrice: currentFifoAvg,
       });
 
-      // Mark buy months with green dots
-      if (buyMonths.has(rowYM)) buyDots.push({ date: row.date, price });
+      // Mark buy months with dots — one per purchase, each at its real fill price. Falls back
+      // to the month-end price if a purchase has no usable price, i.e. the old behaviour.
+      if (buyMonths.has(rowYM)) {
+        const fills = collapseTradePrices(buyPricesByMonth.get(rowYM) ?? []);
+        if (fills.length > 0) fills.forEach(tp => buyDots.push({ date: row.date, price, tradePrice: tp }));
+        else buyDots.push({ date: row.date, price, tradePrice: price });
+      }
     }
 
     return { chartData, buyDots };
@@ -16175,7 +16259,7 @@ const PortfolioBacktester = () => {
                           return (
                             <ResponsiveContainer width="100%" height={350}>
                               <LineChart data={mergedChartData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
-                                <CartesianGrid strokeDasharray="3 3" />
+                                {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                                 <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                                 <YAxis tick={{ fontSize: 9 }} width={40} domain={['auto', 'auto']} />
                                 <Tooltip formatter={(value: number, name: string) => value != null ? [value.toFixed(2), name] : ['-', name]} />
@@ -16188,6 +16272,15 @@ const PortfolioBacktester = () => {
                                 {openShowAvgBuy && (
                                   <Line type="stepAfter" dataKey="avgBuyPrice" name="Avg Buy (Div Adj)" stroke={CHART_PALETTE.olive} strokeWidth={1.5} dot={false} strokeDasharray="6 3" connectNulls />
                                 )}
+                                {/* Faint stems tying each floating buy dot back to the price line in
+                                    its own month. Drawn before the dots so they pass underneath them.
+                                    ifOverflow="extendDomain" on the dots stretches the Y axis to fit any
+                                    fill outside the plotted price range — without it Recharts silently
+                                    discards a dot that falls off the top or bottom of the chart. */}
+                                {buyDots.map((dot, i) => (
+                                  <ReferenceLine key={`buy-stem-${i}`} ifOverflow="extendDomain" stroke={CHART_PALETTE.olive} strokeOpacity={0.45} strokeWidth={1}
+                                    segment={[{ x: dot.date, y: dot.price }, { x: dot.date, y: dot.tradePrice }]} />
+                                ))}
                                 {openShowMinMax && maxPricePoint && (
                                   <ReferenceDot x={maxPricePoint.date} y={maxPricePoint.price} r={9} fill={CHART_PALETTE.blue} stroke="#fff" strokeWidth={2}
                                     label={{ value: maxPricePoint.price.toFixed(2), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
@@ -16197,7 +16290,9 @@ const PortfolioBacktester = () => {
                                     label={{ value: minPricePoint.price.toFixed(2), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                 )}
                                 {buyDots.map((dot, i) => (
-                                  <ReferenceDot key={`buy-${i}`} x={dot.date} y={dot.price} r={6} fill={CHART_PALETTE.olive} stroke="#fff" strokeWidth={2} />
+                                  <ReferenceDot key={`buy-${i}`} x={dot.date} y={dot.tradePrice} r={6} fill={CHART_PALETTE.olive} stroke="#fff" strokeWidth={2}
+                                    ifOverflow="extendDomain"
+                                    label={{ value: dot.tradePrice.toFixed(2), position: 'top', fontSize: 11, fill: CHART_PALETTE.olive, fontWeight: 600 }} />
                                 ))}
                               </LineChart>
                             </ResponsiveContainer>
@@ -16244,7 +16339,7 @@ const PortfolioBacktester = () => {
                           <h5 className="text-xs font-semibold text-gray-600 mb-1 px-2">Shares Held</h5>
                           <ResponsiveContainer width="100%" height={150}>
                             <BarChart data={mergedChartData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
-                              <CartesianGrid strokeDasharray="3 3" />
+                              {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                               <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                               <YAxis tick={{ fontSize: 9 }} width={40} domain={[0, 'auto']} />
                               <Tooltip content={<SharesHeldTooltip />} cursor={{ fill: 'rgba(0,0,0,0.06)' }} />
@@ -16305,7 +16400,7 @@ const PortfolioBacktester = () => {
                           return (
                             <ResponsiveContainer width="100%" height={250}>
                               <AreaChart data={capitalChartData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
-                                <CartesianGrid strokeDasharray="3 3" />
+                                {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                                 <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                                 <YAxis tick={{ fontSize: 9 }} width={40} />
                                 <Tooltip formatter={(value: number, name: string) => value != null ? [value.toLocaleString(), name] : ['-', name]} />
@@ -16376,7 +16471,7 @@ const PortfolioBacktester = () => {
                                       <stop offset="100%" stopColor="#ef4444" />
                                     </linearGradient>
                                   </defs>
-                                  <CartesianGrid strokeDasharray="3 3" />
+                                  {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                                   <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                                   <YAxis tick={{ fontSize: 9 }} width={40} />
                                   <Tooltip formatter={(value: number) => value != null ? [`${value >= 0 ? '+' : ''}${value.toLocaleString()}`, 'PnL'] : ['-', 'PnL']} />
@@ -17019,7 +17114,7 @@ const PortfolioBacktester = () => {
                         <ResponsiveContainer width="100%" height={350}>
                           {/* Right margin widened to 70 to make room for the right-edge bubbles */}
                           <LineChart data={mergedChartData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
-                            <CartesianGrid strokeDasharray="3 3" />
+                            {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                             <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                             <YAxis tick={{ fontSize: 9 }} width={40} domain={['auto', 'auto']} />
                             <Tooltip
@@ -17084,6 +17179,19 @@ const PortfolioBacktester = () => {
                                 connectNulls
                               />
                             )}
+                            {/* Faint stems tying each floating buy/sell dot back to the price line
+                               in its own month. Drawn first so they pass under every dot.
+                               ifOverflow="extendDomain" on the dots stretches the Y axis to fit a
+                               fill outside the plotted price range — without it Recharts silently
+                               discards any dot that falls off the top or bottom of the chart. */}
+                            {buyDots.map((dot, i) => (
+                              <ReferenceLine key={`buy-stem-${i}`} ifOverflow="extendDomain" stroke={CHART_PALETTE.olive} strokeOpacity={0.45} strokeWidth={1}
+                                segment={[{ x: dot.date, y: dot.price }, { x: dot.date, y: dot.tradePrice }]} />
+                            ))}
+                            {sellDots.map((dot, i) => (
+                              <ReferenceLine key={`sell-stem-${i}`} ifOverflow="extendDomain" stroke={CHART_PALETTE.wine} strokeOpacity={0.45} strokeWidth={1}
+                                segment={[{ x: dot.date, y: dot.price }, { x: dot.date, y: dot.tradePrice }]} />
+                            ))}
                             {/* Max/min price dots render FIRST (behind) so buy/sell dots
                                appear on top when they overlap. Larger radius (r=9) creates
                                a visible ring around any overlapping buy/sell dot (r=6). */}
@@ -17123,28 +17231,35 @@ const PortfolioBacktester = () => {
                                 }}
                               />
                             )}
-                            {/* Buy-month dots (on top of max/min) — olive, matching the Avg Buy line */}
+                            {/* Buy dots (on top of max/min) — olive, matching the Avg Buy line.
+                               Placed at the price actually PAID, labelled with it, so a dot can
+                               sit off the line while still standing in its own month. */}
                             {buyDots.map((dot, i) => (
                               <ReferenceDot
                                 key={`buy-${i}`}
                                 x={dot.date}
-                                y={dot.price}
+                                y={dot.tradePrice}
                                 r={6}
                                 fill={CHART_PALETTE.olive}
                                 stroke="#fff"
                                 strokeWidth={2}
+                                ifOverflow="extendDomain"
+                                label={{ value: dot.tradePrice.toFixed(2), position: 'top', fontSize: 11, fill: CHART_PALETTE.olive, fontWeight: 600 }}
                               />
                             ))}
-                            {/* Sell-month dots (on top of max/min) — wine, matching the Avg Sell line */}
+                            {/* Sell dots (on top of max/min) — wine, matching the Avg Sell line.
+                               Same idea: drawn at the price actually RECEIVED. */}
                             {sellDots.map((dot, i) => (
                               <ReferenceDot
                                 key={`sell-${i}`}
                                 x={dot.date}
-                                y={dot.price}
+                                y={dot.tradePrice}
                                 r={6}
                                 fill={CHART_PALETTE.wine}
                                 stroke="#fff"
                                 strokeWidth={2}
+                                ifOverflow="extendDomain"
+                                label={{ value: dot.tradePrice.toFixed(2), position: 'top', fontSize: 11, fill: CHART_PALETTE.wine, fontWeight: 600 }}
                               />
                             ))}
                           </LineChart>
@@ -17197,7 +17312,7 @@ const PortfolioBacktester = () => {
                           <h5 className="text-xs font-semibold text-gray-600 mb-1 px-2">Shares Held</h5>
                           <ResponsiveContainer width="100%" height={150}>
                             <BarChart data={mergedChartData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
-                              <CartesianGrid strokeDasharray="3 3" />
+                              {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                               <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                               <YAxis tick={{ fontSize: 9 }} width={40} domain={[0, 'auto']} />
                               <Tooltip content={<SharesHeldTooltip />} cursor={{ fill: 'rgba(0,0,0,0.06)' }} />
@@ -17263,7 +17378,7 @@ const PortfolioBacktester = () => {
                           return (
                         <ResponsiveContainer width="100%" height={250}>
                           <AreaChart data={capitalChartData} margin={{ top: 20, right: 70, left: -5, bottom: 15 }}>
-                            <CartesianGrid strokeDasharray="3 3" />
+                            {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                             <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                             <YAxis tick={{ fontSize: 9 }} width={40} />
                             <Tooltip
@@ -17412,7 +17527,7 @@ const PortfolioBacktester = () => {
                                 <stop offset="100%" stopColor="#ef4444" />
                               </linearGradient>
                             </defs>
-                            <CartesianGrid strokeDasharray="3 3" />
+                            {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                             <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                             <YAxis tick={{ fontSize: 9 }} width={40} />
                             <Tooltip
