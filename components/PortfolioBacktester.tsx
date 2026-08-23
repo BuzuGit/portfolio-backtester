@@ -820,6 +820,10 @@ const STREAK_VIEWS: { period: ReturnsChartPeriod; label: string; noun: string; h
         + 'any month that finishes flat or down.',
   },
 ];
+// Look-back lengths offered for the Head to Head rolling-correlation line, in MONTHS.
+// 12 is short enough to show a regime change (a crisis, a rate shock); 36 is smooth
+// enough to show a structural one. Named once so the buttons and the maths agree.
+const CORRELATION_WINDOWS = [12, 24, 36];
 // One bar of that chart. `range` and the two prices are only filled in by the rolling
 // views — a calendar-return bar has no single pair of prices behind it to quote.
 type ReturnsBar = {
@@ -1484,6 +1488,13 @@ const PortfolioBacktester = () => {
   // than per period. Its axis, tooltip and footnote all say so rather than leaving it implied.
   const [deltaPortfolioA, setDeltaPortfolioA] = useState(0);
   const [deltaPortfolioB, setDeltaPortfolioB] = useState(1);
+  // The Head to Head chart has TWO views behind one toggle. 'gap' is the original
+  // difference bars — who won each period. 'correlation' swaps in a rolling-correlation
+  // line, which answers the other question: were the two moving together at all?
+  // Defaults to 'gap', so the section looks and behaves exactly as it did before.
+  const [deltaChartView, setDeltaChartView] = useState<'gap' | 'correlation'>('gap');
+  // How many months of history each correlation point looks back over.
+  const [correlationWindow, setCorrelationWindow] = useState(12);
   // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
   const [graphsPeriod, setGraphsPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | 'max'>('2Y');
   // End date for the Graphs tab ('' = most recent month in data)
@@ -4181,6 +4192,136 @@ const PortfolioBacktester = () => {
     });
 
     return Array.from(rowsByKey.values()).sort((a, b) => a.key.localeCompare(b.key));
+  };
+
+  // ----------------------------------------
+  // HEAD TO HEAD CORRELATION FUNCTIONS
+  // ----------------------------------------
+  //
+  // Correlation answers a different question to the difference bars above it: not
+  // "which portfolio won", but "did the two move together at all". Everything below
+  // runs on MONTHLY returns whatever period the Returns buttons happen to be showing.
+  // Two reasons: monthly is the convention everywhere else in finance, and the
+  // rolling-CAGR views overlap each other heavily — correlating overlapping windows
+  // would count the same months over and over and quietly drag the number toward 1.
+
+  /**
+   * One portfolio's monthly returns, oldest first, as plain decimals (0.031 = +3.1%).
+   *
+   * Deliberately NOT rounded. The returns bar chart rounds to one decimal place because
+   * that is all a label can show, but rounding before a correlation throws away exactly
+   * the small co-movements the statistic exists to measure.
+   *
+   * @param result - one backtested portfolio (its `returns` are month-end values)
+   * @returns one entry per month that has a prior month to compare against
+   */
+  const getMonthlyReturnSeries = (result: BacktestResult): { ym: string; date: string; r: number }[] => {
+    // Last value per calendar month, oldest first — the same normalisation the
+    // periodic-returns chart does, so both are looking at identical months.
+    const byMonth = new Map<string, { date: string; value: number }>();
+    for (const p of result.returns) byMonth.set(toYM(new Date(p.date)), { date: p.date, value: p.value });
+    const months = Array.from(byMonth.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const out: { ym: string; date: string; r: number }[] = [];
+    for (let i = 1; i < months.length; i++) {
+      const prev = months[i - 1][1].value;
+      const curr = months[i][1].value;
+      if (!(prev > 0)) continue;   // no sensible return out of a zero or negative base
+      out.push({ ym: months[i][0], date: months[i][1].date, r: (curr - prev) / prev });
+    }
+    return out;
+  };
+
+  /**
+   * Pearson correlation coefficient of two equal-length samples.
+   *
+   * In plain terms: it measures how reliably the two series move in the same direction,
+   * on a scale from +1 (perfect lockstep) through 0 (no relationship) to -1 (perfect
+   * mirror image). It says nothing about SIZE — a portfolio that moves 3x as hard as
+   * another, but always on the same days, still correlates at +1.
+   *
+   * @returns the coefficient, or null when it is undefined rather than zero: too few
+   *          months to mean anything, or one side being perfectly flat (a flat series
+   *          has no variation to correlate, and the formula would divide by zero).
+   */
+  const pearsonCorrelation = (xs: number[], ys: number[]): number | null => {
+    const n = Math.min(xs.length, ys.length);
+    if (n < 3) return null;
+    let sumX = 0;
+    let sumY = 0;
+    for (let i = 0; i < n; i++) { sumX += xs[i]; sumY += ys[i]; }
+    const meanX = sumX / n;
+    const meanY = sumY / n;
+    // Covariance on top, the two standard deviations on the bottom - all unscaled,
+    // since the sample-size divisors cancel out of the ratio.
+    let sxy = 0;
+    let sxx = 0;
+    let syy = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = xs[i] - meanX;
+      const dy = ys[i] - meanY;
+      sxy += dx * dy;
+      sxx += dx * dx;
+      syy += dy * dy;
+    }
+    if (!(sxx > 0) || !(syy > 0)) return null;
+    // Floating-point error can push a perfect correlation a hair past 1.0; clamp it
+    // so the display never shows an impossible 1.01.
+    return Math.max(-1, Math.min(1, sxy / Math.sqrt(sxx * syy)));
+  };
+
+  /**
+   * The two portfolios' monthly returns lined up month by month.
+   *
+   * Joined BY MONTH rather than by position, so a portfolio that is missing a month
+   * simply drops that month from the pair instead of silently shifting one series
+   * against the other - which would produce a plausible-looking but meaningless number.
+   */
+  const getPairedMonthlyReturns = (
+    resultA: BacktestResult,
+    resultB: BacktestResult,
+  ): { ym: string; date: string; a: number; b: number }[] => {
+    const seriesA = getMonthlyReturnSeries(resultA);
+    const byMonthB = new Map(getMonthlyReturnSeries(resultB).map(p => [p.ym, p.r]));
+    const out: { ym: string; date: string; a: number; b: number }[] = [];
+    for (const p of seriesA) {
+      const b = byMonthB.get(p.ym);
+      if (b === undefined) continue;
+      out.push({ ym: p.ym, date: p.date, a: p.r, b });
+    }
+    return out;
+  };
+
+  /**
+   * One point per month: the correlation of the two portfolios over the `windowMonths`
+   * months ENDING that month. A rolling window, exactly like the rolling-CAGR bars above,
+   * except it is measuring co-movement rather than return.
+   *
+   * The window is stated in months rather than years because correlation regimes change
+   * fast — a crisis can take two uncorrelated portfolios to +0.9 within a quarter.
+   *
+   * @param paired - output of getPairedMonthlyReturns, so the pairing is done once
+   * @param windowMonths - look-back length; a window that runs off the front is skipped
+   */
+  const getRollingCorrelationData = (
+    paired: { ym: string; date: string; a: number; b: number }[],
+    windowMonths: number,
+  ): { label: string; range: string; corr: number }[] => {
+    const out: { label: string; range: string; corr: number }[] = [];
+    if (paired.length < windowMonths) return out;
+    const fmtMonth = (d: Date) => `${MONTH_ABBR[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
+    for (let end = windowMonths - 1; end < paired.length; end++) {
+      const slice = paired.slice(end - windowMonths + 1, end + 1);
+      const corr = pearsonCorrelation(slice.map(p => p.a), slice.map(p => p.b));
+      if (corr === null) continue;
+      out.push({
+        // Labelled by the month the window ENDED, which is the usual convention: this
+        // is the correlation "as of" that month, looking back.
+        label: fmtMonth(new Date(paired[end].date)),
+        range: `${fmtMonth(new Date(slice[0].date))} to ${fmtMonth(new Date(paired[end].date))}`,
+        corr: parseFloat(corr.toFixed(3)),
+      });
+    }
+    return out;
   };
 
   // ----------------------------------------
@@ -7735,6 +7876,18 @@ const PortfolioBacktester = () => {
                 // and says so rather than drawing bars nobody could interpret.
                 const deltaStreak = STREAK_VIEWS.find(s => s.period === backtestReturnsPeriod);
 
+                // CORRELATION. Independent of the period buttons on purpose — it always
+                // runs on monthly returns over the selected date range (see the helper
+                // functions for why), so the headline number stays put while you click
+                // between Monthly, Annual and the rolling views above.
+                const paired = sameTwice ? [] : getPairedMonthlyReturns(backtestResults[aIdx], backtestResults[bIdx]);
+                const fullCorr = pearsonCorrelation(paired.map(p => p.a), paired.map(p => p.b));
+                // Only built when the correlation view is actually on screen, so the
+                // default 'gap' view does exactly the work it always did.
+                const corrRows = deltaChartView === 'correlation'
+                  ? getRollingCorrelationData(paired, correlationWindow)
+                  : [];
+
                 // Built from the SAME helper as the returns chart above, so a bar here is
                 // always exactly the difference of two bars up there — and in the annual
                 // view, exactly the Δ column of the table. Nothing is recomputed.
@@ -7778,7 +7931,44 @@ const PortfolioBacktester = () => {
                   // separates them, the way the Monthly tab divides its own sections.
                   <div className="mt-6 border-t border-gray-200 pt-4">
                     <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                      <h3 className="text-md font-semibold text-gray-700">Head to Head</h3>
+                      {/* Title, the whole-period correlation, and the view toggle, all in
+                          one left-hand group so the dropdowns stay on the right. */}
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <h3 className="text-md font-semibold text-gray-700">
+                          Head to Head
+                          {/* Suppressed when the pair is the same portfolio twice (it would
+                              trivially be 1.00) or when there are too few months to mean
+                              anything — see pearsonCorrelation, which returns null for both. */}
+                          {fullCorr !== null && (
+                            <span
+                              className="font-normal text-gray-500"
+                              title={`Pearson correlation of the two portfolios' ${paired.length} monthly returns over the selected date range. +1 = they moved in lockstep, 0 = no relationship, -1 = they moved opposite. It measures direction, not size.`}
+                            >
+                              {' '}(Correlation of {fullCorr.toFixed(2)})
+                            </span>
+                          )}
+                        </h3>
+                        {/* Two views of the same pair: who won each period, or how closely
+                            the two moved together. Styled like the Returns period buttons. */}
+                        <div className="flex items-center gap-1">
+                          {([['gap', 'Gap'], ['correlation', 'Correlation']] as const).map(([view, label]) => (
+                            <button
+                              key={view}
+                              onClick={() => setDeltaChartView(view)}
+                              title={view === 'gap'
+                                ? 'Period-by-period difference between the two portfolios — who won, and by how much.'
+                                : 'Rolling correlation of the two portfolios’ monthly returns — whether they were moving together, and how that changed over time.'}
+                              className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                deltaChartView === view
+                                  ? 'bg-slate-800 text-white border-slate-800'
+                                  : 'bg-white border-gray-300 hover:bg-gray-100'
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                       {/* Which two portfolios, in which direction. Positive bars always
                           mean the FIRST dropdown is ahead. */}
                       <div className="flex items-center gap-2 text-sm">
@@ -7806,9 +7996,112 @@ const PortfolioBacktester = () => {
                       </div>
                     </div>
 
-                    {/* No period buttons of its own: the row above the previous chart drives
-                        this one too, which is the point of having them adjacent. */}
-                    {deltaStreak ? (
+                    {/* The GAP view has no period buttons of its own: the row above the
+                        previous chart drives it too, which is the point of having them
+                        adjacent. The correlation view below is the exception — it ignores
+                        that row entirely and carries its own window length. */}
+                    {/* CORRELATION VIEW. Sits in front of the existing chain rather than
+                        inside it, because it is driven by monthly returns and so has none
+                        of the gap chart's period restrictions — it works perfectly well
+                        while the buttons above are on a streak view. `!sameTwice` lets the
+                        "pick two different portfolios" message below still do its job. */}
+                    {deltaChartView === 'correlation' && !sameTwice ? (
+                      <>
+                        {/* How far back each point looks */}
+                        <div className="flex items-center gap-2 mb-2 px-2 flex-wrap">
+                          <span className="text-xs font-semibold text-gray-500">Window:</span>
+                          {CORRELATION_WINDOWS.map(w => (
+                            <button
+                              key={w}
+                              onClick={() => setCorrelationWindow(w)}
+                              title={`Each point is the correlation over the ${w} months ending that month.`}
+                              className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                correlationWindow === w
+                                  ? 'bg-slate-800 text-white border-slate-800'
+                                  : 'bg-white border-gray-300 hover:bg-gray-100'
+                              }`}
+                            >
+                              {w}M
+                            </button>
+                          ))}
+                        </div>
+                        {corrRows.length === 0 ? (
+                          <p className="text-xs text-gray-500 px-2 py-6">
+                            The backtest is not long enough for a {correlationWindow}-month correlation window.
+                            Widen the date range above, or pick a shorter window.
+                          </p>
+                        ) : (
+                          <>
+                            {/* The headline the line below is the detail of: where the pair
+                                sits over the whole period, before you look at when it moved. */}
+                            <p className="text-xs text-gray-600 mb-1 px-2">
+                              <span className="font-semibold" style={{ color: a.color }}>{a.name}</span>
+                              {' '}vs{' '}
+                              <span className="font-semibold" style={{ color: b.color }}>{b.name}</span>
+                              {fullCorr !== null && (
+                                <> — {fullCorr.toFixed(2)} over the whole period (dashed line), {corrRows.length} rolling {correlationWindow}-month windows</>
+                              )}
+                            </p>
+                            <ResponsiveContainer width="100%" height={300}>
+                              {/* Gridless, matching every other chart on this page */}
+                              <LineChart data={corrRows} margin={{ top: 20, right: 5, left: 5, bottom: 5 }}>
+                                <XAxis
+                                  dataKey="label"
+                                  tick={{ fontSize: 9, fill: '#6B7280' }}
+                                  height={35}
+                                  interval={corrRows.length > 24 ? Math.max(0, Math.floor(corrRows.length / 20) - 1) : 0}
+                                />
+                                {/* Pinned to the full -1..+1 range on purpose. Auto-scaling
+                                    would zoom into a band of 0.85-0.95 and make a pair that
+                                    never decoupled look like it swung wildly. */}
+                                <YAxis
+                                  domain={[-1, 1]}
+                                  ticks={[-1, -0.5, 0, 0.5, 1]}
+                                  tick={{ fontSize: 9 }}
+                                  width={45}
+                                  tickFormatter={(v: number) => v.toFixed(1)}
+                                />
+                                <Tooltip
+                                  formatter={(value: number) => [value.toFixed(2), 'Correlation']}
+                                  labelFormatter={(label: string, payload: readonly { payload?: { range?: string } }[]) =>
+                                    payload?.[0]?.payload?.range || label}
+                                />
+                                <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
+                                {/* The whole-period figure from the title, drawn across the
+                                    chart so you can see which stretches were tighter or
+                                    looser than the pair's own long-run average. */}
+                                {fullCorr !== null && (
+                                  <ReferenceLine
+                                    y={parseFloat(fullCorr.toFixed(3))}
+                                    stroke="#94A3B8"
+                                    strokeDasharray="6 3"
+                                    strokeWidth={1.5}
+                                  />
+                                )}
+                                {/* Neutral slate rather than either portfolio's colour: this
+                                    line belongs to the pair, not to one side of it.
+                                    Animation off so the shape is correct immediately. */}
+                                <Line
+                                  type="monotone"
+                                  dataKey="corr"
+                                  stroke="#1E293B"
+                                  strokeWidth={2}
+                                  dot={false}
+                                  isAnimationActive={false}
+                                />
+                              </LineChart>
+                            </ResponsiveContainer>
+                            <p className="text-[10px] text-gray-400 mt-2 px-2">
+                              Each point is the correlation of the two portfolios’ MONTHLY returns over the {correlationWindow} months
+                              ending that month, so the X axis is the month each window closed. +1 means they moved in lockstep,
+                              0 means no relationship, −1 means they moved opposite. Correlation measures direction only, not size:
+                              a portfolio that swings three times as hard as the other, but always on the same months, still reads +1 —
+                              the Gap view above is where the size of the difference shows up.
+                            </p>
+                          </>
+                        )}
+                      </>
+                    ) : deltaStreak ? (
                       <p className="text-xs text-gray-500 px-2 py-6">
                         Not applicable to the {deltaStreak.label} view — a streak minus a streak is not a
                         meaningful number. Pick one of the returns views above to compare these two portfolios.
