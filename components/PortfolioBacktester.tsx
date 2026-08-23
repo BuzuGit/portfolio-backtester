@@ -824,8 +824,10 @@ const STREAK_VIEWS: { period: ReturnsChartPeriod; label: string; noun: string; h
 // 12 is short enough to show a regime change (a crisis, a rate shock); 36 is smooth
 // enough to show a structural one. Named once so the buttons and the maths agree.
 const CORRELATION_WINDOWS = [12, 24, 36];
-// One bar of that chart. `range` and the two prices are only filled in by the rolling
-// views — a calendar-return bar has no single pair of prices behind it to quote.
+// One bar of the Monthly tab's returns chart described above. (`CORRELATION_WINDOWS`
+// sits between the two, so "that chart" would now be ambiguous.) `range` and the two
+// prices are only filled in by the rolling views — a calendar-return bar has no single
+// pair of prices behind it to quote.
 type ReturnsBar = {
   label: string;
   return: number;
@@ -7882,8 +7884,12 @@ const PortfolioBacktester = () => {
                 // between Monthly, Annual and the rolling views above.
                 const paired = sameTwice ? [] : getPairedMonthlyReturns(backtestResults[aIdx], backtestResults[bIdx]);
                 const fullCorr = pearsonCorrelation(paired.map(p => p.a), paired.map(p => p.b));
-                // Only built when the correlation view is actually on screen, so the
-                // default 'gap' view does exactly the work it always did.
+                // The ROLLING series is only built when its view is on screen. The pairing
+                // above is not gated, because the title shows the correlation in both views
+                // — so the gap view does carry about 0.25ms of extra work per render that it
+                // did not before (measured on a 200-month backtest). That is far inside a
+                // frame budget and in line with the rest of this component, which recomputes
+                // its chart data on every render rather than memoising.
                 const corrRows = deltaChartView === 'correlation'
                   ? getRollingCorrelationData(paired, correlationWindow)
                   : [];
