@@ -361,6 +361,79 @@ export function parseLedger(csvText: string): LedgerRow[] {
   return out;
 }
 
+// How long we are willing to wait for ONE attempt at one tab, and how many
+// attempts we make before giving up. See fetchSheet() below for why this exists.
+const SHEET_TIMEOUT_MS = 15000;
+const SHEET_ATTEMPTS = 3;
+
+/**
+ * Fetches one sheet tab, but refuses to wait forever.
+ *
+ * WHY THIS EXISTS — the bug it fixes:
+ * Google's "publish to web" CSV endpoint does not always answer. Perhaps one
+ * request in seven simply goes quiet: it does not return an error, it does not
+ * return a 404, it just never replies. A plain `fetch()` has NO time limit, so
+ * it waits for that reply essentially forever. Because we ask for five tabs at
+ * once, the odds of at least one going quiet are better than even — and if the
+ * silent one is a tab we cannot do without, the whole app sits on
+ * "Fetching data from Google Sheets..." until the page is manually reloaded.
+ * That is what "the app stopped working" looked like.
+ *
+ * The cure is a kitchen timer. We start the request AND a 15-second timer. If
+ * the timer wins, we cancel the request and simply ask again — a retry almost
+ * always comes back in about a second, because the stall is a hiccup on
+ * Google's side rather than anything being wrong with the sheet.
+ *
+ * `AbortController` is the browser's standard "cancel this request" handle:
+ * we hand its `signal` to fetch, and calling `.abort()` makes that fetch throw
+ * instead of hanging.
+ *
+ * @param url        the published-CSV URL for one tab
+ * @param label      human-readable tab name, used only in log messages
+ * @returns the successful Response
+ * @throws Error if every attempt times out or fails
+ */
+async function fetchSheet(url: string, label: string): Promise<Response> {
+  let lastProblem = 'unknown error';
+
+  for (let attempt = 1; attempt <= SHEET_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SHEET_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, { cache: 'no-cache', signal: controller.signal });
+
+      // A reply arrived in time — success, or a server-side problem worth retrying.
+      if (response.ok) return response;
+
+      lastProblem = `HTTP ${response.status} ${response.statusText}`;
+
+      // 4xx means the request itself is wrong (deleted tab, unpublished sheet).
+      // Retrying cannot fix that, so hand the response back and let the caller
+      // report it. 429 (rate limited) and 5xx ARE worth another try.
+      if (response.status < 500 && response.status !== 429) return response;
+    } catch (err) {
+      // Either our timer fired (AbortError) or the network genuinely failed.
+      lastProblem = controller.signal.aborted
+        ? `no reply within ${SHEET_TIMEOUT_MS / 1000}s`
+        : String(err);
+    } finally {
+      // Always stop the timer, or a successful fetch would still be "cancelled"
+      // 15 seconds later and leave a stray timer running.
+      clearTimeout(timer);
+    }
+
+    if (attempt < SHEET_ATTEMPTS) {
+      console.warn(`${label} sheet: ${lastProblem} — retrying (${attempt + 1}/${SHEET_ATTEMPTS})...`);
+      // Wait a moment before retrying, a little longer each time, so we do not
+      // hammer an endpoint that may be throttling us.
+      await new Promise(r => setTimeout(r, 800 * attempt));
+    }
+  }
+
+  throw new Error(`${label} sheet unreachable after ${SHEET_ATTEMPTS} attempts (${lastProblem})`);
+}
+
 /**
  * Fetches and parses CSV data from both Google Sheet tabs.
  * - Tab 1: Raw price data
@@ -372,11 +445,11 @@ export function parseLedger(csvText: string): LedgerRow[] {
 export async function fetchSheetData(): Promise<ParsedData> {
   // Fetch all seven sheets in parallel for speed
   const [dataResponse, lookupResponse, yearsResponse, dailyResponse, ledgerResponse] = await Promise.all([
-    fetch(DATA_SHEET_URL, { cache: 'no-cache' }),
-    fetch(LOOKUP_SHEET_URL, { cache: 'no-cache' }),
-    fetch(YEARS_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Years sheet is optional — don't break the app if it fails
-    fetch(DAILY_SHEET_URL, { cache: 'no-cache' }).catch(() => null),  // Daily NAV sheet is optional too
-    fetch(LEDGER_SHEET_URL, { cache: 'no-cache' }).catch(() => null), // Full ledger — powers the Positions tab
+    fetchSheet(DATA_SHEET_URL, 'Price data'),
+    fetchSheet(LOOKUP_SHEET_URL, 'Lookup table'),
+    fetchSheet(YEARS_SHEET_URL, 'Years').catch(() => null), // Years sheet is optional — don't break the app if it fails
+    fetchSheet(DAILY_SHEET_URL, 'Daily').catch(() => null),  // Daily NAV sheet is optional too
+    fetchSheet(LEDGER_SHEET_URL, 'Transactions').catch(() => null), // Full ledger — powers the Positions tab
   ]);
 
   // Check if core fetches were successful
@@ -415,7 +488,7 @@ export async function fetchSheetData(): Promise<ParsedData> {
     if (!dailyResponse) {
       console.warn('Daily sheet fetch threw (returned null) — retrying once...');
       // Retry once since it might have been throttled during the parallel fetch
-      const retryDaily = await fetch(DAILY_SHEET_URL, { cache: 'no-cache' }).catch(() => null);
+      const retryDaily = await fetchSheet(DAILY_SHEET_URL, 'Daily').catch(() => null);
       if (retryDaily && retryDaily.ok) {
         const dailyCsvText = await retryDaily.text();
         dailyData = parseDailyData(dailyCsvText);
@@ -445,7 +518,7 @@ export async function fetchSheetData(): Promise<ParsedData> {
       retries++;
       console.log(`Transactions (ledger) sheet returned "${ledgerCsv.trim().substring(0, 20)}", retrying (${retries}/3)...`);
       await new Promise(r => setTimeout(r, 1000 * retries));
-      const retry = await fetch(LEDGER_SHEET_URL, { cache: 'no-cache' }).catch(() => null);
+      const retry = await fetchSheet(LEDGER_SHEET_URL, 'Transactions').catch(() => null);
       if (retry && retry.ok) ledgerCsv = await retry.text();
     }
     if (ledgerCsv && ledgerCsv.trim() !== 'Loading...' && ledgerCsv.trim().length >= 50) {
