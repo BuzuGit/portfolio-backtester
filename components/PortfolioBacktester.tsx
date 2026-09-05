@@ -680,6 +680,21 @@ const yearsRowRate = (row: YearsRow, currency: string, which: 'end' | 'avg'): nu
   return map[currency] || 0;
 };
 
+/**
+ * The OPENING xxxPLN rate for `currency` on a Years-sheet row (the "xxx Start
+ * Period" columns). Only needed for the very first year in the data — every later
+ * year uses the previous year's closing rate, so that one year's move isn't
+ * measured against a different kind of snapshot.
+ * Same contract as yearsRowRate above: 1 for PLN, 0 if the rate is missing.
+ */
+const yearsRowStartRate = (row: YearsRow, currency: string): number => {
+  if (currency === 'PLN') return 1;
+  const map: { [k: string]: number } = {
+    USD: row.startUsdPln, EUR: row.startEurPln, CHF: row.startChfPln, SGD: row.startSgdPln
+  };
+  return map[currency] || 0;
+};
+
 // ---------------------------------------------------------------------------
 // FX DATA SANITY CHECK
 // ---------------------------------------------------------------------------
@@ -5620,8 +5635,7 @@ const PortfolioBacktester = () => {
     for (const row of yearsData) {
       const year = row.date.includes('-') ? row.date.split('-')[0] : row.date;
       const end = yearsRowRate(row, base, 'end');
-      const openingRate = ({ USD: row.startUsdPln, EUR: row.startEurPln, CHF: row.startChfPln, SGD: row.startSgdPln } as { [k: string]: number })[base] || 0;
-      const start = prevEnd != null ? prevEnd : openingRate;
+      const start = prevEnd != null ? prevEnd : yearsRowStartRate(row, base);
       out[year] = (end && start) ? (end / start - 1) * 100 : null;
       // If this year's close is missing we must NOT carry an older rate forward —
       // that would silently compare across a two-year gap and invent a move.
@@ -13532,7 +13546,7 @@ const PortfolioBacktester = () => {
                         {cpChartData.map(d => {
                           const pct = fxMovesByYear[d.year];
                           // Green when the pair rose, red when it fell, gray for a missing rate.
-                          const cls = pct == null ? 'text-gray-300' : pct >= 0 ? 'text-green-700' : 'text-red-600';
+                          const cls = pct == null ? 'text-gray-400' : pct >= 0 ? 'text-green-700' : 'text-red-600';
                           return (
                             <div
                               key={d.year}
@@ -13607,9 +13621,10 @@ const PortfolioBacktester = () => {
                       if (!yr) return [] as { ccy: string; pct: number }[];
                       const endToPln = (row: YearsRow, ccy: string): number => yearsRowRate(row, ccy, 'end');
                       // Start-of-year rate: only used for the very first year (otherwise we use the
-                      // prior year-end). YearsRow only has start-period rates for USD/EUR/SGD.
+                      // prior year-end). If the sheet has no opening rate for a currency we fall back
+                      // to that year's close, which reports a 0% move rather than inventing one.
                       const startToPln = (row: YearsRow, ccy: string): number =>
-                        ccy === 'PLN' ? 1 : ({ USD: row.startUsdPln, EUR: row.startEurPln, SGD: row.startSgdPln } as { [k: string]: number })[ccy] || endToPln(row, ccy);
+                        yearsRowStartRate(row, ccy) || endToPln(row, ccy);
                       // Every currency that contributed this year (asset natives), plus PLN (the base of
                       // "Other"), minus the currency we're already displaying in.
                       const ccys = Array.from(new Set([...assets.map(a => a.nativeCurrency), 'PLN'])).filter(c => c !== portfolioCurrency);
