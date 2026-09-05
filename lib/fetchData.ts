@@ -118,6 +118,7 @@ export interface YearsRow {
   startUsdPln: number;       // Start-of-period USD/PLN rate
   startSgdPln: number;       // Start-of-period SGD/PLN rate
   startEurPln: number;       // Start-of-period EUR/PLN rate
+  startChfPln: number;       // Start-of-period CHF/PLN rate
   avgUsdPln: number;         // Average USD/PLN exchange rate for the year
   endUsdPln: number;         // End-of-period USD/PLN rate
   avgEurPln: number;         // Average EUR/PLN exchange rate
@@ -684,6 +685,7 @@ function parseYearsData(csvText: string): YearsRow[] {
       startUsdPln:      readNum(values, 'USD Start Period'),
       startSgdPln:      readNum(values, 'SGD Start Period'),
       startEurPln:      readNum(values, 'EUR Start Period'),
+      startChfPln:      readNum(values, 'CHF Start Period'),
       avgUsdPln:        readNum(values, 'USD AVG'),
       endUsdPln:        readNum(values, 'USD End Period'),
       avgEurPln:        readNum(values, 'EUR AVG'),

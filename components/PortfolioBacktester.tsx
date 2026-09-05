@@ -657,6 +657,14 @@ const FX_TICKER_MAP: { [key: string]: string } = {
   USD: 'USDPLN', SGD: 'SGDPLN', EUR: 'EURPLN', CHF: 'CHFPLN', PLN: ''
 };
 
+// Which zloty pair to show under the "Contributions and Profit by Year" chart for each
+// setting of the currency selector. It is simply "the selected currency's own xxxPLN
+// pair" — except PLN, which has no pair of its own (PLNPLN is always 1.00), so the
+// dollar is used there as the reference currency instead.
+const FX_ROW_BASE: { [key: string]: string } = {
+  PLN: 'USD', USD: 'USD', EUR: 'EUR', CHF: 'CHF', SGD: 'SGD'
+};
+
 /**
  * The xxxPLN FX rate for `currency` stored on a Years-sheet row.
  * `which` picks the period-END snapshot (right for portfolio VALUES) or the
@@ -5585,6 +5593,41 @@ const PortfolioBacktester = () => {
       profit: s.profit,
       growthTotal: s.contributions + s.profit,
     }));
+  };
+
+  /**
+   * How much the exchange rate itself moved, year by year — the small row of
+   * percentages printed under Chart 2's year labels.
+   *
+   * WHICH RATE: the zloty pair belonging to the currency selected above the charts
+   * (see FX_ROW_BASE) — USD/PLN for a PLN or USD view, EUR/PLN for EUR, and so on.
+   *
+   * HOW IT IS MEASURED: end of year against end of the PREVIOUS year, exactly the
+   * same close-to-close basis the charts use to convert portfolio VALUES. So +4.2%
+   * on 2024 means "one dollar bought 4.2% more zloty on 31 Dec 2024 than it did on
+   * 31 Dec 2023" — i.e. the zloty weakened by that much.
+   *
+   * THE FIRST YEAR has no previous year-end to compare with, so it falls back to
+   * that year's own opening rate (the "xxx Start Period" columns of the Years sheet).
+   *
+   * Returns a { "2024": 4.2, ... } lookup; null means the rate is missing for that
+   * year and the row prints a dash rather than a made-up number.
+   */
+  const getFxYearlyMoves = (): { [year: string]: number | null } => {
+    const base = FX_ROW_BASE[portfolioCurrency] || 'USD';
+    const out: { [year: string]: number | null } = {};
+    let prevEnd: number | null = null;   // last year's closing rate, or null if unusable
+    for (const row of yearsData) {
+      const year = row.date.includes('-') ? row.date.split('-')[0] : row.date;
+      const end = yearsRowRate(row, base, 'end');
+      const openingRate = ({ USD: row.startUsdPln, EUR: row.startEurPln, CHF: row.startChfPln, SGD: row.startSgdPln } as { [k: string]: number })[base] || 0;
+      const start = prevEnd != null ? prevEnd : openingRate;
+      out[year] = (end && start) ? (end / start - 1) * 100 : null;
+      // If this year's close is missing we must NOT carry an older rate forward —
+      // that would silently compare across a two-year gap and invent a move.
+      prevEnd = end || null;
+    }
+    return out;
   };
 
   /**
@@ -13376,6 +13419,9 @@ const PortfolioBacktester = () => {
                   {/* Growth label above bar = contributions + profit for that year */}
                   {(() => {
                     const cpChartData = getContributionsProfitChartData();
+                    // The FX row under the x-axis: which pair, and its move in each year.
+                    const fxPair = FX_TICKER_MAP[FX_ROW_BASE[portfolioCurrency] || 'USD'] || '';
+                    const fxMovesByYear = getFxYearlyMoves();
                     return (
                   <div className="bg-white p-4 rounded-lg shadow mb-4">
                     <h3 className="text-md font-semibold text-gray-700 mb-2">Contributions and Profit by Year ({CURRENCY_SYMBOLS[portfolioCurrency]})</h3>
@@ -13473,6 +13519,33 @@ const PortfolioBacktester = () => {
                         </Bar>
                       </ComposedChart>
                     </ResponsiveContainer>
+                    {/* --- Exchange-rate move for each year, printed under the year labels --- */}
+                    {/* WHY IT LINES UP: the chart hides its Y axis and uses a 5px margin on each
+                        side, so the plotting area is the full card width inset by 5px, split into
+                        one equal-width band per year. A flex row with the same 5px padding and one
+                        equal-width (flex-1) cell per year therefore centres each percentage on the
+                        exact same x as the bar and its year label above it. */}
+                    {cpChartData.length > 0 && (
+                    <div className="mt-0.5">
+                      <div className="text-[10px] leading-none text-gray-400 mb-1 pl-1">{fxPair}</div>
+                      <div className="flex" style={{ paddingLeft: 5, paddingRight: 5 }}>
+                        {cpChartData.map(d => {
+                          const pct = fxMovesByYear[d.year];
+                          // Green when the pair rose, red when it fell, gray for a missing rate.
+                          const cls = pct == null ? 'text-gray-300' : pct >= 0 ? 'text-green-700' : 'text-red-600';
+                          return (
+                            <div
+                              key={d.year}
+                              className={`flex-1 text-center text-[11px] font-semibold tabular-nums ${cls}`}
+                              title={pct == null ? `${fxPair} rate not available for ${d.year}` : `${fxPair} ${pct >= 0 ? 'rose' : 'fell'} ${Math.abs(pct).toFixed(1)}% during ${d.year} (year-end vs previous year-end)`}
+                            >
+                              {pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    )}
                   </div>
                     );
                   })()}
