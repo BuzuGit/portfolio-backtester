@@ -42,19 +42,30 @@
   rather than muting the whole check.
 */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-// The files worth scanning. Prices are only ever rendered in the UI layer.
-const FILES = ['components/PortfolioBacktester.tsx'];
+// Prices are rendered in the UI layer. Scan the whole components/ tree rather than
+// naming one file, so a new component is covered the day it is created rather than the
+// day someone remembers to add it here. (readdirSync recursive, not fs.globSync, so
+// this keeps working on older Node.)
+const SCAN_DIR = 'components';
+const SCAN_EXT = /\.tsx?$/;
 
-// An expression counts as a price if its name mentions "price"...
-const LOOKS_LIKE_PRICE = /price/i;
-// ...unless it is one of these, which merely borrow the word.
-const IGNORE = [/Pct$/, /Percent$/, /Idx$/, /^priceDecimals$/];
+// An expression counts as a price if its name looks like one. "price" is the obvious
+// case, but a third of the real price renders in this app are named something else —
+// a moving average, a high-water mark, a weighted average buy. Those are prices too,
+// and the first version of this check sailed straight past every one of them.
+const LOOKS_LIKE_PRICE = /price|\bsma\d*$|sma\d*$|hwm|^lo$|^hi$|avgBuy|avgSell|athP/i;
+
+// ...unless it is one of these, which merely borrow the vocabulary.
+//   Pct/Percent — percentages (priceVsSoldPct, smaDistance)
+//   Idx         — rebased growth indices on the Monthly charts
+//   Dist        — distance-from-SMA, expressed as a percentage
+const IGNORE = [/Pct$/, /Percent$/, /Idx$/, /Dist$/, /Distance$/, /^priceDecimals$/];
 
 // Hand-formatting we object to: `X.toFixed(2)` and `X.toLocaleString(... FractionDigits ...)`.
 // The capture group is the expression being formatted.
@@ -69,7 +80,15 @@ const lastSegment = (expr) =>
 
 const findings = [];
 
-for (const rel of FILES) {
+const files = readdirSync(join(repoRoot, SCAN_DIR), { recursive: true })
+  .map((f) => `${SCAN_DIR}/${String(f).replace(/\\/g, '/')}`)
+  .filter((f) => SCAN_EXT.test(f));
+if (files.length === 0) {
+  console.error(`check-price-format: found no .ts/.tsx under ${SCAN_DIR}/ - has it moved?`);
+  process.exit(1);
+}
+
+for (const rel of files) {
   const lines = readFileSync(join(repoRoot, rel), 'utf8').split(/\r?\n/);
 
   lines.forEach((line, i) => {
