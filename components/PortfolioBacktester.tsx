@@ -107,23 +107,49 @@ type SharesTooltipRow = {
 };
 
 /**
- * How many decimal places a PER-SHARE PRICE deserves in the Positions tab: three
- * below 2 units, two at or above it.
+ * ============================================================
+ * THE one way to print a PER-SHARE ASSET PRICE, app-wide.
+ * ============================================================
  *
- * WHY: most holdings are quoted in tens or hundreds, where two decimals is exactly
- * right. But a few are quoted in fractions of a unit, and there two decimals throws
- * real information away — 0.844 and 0.851 both collapse to "0.85", so a 1% move
- * looks like no move at all. Three decimals restores it without making the ordinary
- * four-figure prices look noisy.
+ * Precision slides with magnitude, so every price carries roughly the same number
+ * of MEANINGFUL digits instead of the same number of decimal places:
  *
- * Deliberately returns a NUMBER rather than a formatted string, so each call site
- * keeps its own formatter: the tables use toLocaleString (thousands separators),
- * the chart labels use toFixed (no separators, they'd crowd the axis). Handing back
- * just the precision leaves that difference untouched.
+ *      below 2      → 3 decimals   0.776,  1.355
+ *      2 – 99       → 2 decimals   4.28,   43.77
+ *      100 – 999    → 1 decimal    507.0
+ *      1000 and up  → 0 decimals   114,056
  *
- * Tested on magnitude, so a negative is treated like its positive twin.
+ * WHY IT SLIDES: two decimals is right for a share priced in tens, but on a 0.85
+ * holding it throws real information away — 0.844 and 0.851 both collapse to "0.85",
+ * so a 1% move looks like no move at all. At the other end, ".00" on a five-figure
+ * crypto price is noise that just makes a dense grid wider.
+ *
+ * WHY THE FIRST STEP IS AT 2 AND NOT 1: nothing magic about either, but a chunk of
+ * the portfolio (Singapore REITs, some bond ETFs) trades in the 0.5–1.9 band, and
+ * cutting at 1 left exactly those holdings on two decimals. 2 covers the band.
+ *
+ * Formats via toLocaleString, so prices of 1000+ keep their thousands separator.
+ *
+ * Judged on MAGNITUDE, so a negative behaves like its positive twin.
+ *
+ * SCOPE: per-share PRICES only. Portfolio values, invested capital, P&L, commissions
+ * and cash balances are money totals with their own formatting — they are not prices
+ * and must not be routed through here.
  */
-const priceDecimals = (n: number): number => (Math.abs(n) < 2 ? 3 : 2);
+const priceDecimals = (n: number): number => {
+  const magnitude = Math.abs(n);
+  if (magnitude < 2) return 3;
+  if (magnitude < 100) return 2;
+  if (magnitude < 1000) return 1;
+  return 0;
+};
+
+/** A per-share asset price as display text. See priceDecimals above for the rule. */
+const formatPrice = (price: number): string =>
+  price.toLocaleString(undefined, {
+    minimumFractionDigits: priceDecimals(price),
+    maximumFractionDigits: priceDecimals(price),
+  });
 
 /**
  * Custom tooltip for the "Shares Held" bar chart, shared by the Open and Closed sections.
@@ -146,7 +172,7 @@ const SharesHeldTooltip = ({ active, payload }: { active?: boolean; payload?: { 
   const fmtShares = (n?: number) =>
     n == null ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: 4 });
   const fmtPrice = (n?: number) =>
-    n == null ? '—' : n.toLocaleString(undefined, { minimumFractionDigits: priceDecimals(n), maximumFractionDigits: priceDecimals(n) });
+    n == null ? '—' : formatPrice(n);
   const fmtCapital = (n?: number) =>
     n == null ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 
@@ -312,7 +338,7 @@ const TradeHistoryTable = ({ events }: { events: TradeEvent[] }) => (
                 {e.type === 'buy' ? 'Buy' : 'Sell'}
               </td>
               <td className={`text-right py-1.5 px-2 font-mono${box}`}>
-                {e.price.toLocaleString(undefined, { minimumFractionDigits: priceDecimals(e.price), maximumFractionDigits: priceDecimals(e.price) })}
+                {formatPrice(e.price)}
               </td>
               <td className={`text-right py-1.5 px-2${box}`}>
                 {e.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
@@ -322,7 +348,7 @@ const TradeHistoryTable = ({ events }: { events: TradeEvent[] }) => (
               </td>
               <td className={`text-right py-1.5 px-2 font-mono font-medium${box}`}>
                 {e.cumAvgPrice != null
-                  ? e.cumAvgPrice.toLocaleString(undefined, { minimumFractionDigits: priceDecimals(e.cumAvgPrice), maximumFractionDigits: priceDecimals(e.cumAvgPrice) })
+                  ? formatPrice(e.cumAvgPrice)
                   : '—'}
               </td>
               <td className={`text-right py-1.5 px-2 font-mono whitespace-nowrap${box}`}>
@@ -4472,7 +4498,7 @@ const PortfolioBacktester = () => {
     const returnSign = data.return >= 0 ? '+' : '';
     const returnStr = `${returnSign}${data.return.toFixed(2)}%`;
 
-    return `${year}: $${data.startPrice.toFixed(2)} (${formatDate(data.startDate)}) → $${data.endPrice.toFixed(2)} (${formatDate(data.endDate)}) = ${returnStr}`;
+    return `${year}: $${formatPrice(data.startPrice)} (${formatDate(data.startDate)}) → $${formatPrice(data.endPrice)} (${formatDate(data.endDate)}) = ${returnStr}`;
   };
 
   /**
@@ -4778,7 +4804,7 @@ const PortfolioBacktester = () => {
       return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     };
     const returnSign = data.return >= 0 ? '+' : '';
-    return `${formatDate(data.startDate)} ($${data.startPrice.toFixed(2)}) → ${formatDate(data.endDate)} ($${data.endPrice.toFixed(2)}) = ${returnSign}${data.return.toFixed(2)}%`;
+    return `${formatDate(data.startDate)} ($${formatPrice(data.startPrice)}) → ${formatDate(data.endDate)} ($${formatPrice(data.endPrice)}) = ${returnSign}${data.return.toFixed(2)}%`;
   };
 
   /**
@@ -6125,24 +6151,8 @@ const PortfolioBacktester = () => {
     return result;
   };
 
-  /**
-   * Formats a price based on its magnitude for compact display.
-   * - < 1: 3 decimal places (e.g., 0.123)
-   * - 1-99: 2 decimal places (e.g., 12.34)
-   * - 100-999: 1 decimal place (e.g., 123.4)
-   * - >= 1000: 0 decimal places (e.g., 1234)
-   */
-  const formatPrice = (price: number): string => {
-    if (price < 1) {
-      return price.toFixed(3);
-    } else if (price < 100) {
-      return price.toFixed(2);
-    } else if (price < 1000) {
-      return price.toFixed(1);
-    } else {
-      return price.toFixed(0);
-    }
-  };
+  // formatPrice now lives at module scope (see the top of this file) so the shared
+  // Positions components can reach it too, and there is exactly one price rule.
 
   // ----------------------------------------
   // TREND FOLLOWING CALCULATION FUNCTIONS
@@ -8609,7 +8619,7 @@ const PortfolioBacktester = () => {
                               {assets.map(({ asset }) => (
                                 <React.Fragment key={asset}>
                                   <td className="text-right py-1 px-2">
-                                    {row.assetPrices[asset] != null ? row.assetPrices[asset].toFixed(2) : '—'}
+                                    {row.assetPrices[asset] != null ? formatPrice(row.assetPrices[asset]) : '—'}
                                   </td>
                                   <td className="text-right py-1 px-2">
                                     {row.assetShares[asset] != null ? row.assetShares[asset].toFixed(2) : '—'}
@@ -9037,7 +9047,7 @@ const PortfolioBacktester = () => {
                                       backgroundColor: getHeatmapColor(data.endPrice, minPrice, maxPrice),
                                       color: '#374151'
                                     }}
-                                    title={`${year}: $${data.endPrice.toFixed(2)} (${fmtDate(data.endDate)})`}
+                                    title={`${year}: $${formatPrice(data.endPrice)} (${fmtDate(data.endDate)})`}
                                   >
                                     {formatPrice(data.endPrice)}
                                   </td>
@@ -9079,7 +9089,7 @@ const PortfolioBacktester = () => {
                               const cagrBg = cagr >= 0 ? 'bg-green-100' : 'bg-red-100';
 
                               // Tooltip for CAGR showing the calculation details
-                              const cagrTooltip = `${priceRange.firstDate} ($${priceRange.firstPrice.toFixed(2)}) → ${priceRange.lastDate} ($${priceRange.lastPrice.toFixed(2)})`;
+                              const cagrTooltip = `${priceRange.firstDate} ($${formatPrice(priceRange.firstPrice)}) → ${priceRange.lastDate} ($${formatPrice(priceRange.lastPrice)})`;
 
                               // Calculate volatility and max drawdown (same methodology as Backtest Statistics)
                               const stats = calculateAssetStats(asset.ticker, priceRange.firstDate, priceRange.lastDate);
@@ -9130,8 +9140,8 @@ const PortfolioBacktester = () => {
                               };
 
                               const tooltip = ddData.isAtATH
-                                ? `At All-Time High: $${ddData.currentPrice.toFixed(2)} (${formatDate(ddData.currentDate)})`
-                                : `Current: $${ddData.currentPrice.toFixed(2)} (${formatDate(ddData.currentDate)}) vs ATH: $${ddData.athPrice.toFixed(2)} (${formatDate(ddData.athDate)}) = ${ddData.drawdown.toFixed(1)}%`;
+                                ? `At All-Time High: $${formatPrice(ddData.currentPrice)} (${formatDate(ddData.currentDate)})`
+                                : `Current: $${formatPrice(ddData.currentPrice)} (${formatDate(ddData.currentDate)}) vs ATH: $${formatPrice(ddData.athPrice)} (${formatDate(ddData.athDate)}) = ${ddData.drawdown.toFixed(1)}%`;
 
                               if (ddData.isAtATH) {
                                 return (
@@ -12042,7 +12052,7 @@ const PortfolioBacktester = () => {
                                             }
                                             return (
                                               <td key={month} className="text-right py-2 px-2" style={{ backgroundColor: getPriceHeatmap(price, minPrice, maxPrice) }}>
-                                                {price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                {formatPrice(price)}
                                               </td>
                                             );
                                           })}
@@ -12053,7 +12063,7 @@ const PortfolioBacktester = () => {
                                               : {}
                                           }>
                                             {monthlyPrices[year].fyPrice !== null
-                                              ? monthlyPrices[year].fyPrice!.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                              ? formatPrice(monthlyPrices[year].fyPrice!)
                                               : '-'}
                                           </td>
                                           <td className="w-2"></td>
@@ -12312,11 +12322,7 @@ const PortfolioBacktester = () => {
 
                   // Current price = last data point; format decimals based on magnitude
                   const currentPrice = priceData[priceData.length - 1].price;
-                  const formattedPrice = currentPrice < 10
-                    ? currentPrice.toFixed(2)    // e.g. 3.45
-                    : currentPrice < 1000
-                      ? currentPrice.toFixed(1)  // e.g. 123.4
-                      : Math.round(currentPrice).toLocaleString(); // e.g. 1,234
+                  const formattedPrice = formatPrice(currentPrice);
 
                   // Compute 5 evenly-spaced Y-axis ticks for each chart individually.
                   // Goal: lines fill almost all the chart area with Y-axis max at most
@@ -15652,8 +15658,8 @@ const PortfolioBacktester = () => {
                                 >
                                   <td className="py-2 px-2 text-gray-700">{row.name}</td>
                                   <td className="text-right py-2 px-2 font-mono" title={`First Buy: ${row.firstBuyDate}\nLast Valuation: ${row.lastValuation}`}>{row.timeHeldYears.toFixed(1)}y</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.avgBuyPrice.toLocaleString(undefined, { minimumFractionDigits: priceDecimals(row.avgBuyPrice), maximumFractionDigits: priceDecimals(row.avgBuyPrice) })}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.currentPrice.toLocaleString(undefined, { minimumFractionDigits: priceDecimals(row.currentPrice), maximumFractionDigits: priceDecimals(row.currentPrice) })}</td>
+                                  <td className="text-right py-2 px-2 font-mono">{formatPrice(row.avgBuyPrice)}</td>
+                                  <td className="text-right py-2 px-2 font-mono">{formatPrice(row.currentPrice)}</td>
                                   <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.totalPnLPct >= 0 ? '+' : ''}{row.totalPnLPct.toFixed(1)}%
                                   </td>
@@ -16286,7 +16292,7 @@ const PortfolioBacktester = () => {
                       <h4 className="text-sm font-semibold text-gray-700 mb-3">
                         Transactions
                         <span className="font-normal text-gray-500">
-                          {' '}(current price of {currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} as of {todayStr})
+                          {' '}(current price of {formatPrice(currentPrice)} as of {todayStr})
                         </span>
                       </h4>
                       <div className="overflow-x-auto">
@@ -16393,7 +16399,7 @@ const PortfolioBacktester = () => {
                                     <span className="text-gray-500"> ({holdYears.toFixed(1)}y)</span>
                                   </td>
                                   <td className="text-right py-1.5 px-2">{t.qty.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
-                                  <td className="text-right py-1.5 px-2 font-mono">{buyPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
+                                  <td className="text-right py-1.5 px-2 font-mono">{formatPrice(buyPrice)}</td>
                                   {/* Commission with its size in bps of the gross purchase value */}
                                   <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
                                     {t.commAbs.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -16440,7 +16446,7 @@ const PortfolioBacktester = () => {
                                     <span className="text-gray-500 font-normal"> ({maxYears.toFixed(1)}y)</span>
                                   </td>
                                   <td className="text-right py-2 px-2 font-mono">{sumShares.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{stats.adjAvgBuyPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
+                                  <td className="text-right py-2 px-2 font-mono">{formatPrice(stats.adjAvgBuyPrice)}</td>
                                   <td className="text-right py-2 px-2 font-mono">
                                     {sumBuyComm.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                                     {(sumCost - sumBuyComm) > 0 && <span className="text-gray-500 font-normal"> ({Math.round(sumBuyComm / (sumCost - sumBuyComm) * 10000)}bps)</span>}
@@ -16598,12 +16604,12 @@ const PortfolioBacktester = () => {
                             <div className="flex-1 min-w-[180px] p-2 bg-gray-50 rounded-lg">
                               <div className="text-[11px] text-gray-500 mb-0.5">Current Position</div>
                               <div className="text-sm font-semibold text-gray-800">
-                                {stats.currentPrice.toFixed(priceDecimals(stats.currentPrice))} × {stats.totalShares.toLocaleString()} shares
+                                {formatPrice(stats.currentPrice)} × {stats.totalShares.toLocaleString()} shares
                               </div>
                               <div className="text-[11px] text-gray-400">
                                 Value: {stats.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                 <span className="mx-1">·</span>
-                                Adj Buy: {stats.adjAvgBuyPrice.toFixed(priceDecimals(stats.adjAvgBuyPrice))}
+                                Adj Buy: {formatPrice(stats.adjAvgBuyPrice)}
                               </div>
                             </div>
                           )}
@@ -16657,9 +16663,9 @@ const PortfolioBacktester = () => {
                           }
 
                           const priceBubbleDefs: BubbleDef[] = [];
-                          if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#000000', label: lastPrice.toFixed(priceDecimals(lastPrice)) });
-                          if (lastCompPrice != null && openInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: CHART_PALETTE.gold, label: lastCompPrice.toFixed(priceDecimals(lastCompPrice)) });
-                          if (lastAvgBuyPrice != null && openShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#22c55e', label: lastAvgBuyPrice.toFixed(priceDecimals(lastAvgBuyPrice)) });
+                          if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#000000', label: formatPrice(lastPrice) });
+                          if (lastCompPrice != null && openInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: CHART_PALETTE.gold, label: formatPrice(lastCompPrice) });
+                          if (lastAvgBuyPrice != null && openShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#22c55e', label: formatPrice(lastAvgBuyPrice) });
                           const OpenPriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
 
                           return (
@@ -16668,7 +16674,7 @@ const PortfolioBacktester = () => {
                                 {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                                 <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                                 <YAxis tick={{ fontSize: 9 }} width={40} domain={['auto', 'auto']} />
-                                <Tooltip formatter={(value: number, name: string) => value != null ? [value.toFixed(priceDecimals(value)), name] : ['-', name]} />
+                                <Tooltip formatter={(value: number, name: string) => value != null ? [formatPrice(value), name] : ['-', name]} />
                                 <Legend />
                                 <Customized component={OpenPriceBubbles} />
                                 <Line type="monotone" dataKey="price" name={openSelectedTicker} stroke="#000000" strokeWidth={2} dot={false} connectNulls />
@@ -16689,16 +16695,16 @@ const PortfolioBacktester = () => {
                                 ))}
                                 {openShowMinMax && maxPricePoint && (
                                   <ReferenceDot x={maxPricePoint.date} y={maxPricePoint.price} r={9} fill={CHART_PALETTE.blue} stroke="#fff" strokeWidth={2}
-                                    label={{ value: maxPricePoint.price.toFixed(priceDecimals(maxPricePoint.price)), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
+                                    label={{ value: formatPrice(maxPricePoint.price), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                 )}
                                 {openShowMinMax && minPricePoint && (
                                   <ReferenceDot x={minPricePoint.date} y={minPricePoint.price} r={9} fill={CHART_PALETTE.rose} stroke="#fff" strokeWidth={2}
-                                    label={{ value: minPricePoint.price.toFixed(priceDecimals(minPricePoint.price)), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
+                                    label={{ value: formatPrice(minPricePoint.price), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                 )}
                                 {buyDots.map((dot, i) => (
                                   <ReferenceDot key={`buy-${i}`} x={dot.date} y={dot.tradePrice} r={6} fill={CHART_PALETTE.olive} stroke="#fff" strokeWidth={2}
                                     ifOverflow="extendDomain"
-                                    label={{ value: dot.tradePrice.toFixed(priceDecimals(dot.tradePrice)), position: 'top', fontSize: 11, fill: CHART_PALETTE.olive, fontWeight: 600 }} />
+                                    label={{ value: formatPrice(dot.tradePrice), position: 'top', fontSize: 11, fill: CHART_PALETTE.olive, fontWeight: 600 }} />
                                 ))}
                               </LineChart>
                             </ResponsiveContainer>
@@ -17113,7 +17119,7 @@ const PortfolioBacktester = () => {
                                   <span className="text-gray-500"> ({t.holdingPeriodYears.toFixed(1)}y)</span>
                                 </td>
                                 <td className="text-right py-1.5 px-2">{t.sharesSold.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
-                                <td className="text-right py-1.5 px-2 font-mono">{t.buyPrice.toLocaleString(undefined, { minimumFractionDigits: priceDecimals(t.buyPrice), maximumFractionDigits: priceDecimals(t.buyPrice) })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{formatPrice(t.buyPrice)}</td>
                                 {/* Commission with its size in bps of the gross traded value, matching
                                     the Transaction History table and the summary row below. */}
                                 <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
@@ -17123,7 +17129,7 @@ const PortfolioBacktester = () => {
                                   )}
                                 </td>
                                 <td className="text-right py-1.5 px-2 font-mono">{t.initialCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                <td className="text-right py-1.5 px-2 font-mono">{t.sellPrice.toLocaleString(undefined, { minimumFractionDigits: priceDecimals(t.sellPrice), maximumFractionDigits: priceDecimals(t.sellPrice) })}</td>
+                                <td className="text-right py-1.5 px-2 font-mono">{formatPrice(t.sellPrice)}</td>
                                 <td className="text-right py-1.5 px-2 font-mono whitespace-nowrap">
                                   {t.sellCommission.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                                   {(t.valueAfterFee + t.sellCommission) > 0 && (
@@ -17190,7 +17196,7 @@ const PortfolioBacktester = () => {
                                   {/* Shares — cumulative */}
                                   <td className="text-right py-2 px-2 font-mono">{sumShares.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                                   {/* Buy Price — weighted avg */}
-                                  <td className="text-right py-2 px-2 font-mono">{wAvgBuy.toLocaleString(undefined, { minimumFractionDigits: priceDecimals(wAvgBuy), maximumFractionDigits: priceDecimals(wAvgBuy) })}</td>
+                                  <td className="text-right py-2 px-2 font-mono">{formatPrice(wAvgBuy)}</td>
                                   {/* Buy Comm. — cumulative + basis points vs invested amount (shares × buyPrice, excl. commission) */}
                                   <td className="text-right py-2 px-2 font-mono">
                                     {sumBuyComm.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -17199,7 +17205,7 @@ const PortfolioBacktester = () => {
                                   {/* Initial Cost — cumulative */}
                                   <td className="text-right py-2 px-2 font-mono">{sumCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   {/* Sell Price — weighted avg */}
-                                  <td className="text-right py-2 px-2 font-mono">{wAvgSell.toLocaleString(undefined, { minimumFractionDigits: priceDecimals(wAvgSell), maximumFractionDigits: priceDecimals(wAvgSell) })}</td>
+                                  <td className="text-right py-2 px-2 font-mono">{formatPrice(wAvgSell)}</td>
                                   {/* Sell Comm. — cumulative + basis points vs gross sale proceeds */}
                                   <td className="text-right py-2 px-2 font-mono">
                                     {sumSellComm.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -17416,7 +17422,7 @@ const PortfolioBacktester = () => {
                             <div className="flex-1 min-w-[220px] p-2 bg-gray-50 rounded-lg">
                               <div className="text-[11px] text-gray-500 mb-0.5">Current vs Sold</div>
                               <div className="text-sm font-semibold text-gray-800">
-                                Now {stats.currentPrice.toFixed(priceDecimals(stats.currentPrice))} vs avg {stats.weightedSellPrice.toFixed(priceDecimals(stats.weightedSellPrice))}
+                                Now {formatPrice(stats.currentPrice)} vs avg {formatPrice(stats.weightedSellPrice)}
                                 <span className="text-gray-300 mx-1">&middot;</span>
                                 <span className={stats.priceVsSoldPct >= 0 ? 'text-red-600' : 'text-green-600'}>
                                   {stats.priceVsSoldPct >= 0 ? '+' : ''}{stats.priceVsSoldPct.toFixed(1)}%
@@ -17509,11 +17515,11 @@ const PortfolioBacktester = () => {
                              Customized doesn't support custom props, so closure is the cleanest
                              approach. All rendering is delegated to the shared renderEdgeBubbles. */
                           const priceBubbleDefs: BubbleDef[] = [];
-                          if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#000000', label: lastPrice.toFixed(priceDecimals(lastPrice)) });
+                          if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#000000', label: formatPrice(lastPrice) });
                           // Only show comparison bubble when the comparison line is actually visible
-                          if (lastCompPrice != null && closedInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: CHART_PALETTE.gold, label: lastCompPrice.toFixed(priceDecimals(lastCompPrice)) });
-                          if (lastAvgBuyPrice != null && closedShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#22c55e', label: lastAvgBuyPrice.toFixed(priceDecimals(lastAvgBuyPrice)) });
-                          if (lastAvgSellPrice != null && closedShowAvgSell) priceBubbleDefs.push({ value: lastAvgSellPrice, color: '#ef4444', label: lastAvgSellPrice.toFixed(priceDecimals(lastAvgSellPrice)) });
+                          if (lastCompPrice != null && closedInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: CHART_PALETTE.gold, label: formatPrice(lastCompPrice) });
+                          if (lastAvgBuyPrice != null && closedShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#22c55e', label: formatPrice(lastAvgBuyPrice) });
+                          if (lastAvgSellPrice != null && closedShowAvgSell) priceBubbleDefs.push({ value: lastAvgSellPrice, color: '#ef4444', label: formatPrice(lastAvgSellPrice) });
                           const PriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
 
                           return (
@@ -17526,7 +17532,7 @@ const PortfolioBacktester = () => {
                             <Tooltip
                               formatter={(value: number, name: string) => {
                                 if (value === undefined || value === null) return ['-', name];
-                                return [value.toFixed(priceDecimals(value)), name];
+                                return [formatPrice(value), name];
                               }}
                             />
                             <Legend />
@@ -17611,7 +17617,7 @@ const PortfolioBacktester = () => {
                                 stroke="#fff"
                                 strokeWidth={2}
                                 label={{
-                                  value: maxPricePoint.price.toFixed(priceDecimals(maxPricePoint.price)),
+                                  value: formatPrice(maxPricePoint.price),
                                   position: 'left',
                                   fontSize: 12,
                                   fill: '#111827',
@@ -17629,7 +17635,7 @@ const PortfolioBacktester = () => {
                                 stroke="#fff"
                                 strokeWidth={2}
                                 label={{
-                                  value: minPricePoint.price.toFixed(priceDecimals(minPricePoint.price)),
+                                  value: formatPrice(minPricePoint.price),
                                   position: 'left',
                                   fontSize: 12,
                                   fill: '#111827',
@@ -17650,7 +17656,7 @@ const PortfolioBacktester = () => {
                                 stroke="#fff"
                                 strokeWidth={2}
                                 ifOverflow="extendDomain"
-                                label={{ value: dot.tradePrice.toFixed(priceDecimals(dot.tradePrice)), position: 'top', fontSize: 11, fill: CHART_PALETTE.olive, fontWeight: 600 }}
+                                label={{ value: formatPrice(dot.tradePrice), position: 'top', fontSize: 11, fill: CHART_PALETTE.olive, fontWeight: 600 }}
                               />
                             ))}
                             {/* Sell dots (on top of max/min) — wine, matching the Avg Sell line.
@@ -17665,7 +17671,7 @@ const PortfolioBacktester = () => {
                                 stroke="#fff"
                                 strokeWidth={2}
                                 ifOverflow="extendDomain"
-                                label={{ value: dot.tradePrice.toFixed(priceDecimals(dot.tradePrice)), position: 'top', fontSize: 11, fill: CHART_PALETTE.wine, fontWeight: 600 }}
+                                label={{ value: formatPrice(dot.tradePrice), position: 'top', fontSize: 11, fill: CHART_PALETTE.wine, fontWeight: 600 }}
                               />
                             ))}
                           </LineChart>
