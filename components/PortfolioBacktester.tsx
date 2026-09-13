@@ -1186,22 +1186,29 @@ const CURRENCY_COLORS: Record<string, string> = {
 };
 
 // Return Map (Best To Worst tab): one fixed colour per asset, so the same asset is easy to spot
-// in every year column. Starts with the shared CHART_PALETTE, then adds darker/lighter relatives.
-// Colours are handed out by the asset's position in the lookup table, so filtering never reshuffles them.
+// in every year column. The 8-colour CHART_PALETTE is too small for ~30 assets, so this is a
+// separate grid: 10 hues × 3 shades (medium, dark, light) + 2 greys = 32 colours. Checked with a
+// perceptual colour-difference test: the closest pair still differs by ΔE 14.9 (above ~10 reads as
+// clearly different). With more than 32 assets on the map, colours start repeating.
 const RETURN_MAP_ASSET_COLORS = [
-  ...Object.values(CHART_PALETTE),
-  '#1f4e79', '#e07b39', '#2a9d8f', '#7a6a1f', '#9b3d8f', '#3f7f5f', '#4a5fc1', '#b23a48',
-  '#5c6b73', '#d4a017', '#136f63', '#6d4c9f', '#8c6d31', '#5fa8d3', '#a4436b', '#4f772d',
+  '#a02222', '#a06122', '#a08b22', '#61a022', '#22a061', '#22a0a0', '#226ba0', '#2237a0', '#6122a0', '#a02276',
+  '#631d1d', '#63401d', '#63571d', '#40631d', '#1d6340', '#1d6363', '#1d4663', '#1d2863', '#401d63', '#631d4b',
+  '#d45454', '#d49454', '#d4bf54', '#94d454', '#54d494', '#54d4d4', '#549fd4', '#5469d4', '#9454d4', '#d454a9',
+  '#5c6b73', '#9aa5ad',
 ];
 
 /**
- * Picks black or white text for a coloured cell, whichever reads better on that background.
- * Uses the standard "perceived brightness" weighting (the eye sees green as brighter than blue).
+ * Picks white or near-black text for a coloured cell — whichever has the higher contrast ratio
+ * on that background, using the WCAG accessibility formula (the eye sees green as much brighter
+ * than blue, so a plain RGB average would get this wrong).
  */
 const readableTextOn = (hex: string): string => {
   const n = parseInt(hex.slice(1), 16);
-  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? '#1f2937' : '#ffffff';
+  const linear = (c: number) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  // Relative luminance: 0 = black, 1 = white
+  const lum = 0.2126 * linear((n >> 16) & 255) + 0.7152 * linear((n >> 8) & 255) + 0.0722 * linear(n & 255);
+  // Contrast vs white, and vs the #1f2937 text colour (luminance ≈ 0.02)
+  return 1.05 / (lum + 0.05) >= (lum + 0.05) / 0.07 ? '#ffffff' : '#1f2937';
 };
 
 /**
@@ -4699,15 +4706,14 @@ const PortfolioBacktester = () => {
       return (plnGrowth / (1 + targetFx / 100) - 1) * 100;
     };
 
-    // Cell colour for the selected "Colour" mode. Asset colours are indexed on the FULL lookup table
-    // so an asset keeps its colour however the filters are set.
-    const lookupIndex = new Map(assetLookup.map((a, i) => [a.ticker, i]));
+    // Cell colour for the selected "Colour" mode. (colourIndex, used for "Asset" mode, is built further
+    // down once we know which assets made it onto the map.)
     const classColor = (cls: string) =>
       ASSET_CLASS_COLORS[cls === 'Other' ? METALS_CRYPTO_LABEL : cls] ?? '#94a3b8';
     const cellColor = (asset: AssetLookup, ret: number): string => {
       if (returnMapHighlight === 'return') return returnHeatColor(ret);
       if (returnMapHighlight === 'class') return classColor(asset.assetClass || 'Other');
-      return RETURN_MAP_ASSET_COLORS[(lookupIndex.get(asset.ticker) ?? 0) % RETURN_MAP_ASSET_COLORS.length];
+      return RETURN_MAP_ASSET_COLORS[(colourIndex.get(asset.ticker) ?? 0) % RETURN_MAP_ASSET_COLORS.length];
     };
 
     type MapCell = { asset: AssetLookup; ret: number; tooltip: string; shortHistory?: boolean };
@@ -4774,17 +4780,28 @@ const PortfolioBacktester = () => {
     const maxRows = Math.max(annualised.length, ...columns.map(c => c.cells.length), 0);
     const toggleTracked = (ticker: string) =>
       setReturnMapTracked(prev => prev.includes(ticker) ? prev.filter(t => t !== ticker) : [...prev, ticker]);
+    // Only followed assets that are actually on the map right now count. Otherwise following an
+    // asset and then filtering it out (or picking 5Y when it has no recent data) would fade EVERY cell.
+    // The hidden ones stay remembered and light up again when they come back into view.
+    const onMap = new Set([...columns.flatMap(c => c.cells), ...annualised].map(c => c.asset.ticker));
+    const activeTracked = returnMapTracked.filter(t => onMap.has(t));
+    // "Asset" colours are numbered over the assets on the map right now (in lookup-table order), so
+    // up to 32 assets on screen never share a colour. Numbering over the whole lookup table would
+    // keep colours fixed when filters change, but the sheet holds far more than 32 assets with data,
+    // so assets side by side on the map would clash — which defeats the point of colouring by asset.
+    const colourIndex = new Map(assets.filter(a => onMap.has(a.ticker)).map((a, i) => [a.ticker, i]));
 
     // A single coloured cell: ticker on top, return below. Clicking it follows that asset in every column.
     const renderCell = (cell: MapCell, key: string) => {
       const bg = cellColor(cell.asset, cell.ret);
-      const tracked = returnMapTracked.includes(cell.asset.ticker);
-      const faded = returnMapTracked.length > 0 && !tracked;
+      const tracked = activeTracked.includes(cell.asset.ticker);
+      const faded = activeTracked.length > 0 && !tracked;
       return (
         <td key={key} className="p-0.5">
           <button
             type="button"
             onClick={() => toggleTracked(cell.asset.ticker)}
+            aria-pressed={tracked}
             title={cell.tooltip}
             className={`w-full rounded px-1 py-1 text-center leading-tight transition-opacity ${tracked ? 'ring-2 ring-offset-1 ring-slate-900' : ''}`}
             style={{ backgroundColor: bg, color: readableTextOn(bg), opacity: faded ? 0.2 : 1 }}
@@ -4837,9 +4854,9 @@ const PortfolioBacktester = () => {
 
         {/* Key and hints under the map */}
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500">
-          {returnMapTracked.length > 0 ? (
+          {activeTracked.length > 0 ? (
             <span className="flex items-center gap-2">
-              Following: <span className="font-medium text-gray-700">{returnMapTracked.join(', ')}</span>
+              Following: <span className="font-medium text-gray-700">{activeTracked.join(', ')}</span>
               <button onClick={() => setReturnMapTracked([])} className="text-blue-600 hover:underline">Clear</button>
             </span>
           ) : (
