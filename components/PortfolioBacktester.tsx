@@ -1185,6 +1185,38 @@ const CURRENCY_COLORS: Record<string, string> = {
   'M&C': CHART_PALETTE.gold, // matches the Metals & Crypto asset class color
 };
 
+// Return Map (Best To Worst tab): one fixed colour per asset, so the same asset is easy to spot
+// in every year column. Starts with the shared CHART_PALETTE, then adds darker/lighter relatives.
+// Colours are handed out by the asset's position in the lookup table, so filtering never reshuffles them.
+const RETURN_MAP_ASSET_COLORS = [
+  ...Object.values(CHART_PALETTE),
+  '#1f4e79', '#e07b39', '#2a9d8f', '#7a6a1f', '#9b3d8f', '#3f7f5f', '#4a5fc1', '#b23a48',
+  '#5c6b73', '#d4a017', '#136f63', '#6d4c9f', '#8c6d31', '#5fa8d3', '#a4436b', '#4f772d',
+];
+
+/**
+ * Picks black or white text for a coloured cell, whichever reads better on that background.
+ * Uses the standard "perceived brightness" weighting (the eye sees green as brighter than blue).
+ */
+const readableTextOn = (hex: string): string => {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? '#1f2937' : '#ffffff';
+};
+
+/**
+ * Return Map "Return" highlight: pale for returns near zero, deep green for big gains, deep red for
+ * big losses. Anything beyond ±40% gets the deepest shade so one outlier doesn't wash out the rest.
+ */
+const returnHeatColor = (ret: number): string => {
+  const t = Math.min(Math.abs(ret) / 40, 1);
+  const [from, to] = ret >= 0
+    ? [[236, 253, 243], [21, 128, 61]]   // very light green → green-700
+    : [[254, 242, 242], [185, 28, 28]];  // very light red → red-700
+  const mix = from.map((c, i) => Math.round(c + (to[i] - c) * t));
+  return `#${mix.map(c => c.toString(16).padStart(2, '0')).join('')}`;
+};
+
 // "Group Metals & Crypto" feature: assets whose raw asset class is 'Other' (Gold + Crypto in this
 // portfolio's Google Sheet) can be displayed as a unified "Metals & Crypto" asset class AND as a
 // separate "M&C" pseudo-currency in the By Currency bar chart so they don't inflate fiat buckets.
@@ -1389,6 +1421,18 @@ const PortfolioBacktester = () => {
   // Best To Worst view mode: 'year' for annual returns, or a number (1-5) for period returns
   // When null or 'year', the year dropdown is used. When 1-5, shows period returns.
   const [bestToWorstMode, setBestToWorstMode] = useState<'year' | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10>('year');
+
+  // Best To Worst "Return Map" — years laid side by side, each column ranked best (top) to worst (bottom).
+  // layout: 'ranking' = the original single-year table, 'map' = the multi-year return map
+  const [bestToWorstLayout, setBestToWorstLayout] = useState<'ranking' | 'map'>('ranking');
+  // How many of the most recent years the map shows
+  const [returnMapWindow, setReturnMapWindow] = useState<5 | 10 | 'all'>(10);
+  // Which currency the returns are measured in ('native' = each asset's own currency) — also drives the ranking
+  const [returnMapCurrency, setReturnMapCurrency] = useState<'native' | 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD'>('native');
+  // What the cell colour means: one colour per asset, per asset class, or green/red by size of return
+  const [returnMapHighlight, setReturnMapHighlight] = useState<'asset' | 'class' | 'return'>('asset');
+  // Tickers the user clicked to follow across years (all other cells fade out)
+  const [returnMapTracked, setReturnMapTracked] = useState<string[]>([]);
 
   // Trend Following tab state
   // Selected asset ticker for trend following analysis
@@ -4499,6 +4543,30 @@ const PortfolioBacktester = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const memoizedAnnualReturns = useMemo(() => calculateAssetsAnnualReturns(), [assetData, assetLookup]);
 
+  // Calendar-year returns of the xxxPLN exchange rates, for the Return Map's currency buttons.
+  // Same method as calculateAssetsAnnualReturns (last price of the year vs last price of the prior
+  // year), but done in one pass over the data and for FX pairs even if they aren't in the lookup table.
+  // Shape: { USDPLN: { 2023: -9.8, 2024: 7.1, ... }, EURPLN: {...}, ... } in percent.
+  const fxAnnualReturns = useMemo(() => {
+    const result: Record<string, Record<number, number>> = {};
+    if (!assetData) return result;
+    const pairs = new Set([...Object.values(FX_TICKER_MAP), ...assetLookup.map(a => a.fx)].filter(Boolean));
+    pairs.forEach(pair => {
+      // Rows are in date order, so the last price written for a year is that year's closing price
+      const yearEnd: Record<number, number> = {};
+      assetData.forEach(row => {
+        const price = Number(row[pair]);
+        if (price > 0) yearEnd[new Date(row.date).getFullYear()] = price;
+      });
+      result[pair] = {};
+      Object.keys(yearEnd).forEach(y => {
+        const year = Number(y);
+        if (yearEnd[year - 1]) result[pair][year] = (yearEnd[year] / yearEnd[year - 1] - 1) * 100;
+      });
+    });
+    return result;
+  }, [assetData, assetLookup]);
+
   /**
    * Generates tooltip text for a specific asset/year cell.
    * Shows the calculation details so users understand how the return was computed.
@@ -4601,6 +4669,207 @@ const PortfolioBacktester = () => {
 
     // Sort by return, highest to lowest
     return assetsWithReturns.sort((a, b) => b.return - a.return);
+  };
+
+  /**
+   * Best To Worst → "Return Map": each year is a column with assets ranked best (top) to worst
+   * (bottom), like BlackRock's asset-class return map. It answers questions such as "did last
+   * year's winner stay on top, or fall to the bottom?". Returns are converted into the selected
+   * currency BEFORE ranking, so switching currency can reorder a column.
+   */
+  const renderReturnMap = (annualReturns: AssetsAnnualReturns, allYears: number[]) => {
+    const shownYears = returnMapWindow === 'all' ? allYears : allYears.slice(-returnMapWindow);
+    const assets = getFilteredAssetLookup();
+    const ccyLabel = returnMapCurrency === 'native' ? 'native currency' : returnMapCurrency;
+
+    // One asset's return for one year in the selected currency (percent), or null when there is no
+    // price or no FX data for that year. Every conversion goes through PLN, because all FX pairs are
+    // quoted against PLN: (1 + native) × (1 + xxxPLN) is the PLN growth, and dividing that by
+    // (1 + yyyPLN) turns it into growth measured in yyy.
+    const returnIn = (asset: AssetLookup, year: number): number | null => {
+      const native = annualReturns[asset.ticker]?.[year]?.return;
+      if (native === undefined) return null;
+      if (returnMapCurrency === 'native' || returnMapCurrency === asset.currency) return native;
+      const toPlnFx = asset.currency === 'PLN' ? 0 : fxAnnualReturns[asset.fx || FX_TICKER_MAP[asset.currency]]?.[year];
+      if (toPlnFx === undefined) return null;
+      const plnGrowth = (1 + native / 100) * (1 + toPlnFx / 100);
+      if (returnMapCurrency === 'PLN') return (plnGrowth - 1) * 100;
+      const targetFx = fxAnnualReturns[FX_TICKER_MAP[returnMapCurrency]]?.[year];
+      if (targetFx === undefined) return null;
+      return (plnGrowth / (1 + targetFx / 100) - 1) * 100;
+    };
+
+    // Cell colour for the selected "Colour" mode. Asset colours are indexed on the FULL lookup table
+    // so an asset keeps its colour however the filters are set.
+    const lookupIndex = new Map(assetLookup.map((a, i) => [a.ticker, i]));
+    const classColor = (cls: string) =>
+      ASSET_CLASS_COLORS[cls === 'Other' ? METALS_CRYPTO_LABEL : cls] ?? '#94a3b8';
+    const cellColor = (asset: AssetLookup, ret: number): string => {
+      if (returnMapHighlight === 'return') return returnHeatColor(ret);
+      if (returnMapHighlight === 'class') return classColor(asset.assetClass || 'Other');
+      return RETURN_MAP_ASSET_COLORS[(lookupIndex.get(asset.ticker) ?? 0) % RETURN_MAP_ASSET_COLORS.length];
+    };
+
+    type MapCell = { asset: AssetLookup; ret: number; tooltip: string; shortHistory?: boolean };
+    const signed = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+
+    // One ranked column per year
+    const columns = shownYears.map(year => {
+      const ranked = assets
+        .map(asset => ({ asset, ret: returnIn(asset, year) }))
+        .filter((c): c is { asset: AssetLookup; ret: number } => c.ret !== null)
+        .sort((a, b) => b.ret - a.ret);
+      // A year whose latest price isn't from December is still in progress → label it "YTD"
+      const latestEnd = ranked.reduce((max, c) => Math.max(max, new Date(annualReturns[c.asset.ticker][year].endDate).getTime()), 0);
+      const isYtd = ranked.length > 0 && new Date(latestEnd).getMonth() < 11;
+      const cells: MapCell[] = ranked.map((c, i) => ({
+        ...c,
+        tooltip: [
+          `${c.asset.name} (${c.asset.ticker})`,
+          `Rank ${i + 1} of ${ranked.length} in ${year}${isYtd ? ' (year to date)' : ''}`,
+          `Return in ${ccyLabel}: ${signed(c.ret)}`,
+          `Prices: ${getReturnTooltip(c.asset.ticker, year, annualReturns)}`,
+        ].join('\n'),
+      }));
+      return { key: String(year), label: isYtd ? `${year} YTD` : String(year), cells };
+    });
+
+    // Annualised column: compound each asset's yearly returns over the years shown, then spread the
+    // total over the ACTUAL time covered (from each year's start and end price dates), so a partial
+    // current year counts as the fraction of a year it really is.
+    const annualised: MapCell[] = assets
+      .map(asset => {
+        let growth = 1, days = 0;
+        const covered: number[] = [];
+        shownYears.forEach(year => {
+          const ret = returnIn(asset, year);
+          const data = annualReturns[asset.ticker]?.[year];
+          if (ret === null || !data) return;
+          growth *= 1 + ret / 100;
+          days += (new Date(data.endDate).getTime() - new Date(data.startDate).getTime()) / 86400000;
+          covered.push(year);
+        });
+        const span = days / 365.25;
+        if (span < 1) return null;  // under a year of history: annualising would exaggerate it
+        return { asset, ret: (Math.pow(growth, 1 / span) - 1) * 100, span, covered, growth };
+      })
+      .filter((a): a is NonNullable<typeof a> => a !== null)
+      .sort((a, b) => b.ret - a.ret)
+      .map((a, i, all) => {
+        const shortHistory = a.covered.length < shownYears.length;
+        return {
+          asset: a.asset,
+          ret: a.ret,
+          shortHistory,
+          tooltip: [
+            `${a.asset.name} (${a.asset.ticker})`,
+            `Rank ${i + 1} of ${all.length} by annualised return`,
+            `Annualised in ${ccyLabel}: ${signed(a.ret)} a year`,
+            `Over ${a.span.toFixed(1)} years (${a.covered[0]}–${a.covered[a.covered.length - 1]}), total ${signed((a.growth - 1) * 100)}`,
+            ...(shortHistory ? ['Shorter history than the years shown'] : []),
+          ].join('\n'),
+        };
+      });
+
+    const maxRows = Math.max(annualised.length, ...columns.map(c => c.cells.length), 0);
+    const toggleTracked = (ticker: string) =>
+      setReturnMapTracked(prev => prev.includes(ticker) ? prev.filter(t => t !== ticker) : [...prev, ticker]);
+
+    // A single coloured cell: ticker on top, return below. Clicking it follows that asset in every column.
+    const renderCell = (cell: MapCell, key: string) => {
+      const bg = cellColor(cell.asset, cell.ret);
+      const tracked = returnMapTracked.includes(cell.asset.ticker);
+      const faded = returnMapTracked.length > 0 && !tracked;
+      return (
+        <td key={key} className="p-0.5">
+          <button
+            type="button"
+            onClick={() => toggleTracked(cell.asset.ticker)}
+            title={cell.tooltip}
+            className={`w-full rounded px-1 py-1 text-center leading-tight transition-opacity ${tracked ? 'ring-2 ring-offset-1 ring-slate-900' : ''}`}
+            style={{ backgroundColor: bg, color: readableTextOn(bg), opacity: faded ? 0.2 : 1 }}
+          >
+            <div className="font-semibold truncate">{cell.asset.ticker}</div>
+            <div>{cell.ret.toFixed(1)}%{cell.shortHistory ? '*' : ''}</div>
+          </button>
+        </td>
+      );
+    };
+
+    if (maxRows === 0) {
+      return (
+        <div className="bg-white p-4 rounded-lg shadow text-center text-gray-500">
+          No assets match the current filters. Try adjusting your selection.
+        </div>
+      );
+    }
+
+    // Asset classes on screen, for the colour key in "Asset class" mode
+    const classesShown = Array.from(new Set(assets.map(a => a.assetClass || 'Other'))).sort();
+
+    return (
+      <div className="bg-white p-4 rounded-lg shadow">
+        {/* Wide map scrolls sideways inside its own box instead of stretching the page */}
+        <div className="overflow-x-auto">
+          <table className="text-xs">
+            <thead>
+              <tr>
+                <th className="py-1 px-1 text-gray-400 font-normal">#</th>
+                {columns.map(c => (
+                  <th key={c.key} className="py-1 px-1 text-sm font-semibold text-gray-800 min-w-[84px]">{c.label}</th>
+                ))}
+                <th className="w-3"></th>
+                <th className="py-1 px-1 text-sm font-semibold text-gray-800 min-w-[84px]">Annualised</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: maxRows }, (_, row) => (
+                <tr key={row}>
+                  <td className="text-right pr-1 text-gray-400">{row + 1}</td>
+                  {columns.map(c => c.cells[row] ? renderCell(c.cells[row], c.key) : <td key={c.key} />)}
+                  <td />
+                  {annualised[row] ? renderCell(annualised[row], 'annualised') : <td />}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Key and hints under the map */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500">
+          {returnMapTracked.length > 0 ? (
+            <span className="flex items-center gap-2">
+              Following: <span className="font-medium text-gray-700">{returnMapTracked.join(', ')}</span>
+              <button onClick={() => setReturnMapTracked([])} className="text-blue-600 hover:underline">Clear</button>
+            </span>
+          ) : (
+            <span>Click a cell to follow that asset through the years.</span>
+          )}
+          {returnMapHighlight === 'class' && (
+            <span className="flex flex-wrap items-center gap-2">
+              {classesShown.map(cls => (
+                <span key={cls} className="flex items-center gap-1">
+                  <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: classColor(cls) }}></span>
+                  {cls}
+                </span>
+              ))}
+            </span>
+          )}
+          {returnMapHighlight === 'return' && (
+            <span className="flex items-center gap-1">
+              ≤ −40%
+              <span
+                className="inline-block w-32 h-3 rounded-sm"
+                style={{ background: `linear-gradient(to right, ${returnHeatColor(-40)}, ${returnHeatColor(0)}, ${returnHeatColor(40)})` }}
+              ></span>
+              ≥ +40%
+            </span>
+          )}
+          {annualised.some(a => a.shortHistory) && <span>* annualised over a shorter history than the years shown</span>}
+          {returnMapCurrency !== 'native' && <span>Assets without FX data for a year are left out of that year.</span>}
+        </div>
+      </div>
+    );
   };
 
   /**
@@ -9299,6 +9568,69 @@ const PortfolioBacktester = () => {
                   <>
                   {/* Filter controls + Year/Period selectors on one line */}
                   <AssetFilterControls>
+                    {/* Layout switch: the original one-year Ranking table, or the multi-year Return Map */}
+                    <div className="flex gap-0">
+                      {([['ranking', 'Ranking'], ['map', 'Return Map']] as const).map(([value, label], i) => (
+                        <button
+                          key={value}
+                          onClick={() => setBestToWorstLayout(value)}
+                          className={`px-3 py-1.5 text-sm font-medium border transition-colors ${i === 0 ? 'rounded-l-lg' : 'rounded-r-lg'} ${
+                            bestToWorstLayout === value
+                              ? 'bg-slate-800 text-white border-slate-800'
+                              : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    {bestToWorstLayout === 'map' && (
+                      <>
+                        {/* Return Map: how many recent years to show */}
+                        <div className="flex gap-1">
+                          {([5, 10, 'all'] as const).map(w => (
+                            <button
+                              key={w}
+                              onClick={() => setReturnMapWindow(w)}
+                              className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
+                                returnMapWindow === w
+                                  ? 'bg-slate-800 text-white border-slate-800'
+                                  : 'bg-white border-gray-300 hover:bg-gray-100'
+                              }`}
+                            >
+                              {w === 'all' ? 'All' : `${w}Y`}
+                            </button>
+                          ))}
+                        </div>
+                        {/* Return Map: currency the returns are measured (and ranked) in */}
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                          {(['native', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
+                            <button
+                              key={c}
+                              onClick={() => setReturnMapCurrency(c)}
+                              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                                returnMapCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                            >{c === 'native' ? 'Native' : c}</button>
+                          ))}
+                        </div>
+                        {/* Return Map: what the cell colour means */}
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-gray-500 mr-1">Colour:</span>
+                          {([['asset', 'Asset'], ['class', 'Asset class'], ['return', 'Return']] as const).map(([value, label]) => (
+                            <button
+                              key={value}
+                              onClick={() => setReturnMapHighlight(value)}
+                              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                                returnMapHighlight === value ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                            >{label}</button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    {bestToWorstLayout === 'ranking' && (<>
                     {/* Year Dropdown */}
                     <div className="relative">
                       <select
@@ -9330,8 +9662,12 @@ const PortfolioBacktester = () => {
                         </button>
                       ))}
                     </div>
+                    </>)}
                   </AssetFilterControls>
 
+                  {bestToWorstLayout === 'map' && renderReturnMap(annualReturns, years)}
+
+                  {bestToWorstLayout === 'ranking' && (
                   <div className="bg-white p-4 rounded-lg shadow">
 
                     {/* Ranked Table - Shows Bar Chart, Return, Asset, Ticker, Currency, Return in PLN */}
@@ -9454,6 +9790,7 @@ const PortfolioBacktester = () => {
                       </div>
                     )}
                   </div>
+                  )}
                   </>
                 );
               })()}
