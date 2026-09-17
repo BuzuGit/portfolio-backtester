@@ -417,6 +417,135 @@ const TradeHistoryTable = ({ events }: { events: TradeEvent[] }) => (
 );
 
 // ============================================
+// TABLE SORTING (Positions tab)
+// ============================================
+// Every table in the Positions tab can be re-ordered by clicking a column heading.
+// The rule is the same everywhere and deliberately simple:
+//
+//   1st click  ->  most interesting first: biggest number, or A-Z for words and dates
+//   2nd click  ->  the exact reverse
+//   3rd click  ->  sorting off, back to the table's own natural order
+//
+// That third click matters more than it sounds. These tables are already ordered
+// thoughtfully - cash is grouped by account, the statement runs newest-first, the
+// asset classes follow a fixed house order - so "remove sort" has to restore the
+// original arrangement, not leave a leftover ordering behind. That is why sorting
+// never touches the underlying arrays: it always produces a re-ordered COPY, and
+// clearing the sort simply stops making that copy.
+
+/** Which column a table is sorted by, and in which direction. `null` = not sorted at all. */
+type TableSortState = { col: string; dir: 'asc' | 'desc' } | null;
+
+/** One sort state per table, looked up by a short table id such as 'positionsOpen'. */
+type TableSortMap = Record<string, TableSortState>;
+
+/** The kinds of value a column can be sorted on. null/undefined means "this cell is empty". */
+type SortValue = string | number | null | undefined;
+
+/**
+ * Work out the next sort state for a column, following the three-click cycle above.
+ *
+ * `firstDir` is what the FIRST click should do: 'desc' for numbers (biggest first,
+ * which is what you want from a PnL or Weight column) and 'asc' for words and dates
+ * (A-Z and oldest-first, which is what anyone expects from a name column).
+ */
+const nextTableSort = (current: TableSortState, col: string, firstDir: 'asc' | 'desc'): TableSortState => {
+  // A different column than the one currently sorted: start its cycle from the beginning.
+  if (!current || current.col !== col) return { col, dir: firstDir };
+  // Same column, still showing the first direction: click two flips it.
+  if (current.dir === firstDir) return { col, dir: firstDir === 'desc' ? 'asc' : 'desc' };
+  // Same column, already reversed: click three clears the sort entirely.
+  return null;
+};
+
+/**
+ * Return a re-ordered COPY of `rows` according to `sort`. Returns the original array
+ * untouched when nothing is sorted, so an unsorted table costs nothing.
+ *
+ * `accessors` maps a column id to a function that pulls the sortable value out of a row,
+ * so the number the table displays and the number it sorts on can never drift apart.
+ *
+ * Two behaviours worth knowing about:
+ *  - Empty cells (null, undefined, '', NaN) always sink to the bottom, whichever
+ *    direction you sort in. A position with no XIRR does not have "the smallest XIRR";
+ *    it has no answer, and parking it at the top of a descending sort would be a lie.
+ *  - Ties keep their original relative order (a "stable" sort), so sorting by a column
+ *    full of repeats - an account name, say - leaves the rest of the order alone.
+ */
+function sortTableRows<T>(rows: T[], sort: TableSortState, accessors: Record<string, (row: T) => SortValue>): T[] {
+  if (!sort) return rows;
+  const read = accessors[sort.col];
+  if (!read) return rows;                       // unknown column id: leave the table alone
+  const sign = sort.dir === 'asc' ? 1 : -1;
+  const isEmpty = (v: SortValue) =>
+    v === null || v === undefined || v === '' || (typeof v === 'number' && !Number.isFinite(v));
+  // Decorate each row with its original position, so ties can fall back to it.
+  return rows
+    .map((row, idx) => ({ row, idx }))
+    .sort((a, b) => {
+      const va = read(a.row);
+      const vb = read(b.row);
+      const aEmpty = isEmpty(va);
+      const bEmpty = isEmpty(vb);
+      if (aEmpty || bEmpty) return aEmpty && bEmpty ? a.idx - b.idx : aEmpty ? 1 : -1;
+      const cmp = typeof va === 'number' && typeof vb === 'number'
+        ? va - vb
+        // localeCompare with numeric:true sorts "Item 2" before "Item 10", and handles
+        // accented characters properly. ISO dates (YYYY-MM-DD) sort correctly as plain text.
+        : String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: 'base' });
+      return cmp !== 0 ? cmp * sign : a.idx - b.idx;
+    })
+    .map(entry => entry.row);
+}
+
+/**
+ * A clickable table heading.
+ *
+ * It sits exactly where the plain <th> it replaces sat, with the same light-grey fill and
+ * the same padding. The only additions are a pointer cursor, a darker grey fill while that
+ * column is the one doing the sorting, and a small arrow saying which way round it is.
+ * An unsorted column shows a faint double arrow, which is the hint that the header is
+ * clickable at all.
+ */
+const SortableTh = ({
+  col, sort, onSort, align = 'right', numeric = true, style, title, children,
+}: {
+  col: string;                                          // this column's id, matching its accessor
+  sort: TableSortState;                                 // the whole table's current sort
+  onSort: (col: string, firstDir: 'asc' | 'desc') => void;
+  align?: 'left' | 'right';                             // must match the body cells' alignment
+  numeric?: boolean;                                    // false for words and dates
+  style?: React.CSSProperties;
+  title?: string;
+  children: React.ReactNode;
+}) => {
+  const active = sort?.col === col;
+  // Numbers start biggest-first; words and dates start A-Z / oldest-first.
+  const firstDir: 'asc' | 'desc' = numeric ? 'desc' : 'asc';
+  return (
+    <th
+      onClick={() => onSort(col, firstDir)}
+      style={style}
+      title={title}
+      className={`${align === 'left' ? 'text-left' : 'text-right'} py-2 px-2 cursor-pointer select-none transition-colors ${
+        // A <th> is already bold by default, so the active state is a darker fill and a darker
+        // ink — adding a font weight here would actually make it LIGHTER than its neighbours.
+        active ? 'bg-gray-200 text-slate-900' : 'bg-gray-100 hover:bg-gray-200'
+      }`}
+    >
+      {/* inline-flex keeps the arrow glued to the label, so a right-aligned column stays
+          right-aligned and the header does not jump about when the arrow changes. */}
+      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+        {children}
+        <span className={active ? 'text-slate-700' : 'text-gray-300'} style={{ fontSize: 9, lineHeight: 1 }}>
+          {active ? (sort!.dir === 'desc' ? '▼' : '▲') : '⇅'}
+        </span>
+      </span>
+    </th>
+  );
+};
+
+// ============================================
 // TYPE DEFINITIONS
 // ============================================
 // TypeScript interfaces describe the "shape" of our data.
@@ -1586,6 +1715,23 @@ const PortfolioBacktester = () => {
   // (e.g. 'Dividends'). Empty string = none. Cleared whenever a different balance is
   // opened, so you never land on a page showing a category from the previous account.
   const [cashCategory, setCashCategory] = useState<string>('');
+
+  // ---- Positions tab: click-to-sort state ----
+  // One entry per table, keyed by a short table id ('positionsOpen', 'cashStatement', ...).
+  // A missing key simply means "that table is not sorted", which is why this starts empty
+  // and why every table shows its own natural order until you click something.
+  // The three-click cycle itself lives in nextTableSort() up at the top of the file.
+  const [tableSort, setTableSort] = useState<TableSortMap>({});
+  // Advance one table through the cycle: sort descending, sort ascending, then off again.
+  const toggleTableSort = (tableId: string, col: string, firstDir: 'asc' | 'desc') => {
+    setTableSort(prev => ({ ...prev, [tableId]: nextTableSort(prev[tableId] ?? null, col, firstDir) }));
+  };
+  // Small convenience so a table only has to name itself once in its JSX: hands back the
+  // pair of props (current sort + click handler) that every SortableTh in it needs.
+  const sortPropsFor = (tableId: string) => ({
+    sort: tableSort[tableId] ?? null,
+    onSort: (col: string, firstDir: 'asc' | 'desc') => toggleTableSort(tableId, col, firstDir),
+  });
 
   // ---- Monthly Prices chart state ----
   // Which asset's row is currently selected for chart display (empty = no chart)
@@ -15449,16 +15595,28 @@ const PortfolioBacktester = () => {
                             <table className="w-full text-xs border-collapse">
                               <thead>
                                 <tr className="border-b border-gray-200">
-                                  <th className="text-left py-2 px-2 bg-gray-100">Asset Class</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100">Invested {effectiveCcy}</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100">Current Value {effectiveCcy}</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100">Total PnL {effectiveCcy}</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100">Return %</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100">Weight</th>
+                                  <SortableTh col="assetClass" align="left" numeric={false} {...sortPropsFor('positionsAssetClass')}>Asset Class</SortableTh>
+                                  <SortableTh col="invested" {...sortPropsFor('positionsAssetClass')}>Invested {effectiveCcy}</SortableTh>
+                                  <SortableTh col="currentValue" {...sortPropsFor('positionsAssetClass')}>Current Value {effectiveCcy}</SortableTh>
+                                  <SortableTh col="pnl" {...sortPropsFor('positionsAssetClass')}>Total PnL {effectiveCcy}</SortableTh>
+                                  <SortableTh col="returnPct" {...sortPropsFor('positionsAssetClass')}>Return %</SortableTh>
+                                  <SortableTh col="weight" {...sortPropsFor('positionsAssetClass')}>Weight</SortableTh>
                                 </tr>
                               </thead>
                               <tbody>
-                                {assetClassRollup.map((row, idx) => (
+                                {/* Sorting only re-orders what the table shows — the pie chart beside it
+                                    and the totals row below both keep reading the original array, because
+                                    a pie has no order to speak of and a sum is the same whatever order
+                                    you add it up in. Cash sorts as "empty" on the two PnL columns, since
+                                    those cells show a dash rather than a number. */}
+                                {sortTableRows(assetClassRollup, tableSort['positionsAssetClass'] ?? null, {
+                                  assetClass:   r => r.assetClass,
+                                  invested:     r => r.invested,
+                                  currentValue: r => r.currentValue,
+                                  pnl:          r => r.assetClass === CASH_CLASS ? null : r.pnl,
+                                  returnPct:    r => r.assetClass === CASH_CLASS || r.invested <= 0 ? null : (r.pnl / r.invested) * 100,
+                                  weight:       r => r.weight,
+                                }).map((row, idx) => (
                                   <tr
                                     key={row.assetClass}
                                     className={`border-b border-gray-50 cursor-pointer transition-colors ${
@@ -15866,6 +16024,27 @@ const PortfolioBacktester = () => {
                       // line and stops the account name repeating down the group.
                       const startsGroup = (i: number) => i === 0 || rows[i - 1].account !== rows[i].account;
 
+                      // Click-to-sort. The account grouping above and a user-chosen sort are
+                      // mutually exclusive by nature: you cannot keep Interactive Brokers' three
+                      // currencies together AND order every row by balance. So while a sort is
+                      // active the grouping stands down — the account name prints on every row
+                      // and the divider lines disappear — and it comes straight back when the
+                      // third click clears the sort.
+                      const cashSort = tableSort['positionsCash'] ?? null;
+                      const sortedCashRows = sortTableRows(rows, cashSort, {
+                        account:   r => r.account,
+                        currency:  r => r.currency,
+                        balance:   r => r.balance,
+                        totalIn:   r => r.totalIn,
+                        totalOut:  r => r.totalOut,
+                        movements: r => r.movements.length,
+                        lastDate:  r => r.lastDate,
+                        // Weight and the converted balance column are the same underlying number,
+                        // one shown as a share of the total and one in the display currency.
+                        weight:    r => r.converted,
+                        converted: r => r.converted,
+                      });
+
                       return (
                         <div className="bg-white p-4 rounded-lg shadow mb-4">
                           <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
@@ -15886,28 +16065,28 @@ const PortfolioBacktester = () => {
                             <table className="w-full text-xs border-collapse">
                               <thead>
                                 <tr className="border-b border-gray-200">
-                                  <th className="text-left py-2 px-2 bg-gray-100">Account</th>
-                                  <th className="text-left py-2 px-2 bg-gray-100">Currency</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100">Balance</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100" title="Every credit this account has ever received, in this currency">Total In</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100" title="Every debit this account has ever paid out, in this currency">Total Out</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100" title="How many individual movements make up the balance">Movements</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100">Last Activity</th>
-                                  <th className="text-right py-2 px-2 bg-gray-100" style={{ width: 70 }} title="Share of total cash held">Weight</th>
-                                  {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-100">Balance {posCcyLabel}</th>}
+                                  <SortableTh col="account" align="left" numeric={false} {...sortPropsFor('positionsCash')}>Account</SortableTh>
+                                  <SortableTh col="currency" align="left" numeric={false} {...sortPropsFor('positionsCash')}>Currency</SortableTh>
+                                  <SortableTh col="balance" {...sortPropsFor('positionsCash')}>Balance</SortableTh>
+                                  <SortableTh col="totalIn" {...sortPropsFor('positionsCash')} title="Every credit this account has ever received, in this currency">Total In</SortableTh>
+                                  <SortableTh col="totalOut" {...sortPropsFor('positionsCash')} title="Every debit this account has ever paid out, in this currency">Total Out</SortableTh>
+                                  <SortableTh col="movements" {...sortPropsFor('positionsCash')} title="How many individual movements make up the balance">Movements</SortableTh>
+                                  <SortableTh col="lastDate" numeric={false} {...sortPropsFor('positionsCash')}>Last Activity</SortableTh>
+                                  <SortableTh col="weight" {...sortPropsFor('positionsCash')} style={{ width: 70 }} title="Share of total cash held">Weight</SortableTh>
+                                  {positionsCurrency && <SortableTh col="converted" {...sortPropsFor('positionsCash')}>Balance {posCcyLabel}</SortableTh>}
                                 </tr>
                               </thead>
                               <tbody>
-                                {rows.map((row, idx) => (
+                                {sortedCashRows.map((row, idx) => (
                                   <tr
                                     key={row.key}
                                     className={`cursor-pointer hover:bg-blue-50 transition-colors ${
-                                      startsGroup(idx) ? 'border-t border-gray-200' : ''
+                                      !cashSort && startsGroup(idx) ? 'border-t border-gray-200' : ''
                                     } border-b border-gray-50`}
                                     onClick={() => { setCashSelected(row.key); setCashCategory(''); }}
                                     title={`Click to see every inflow and outflow for ${row.account} in ${row.currency}`}
                                   >
-                                    <td className="py-2 px-2 text-gray-700">{startsGroup(idx) ? row.account : ''}</td>
+                                    <td className="py-2 px-2 text-gray-700">{cashSort || startsGroup(idx) ? row.account : ''}</td>
                                     <td className="py-2 px-2 text-gray-500 font-mono">{row.currency}</td>
                                     <td className={`text-right py-2 px-2 font-mono font-medium ${row.balance < 0 ? 'text-red-600' : 'text-gray-800'}`}>
                                       {row.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -15994,24 +16173,43 @@ const PortfolioBacktester = () => {
                           <table className="w-full text-xs border-collapse">
                             <thead>
                               <tr className="border-b border-gray-200">
-                                <th className="text-left py-2 px-2 bg-gray-100">Asset Name</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Time Held</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Avg Buy</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Price</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">PnL %</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Qty</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Total Invested</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Current Value</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Total PnL</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">XIRR</th>
-                                <th className="text-right py-2 px-2 bg-gray-100" style={{ width: 70 }}>Weight</th>
-                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-100">Invested {posCcyLabel}</th>}
-                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-100">Current {posCcyLabel}</th>}
-                                {positionsCurrency && <th className="text-right py-2 px-2 bg-gray-100">PnL {posCcyLabel}</th>}
+                                <SortableTh col="name" align="left" numeric={false} {...sortPropsFor('positionsOpen')}>Asset Name</SortableTh>
+                                <SortableTh col="timeHeld" {...sortPropsFor('positionsOpen')}>Time Held</SortableTh>
+                                <SortableTh col="avgBuy" {...sortPropsFor('positionsOpen')}>Avg Buy</SortableTh>
+                                <SortableTh col="price" {...sortPropsFor('positionsOpen')}>Price</SortableTh>
+                                <SortableTh col="pnlPct" {...sortPropsFor('positionsOpen')}>PnL %</SortableTh>
+                                <SortableTh col="qty" {...sortPropsFor('positionsOpen')}>Qty</SortableTh>
+                                <SortableTh col="invested" {...sortPropsFor('positionsOpen')}>Total Invested</SortableTh>
+                                <SortableTh col="currentValue" {...sortPropsFor('positionsOpen')}>Current Value</SortableTh>
+                                <SortableTh col="pnl" {...sortPropsFor('positionsOpen')}>Total PnL</SortableTh>
+                                <SortableTh col="xirr" {...sortPropsFor('positionsOpen')}>XIRR</SortableTh>
+                                <SortableTh col="weight" {...sortPropsFor('positionsOpen')} style={{ width: 70 }}>Weight</SortableTh>
+                                {positionsCurrency && <SortableTh col="investedConverted" {...sortPropsFor('positionsOpen')}>Invested {posCcyLabel}</SortableTh>}
+                                {positionsCurrency && <SortableTh col="currentConverted" {...sortPropsFor('positionsOpen')}>Current {posCcyLabel}</SortableTh>}
+                                {positionsCurrency && <SortableTh col="pnlConverted" {...sortPropsFor('positionsOpen')}>PnL {posCcyLabel}</SortableTh>}
                               </tr>
                             </thead>
                             <tbody>
-                              {filteredOpenData.map((row, idx) => (
+                              {/* Sorting re-orders the rows only. The weight bars still scale against
+                                  maxWeight and the totals row still sums filteredOpenData, so neither
+                                  changes when you click a heading. A position with no XIRR (shown as
+                                  "N/A") sorts to the bottom either way rather than pretending to be zero. */}
+                              {sortTableRows(filteredOpenData, tableSort['positionsOpen'] ?? null, {
+                                name:              r => r.name,
+                                timeHeld:          r => r.timeHeldYears,
+                                avgBuy:            r => r.avgBuyPrice,
+                                price:             r => r.currentPrice,
+                                pnlPct:            r => r.totalPnLPct,
+                                qty:               r => r.totalShares,
+                                invested:          r => r.totalInvested,
+                                currentValue:      r => r.currentValue,
+                                pnl:               r => r.totalPnL,
+                                xirr:              r => r.xirr,
+                                weight:            r => r._weight,
+                                investedConverted: r => r.investedConverted,
+                                currentConverted:  r => r.currentValueConverted,
+                                pnlConverted:      r => r.totalPnLConverted,
+                              }).map((row, idx) => (
                                 <tr
                                   key={row.ticker}
                                   className={`border-b border-gray-50 cursor-pointer hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}
@@ -16100,20 +16298,31 @@ const PortfolioBacktester = () => {
                           <table className="w-full text-xs border-collapse">
                             <thead>
                               <tr className="border-b border-gray-200">
-                                <th className="text-left py-2 px-2 bg-gray-100">Asset Name</th>
-                                <th className="text-right py-2 px-2 bg-gray-100"># Txns</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">First Buy</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Last Sale</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Time Held</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Total Invested</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Total Final Value</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">Total PnL</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">PnL %</th>
-                                <th className="text-right py-2 px-2 bg-gray-100">XIRR</th>
+                                <SortableTh col="name" align="left" numeric={false} {...sortPropsFor('positionsClosed')}>Asset Name</SortableTh>
+                                <SortableTh col="numTransactions" {...sortPropsFor('positionsClosed')}># Txns</SortableTh>
+                                <SortableTh col="firstBuyDate" numeric={false} {...sortPropsFor('positionsClosed')}>First Buy</SortableTh>
+                                <SortableTh col="lastSaleDate" numeric={false} {...sortPropsFor('positionsClosed')}>Last Sale</SortableTh>
+                                <SortableTh col="timeHeld" {...sortPropsFor('positionsClosed')}>Time Held</SortableTh>
+                                <SortableTh col="invested" {...sortPropsFor('positionsClosed')}>Total Invested</SortableTh>
+                                <SortableTh col="finalValue" {...sortPropsFor('positionsClosed')}>Total Final Value</SortableTh>
+                                <SortableTh col="pnl" {...sortPropsFor('positionsClosed')}>Total PnL</SortableTh>
+                                <SortableTh col="pnlPct" {...sortPropsFor('positionsClosed')}>PnL %</SortableTh>
+                                <SortableTh col="xirr" {...sortPropsFor('positionsClosed')}>XIRR</SortableTh>
                               </tr>
                             </thead>
                             <tbody>
-                              {closedSummaryData.map((row, idx) => (
+                              {sortTableRows(closedSummaryData, tableSort['positionsClosed'] ?? null, {
+                                name:            r => r.name,
+                                numTransactions: r => r.numTransactions,
+                                firstBuyDate:    r => r.firstBuyDate,
+                                lastSaleDate:    r => r.lastSaleDate,
+                                timeHeld:        r => r.timeHeldYears,
+                                invested:        r => r.totalInvested,
+                                finalValue:      r => r.totalFinalValue,
+                                pnl:             r => r.totalPnL,
+                                pnlPct:          r => r.totalPnLPct,
+                                xirr:            r => r.xirr,
+                              }).map((row, idx) => (
                                 <tr
                                   key={row.ticker}
                                   className={`border-b border-gray-50 cursor-pointer hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}
@@ -16277,15 +16486,21 @@ const PortfolioBacktester = () => {
                         <table className="w-full text-xs border-collapse">
                           <thead>
                             <tr className="border-b border-gray-200">
-                              <th className="text-left py-2 px-2 bg-gray-100">Type</th>
-                              <th className="text-right py-2 px-2 bg-gray-100">In</th>
-                              <th className="text-right py-2 px-2 bg-gray-100">Out</th>
-                              <th className="text-right py-2 px-2 bg-gray-100">Net</th>
-                              <th className="text-right py-2 px-2 bg-gray-100"># Movements</th>
+                              <SortableTh col="category" align="left" numeric={false} {...sortPropsFor('cashCategories')}>Type</SortableTh>
+                              <SortableTh col="inflow" {...sortPropsFor('cashCategories')}>In</SortableTh>
+                              <SortableTh col="outflow" {...sortPropsFor('cashCategories')}>Out</SortableTh>
+                              <SortableTh col="net" {...sortPropsFor('cashCategories')}>Net</SortableTh>
+                              <SortableTh col="count" {...sortPropsFor('cashCategories')}># Movements</SortableTh>
                             </tr>
                           </thead>
                           <tbody>
-                            {categories.map((c, idx) => (
+                            {sortTableRows(categories, tableSort['cashCategories'] ?? null, {
+                              category: c => c.category,
+                              inflow:   c => c.inflow,
+                              outflow:  c => c.outflow,
+                              net:      c => c.net,
+                              count:    c => c.count,
+                            }).map((c, idx) => (
                               <tr
                                 key={c.category}
                                 className={`border-b border-gray-50 cursor-pointer transition-colors ${
@@ -16421,17 +16636,29 @@ const PortfolioBacktester = () => {
                               <table className="w-full text-xs border-collapse">
                                 <thead className="sticky top-0">
                                   <tr className="border-b border-gray-200">
-                                    <th className="text-left py-2 px-2 bg-gray-100">Date</th>
-                                    {showAsset && <th className="text-left py-2 px-2 bg-gray-100">Asset</th>}
-                                    <th className="text-left py-2 px-2 bg-gray-100" title="The account at the other end of this movement">Counterparty</th>
-                                    <th className="text-left py-2 px-2 bg-gray-100">Remarks</th>
-                                    <th className="text-right py-2 px-2 bg-gray-100">In</th>
-                                    <th className="text-right py-2 px-2 bg-gray-100">Out</th>
-                                    <th className="text-right py-2 px-2 bg-gray-100" title="The account's running balance immediately after this movement">Balance</th>
+                                    <SortableTh col="date" align="left" numeric={false} {...sortPropsFor('cashCategoryList')}>Date</SortableTh>
+                                    {showAsset && <SortableTh col="asset" align="left" numeric={false} {...sortPropsFor('cashCategoryList')}>Asset</SortableTh>}
+                                    <SortableTh col="counterparty" align="left" numeric={false} {...sortPropsFor('cashCategoryList')} title="The account at the other end of this movement">Counterparty</SortableTh>
+                                    <SortableTh col="remarks" align="left" numeric={false} {...sortPropsFor('cashCategoryList')}>Remarks</SortableTh>
+                                    <SortableTh col="in" {...sortPropsFor('cashCategoryList')}>In</SortableTh>
+                                    <SortableTh col="out" {...sortPropsFor('cashCategoryList')}>Out</SortableTh>
+                                    <SortableTh col="balance" {...sortPropsFor('cashCategoryList')} title="The account's running balance immediately after this movement">Balance</SortableTh>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {listed.map((m, idx) => (
+                                  {/* The In and Out columns are two halves of one amount: a movement
+                                      is either a credit or a debit, never both. Sorting by In there-
+                                      fore ranks the credits and leaves every debit row (an empty In
+                                      cell) at the bottom, which is exactly what you want from it. */}
+                                  {sortTableRows(listed, tableSort['cashCategoryList'] ?? null, {
+                                    date:         m => m.date,
+                                    asset:        m => m.asset,
+                                    counterparty: m => m.counterparty,
+                                    remarks:      m => m.remarks,
+                                    in:           m => m.direction === 'in' ? m.amount : null,
+                                    out:          m => m.direction === 'out' ? m.amount : null,
+                                    balance:      m => m.balance,
+                                  }).map((m, idx) => (
                                     <tr key={`${cashCategory}-${m.date}-${idx}`} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
                                       <td className="py-1.5 px-2 font-mono whitespace-nowrap text-gray-600">{m.date}</td>
                                       {showAsset && (
@@ -16504,17 +16731,29 @@ const PortfolioBacktester = () => {
                         <table className="w-full text-xs border-collapse">
                           <thead className="sticky top-0">
                             <tr className="border-b border-gray-200">
-                              <th className="text-left py-2 px-2 bg-gray-100">Date</th>
-                              <th className="text-left py-2 px-2 bg-gray-100">Type</th>
-                              <th className="text-left py-2 px-2 bg-gray-100" title="The account at the other end of this movement">Counterparty</th>
-                              <th className="text-left py-2 px-2 bg-gray-100">Details</th>
-                              <th className="text-right py-2 px-2 bg-gray-100">In</th>
-                              <th className="text-right py-2 px-2 bg-gray-100">Out</th>
-                              <th className="text-right py-2 px-2 bg-gray-100" title="The balance immediately after this movement">Balance</th>
+                              <SortableTh col="date" align="left" numeric={false} {...sortPropsFor('cashStatement')}>Date</SortableTh>
+                              <SortableTh col="category" align="left" numeric={false} {...sortPropsFor('cashStatement')}>Type</SortableTh>
+                              <SortableTh col="counterparty" align="left" numeric={false} {...sortPropsFor('cashStatement')} title="The account at the other end of this movement">Counterparty</SortableTh>
+                              <SortableTh col="details" align="left" numeric={false} {...sortPropsFor('cashStatement')}>Details</SortableTh>
+                              <SortableTh col="in" {...sortPropsFor('cashStatement')}>In</SortableTh>
+                              <SortableTh col="out" {...sortPropsFor('cashStatement')}>Out</SortableTh>
+                              <SortableTh col="balance" {...sortPropsFor('cashStatement')} title="The balance immediately after this movement">Balance</SortableTh>
                             </tr>
                           </thead>
                           <tbody>
-                            {statement.map((m, idx) => (
+                            {/* Natural order here is newest-first, so clicking Date once (oldest
+                                first) and again (newest first) is the round trip back to how the
+                                statement already reads. The Details column sorts on the same text
+                                the cell shows — asset name if there is one, otherwise the remark. */}
+                            {sortTableRows(statement, tableSort['cashStatement'] ?? null, {
+                              date:         m => m.date,
+                              category:     m => m.category,
+                              counterparty: m => m.counterparty,
+                              details:      m => (m.asset && m.asset !== 'Cash' ? m.asset : m.remarks),
+                              in:           m => m.direction === 'in' ? m.amount : null,
+                              out:          m => m.direction === 'out' ? m.amount : null,
+                              balance:      m => m.balance,
+                            }).map((m, idx) => (
                               <tr key={`${m.date}-${idx}`} className={`border-b border-gray-50 ${m.direction === 'in' ? 'bg-green-50/30' : ''}`}>
                                 <td className="py-1.5 px-2 font-mono whitespace-nowrap text-gray-600">{m.date}</td>
                                 <td className="py-1.5 px-2 text-gray-700 whitespace-nowrap">{m.category}</td>
