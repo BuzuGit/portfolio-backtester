@@ -14580,21 +14580,49 @@ const PortfolioBacktester = () => {
                     const periodData = dailyData.filter(r => r.date >= cutoffStr);
                     if (periodData.length < 2) return null;
 
-                    // ---- 2. Pick columns for selected currency ----
+                    // ---- 2. Pick the NAV column for the selected currency ----
                     const navKey  = dailyNavCurrency === 'PLN' ? 'navPln'  : dailyNavCurrency === 'USD' ? 'navUsd'  : 'navSgd';
-                    const inflKey = dailyNavCurrency === 'PLN' ? 'inflPln' : dailyNavCurrency === 'USD' ? 'inflUsd' : 'inflSgd';
 
-                    const firstNAV  = periodData[0][navKey]  as number;
-                    const firstInfl = periodData[0][inflKey] as number;
+                    // ---- 2b. Inflation comes from the MONTHLY CPI series, not the Daily sheet ----
+                    // The Daily sheet carries its own InflPLN/InflUSD/InflSGD columns, but the rest
+                    // of the app (the Monthly tab's real-return view, the portfolio CPI adjustment)
+                    // measures inflation from the CPIMPL / CPIMUS / CPIMSG columns of the monthly
+                    // price sheet. Two sources for one quantity means two answers to the same
+                    // question — they disagree by up to 0.7pp a year on the 5Y window — so this
+                    // chart now reads the same monthly series as everything else.
+                    //
+                    // A CPI print is a monthly number, so there is nothing to interpolate: each
+                    // daily point takes the most recent print on or before its date and holds it
+                    // flat until the next one, which draws inflation as the staircase it actually
+                    // is. Both lists are already in date order, so one walk down each is enough —
+                    // no repeated searching per day.
+                    const cpiTicker = CURRENCY_CPI[dailyNavCurrency] || '';
+                    const cpiSeries = cpiTicker && assetData
+                      ? assetData
+                          .filter(r => Number(r[cpiTicker]) > 0)
+                          .map(r => ({ date: r.date as string, cpi: Number(r[cpiTicker]) }))
+                      : [];
+                    const cpiPerDay: (number | null)[] = [];
+                    let cpiIdx = -1;   // index of the newest print at or before the current day
+                    for (const r of periodData) {
+                      while (cpiIdx + 1 < cpiSeries.length && cpiSeries[cpiIdx + 1].date <= r.date) cpiIdx++;
+                      cpiPerDay.push(cpiIdx >= 0 ? cpiSeries[cpiIdx].cpi : null);
+                    }
+
+                    const firstNAV  = periodData[0][navKey] as number;
+                    const firstInfl = cpiPerDay[0];
                     if (!firstNAV || !firstInfl) return null;
 
                     // ---- 3. Index both series to 100 at period start ----
-                    const chartData = periodData.map(r => ({
+                    // cpiPerDay is only null before the very first CPI print, which the guard above
+                    // has already ruled out for day one — and the pointer only ever moves forward,
+                    // so every later day has a reading too.
+                    const chartData = periodData.map((r, i) => ({
                       date:    r.date,
-                      nav:     ((r[navKey]  as number) / firstNAV)  * 100,
-                      infl:    ((r[inflKey] as number) / firstInfl) * 100,
-                      rawNav:  r[navKey]  as number,
-                      rawInfl: r[inflKey] as number,
+                      nav:     ((r[navKey] as number)   / firstNAV)  * 100,
+                      infl:    ((cpiPerDay[i] as number) / firstInfl) * 100,
+                      rawNav:  r[navKey] as number,
+                      rawInfl: cpiPerDay[i] as number,
                     }));
 
                     const lastRow = chartData[chartData.length - 1];
@@ -14661,10 +14689,19 @@ const PortfolioBacktester = () => {
                     for (let t = yAxisMin; t <= yAxisMax; t += 5) yAxisTicks.push(t);
 
                     // ---- 7. Edge bubbles (right-edge labels) ----
-                    // The bubble value drives Y positioning; the label shows the raw price.
+                    // The bubble value drives Y positioning; the label is the INDEXED value, so it
+                    // agrees with the height it sits at and with the Y axis beside it.
+                    //
+                    // It used to show the raw per-share price. That reads fine in PLN — the sheet's
+                    // PLN NAV is itself indexed to 100, so the raw number and the indexed one are
+                    // the same 180.29 — but in USD the bubble said "47.50" while sitting at height
+                    // 181, and in SGD "60.60" at height 170. One number on a chart that is otherwise
+                    // entirely on a 100 = period start scale, which made the foreign-currency lines
+                    // look like they had not been rebased at all. The raw price is still a click
+                    // away in the tooltip.
                     const navBubbleDefs: BubbleDef[] = [
-                      { value: lastRow.nav,  color: '#1e40af', label: lastRow.rawNav.toFixed(2) },
-                      { value: lastRow.infl, color: '#dc2626', label: lastRow.rawInfl.toFixed(2) },
+                      { value: lastRow.nav,  color: '#1e40af', label: lastRow.nav.toFixed(2) },
+                      { value: lastRow.infl, color: '#dc2626', label: lastRow.infl.toFixed(2) },
                     ];
                     const DailyNavBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, navBubbleDefs);
 
@@ -14673,7 +14710,7 @@ const PortfolioBacktester = () => {
                       <div className="mt-6">
                         <div className="flex items-center justify-between mb-2">
                           <h3 className="text-md font-semibold text-gray-700">Daily NAV</h3>
-                          <span className="text-xs text-gray-400">Both series indexed to 100 at period start</span>
+                          <span className="text-xs text-gray-400">Both series indexed to 100 at period start · inflation from monthly CPI, held flat within the month</span>
                         </div>
 
                         {/* Currency + Period selectors */}
@@ -14744,8 +14781,19 @@ const PortfolioBacktester = () => {
                                   tick={{ fontSize: 11, fill: '#6b7280' }}
                                   width={36}
                                 />
+                                {/* The indexed value is what the chart is about, so it leads; the raw
+                                    figure behind it follows in brackets — the NAV per share in the
+                                    chosen currency, and the CPI index reading for that month. */}
                                 <Tooltip
-                                  formatter={(value: number, name: string) => [value.toFixed(2), name]}
+                                  formatter={(value: number, name: string, item: { payload?: { rawNav: number; rawInfl: number } }) => {
+                                    const row = item?.payload;
+                                    const isNav = name.startsWith('NAV');
+                                    const raw = row ? (isNav ? row.rawNav : row.rawInfl) : null;
+                                    const suffix = raw == null ? ''
+                                      : isNav ? `  (${raw.toFixed(2)} ${dailyNavCurrency})`
+                                              : `  (CPI ${raw.toFixed(2)})`;
+                                    return [`${value.toFixed(2)}${suffix}`, name];
+                                  }}
                                   labelFormatter={(label: string) => label}
                                   contentStyle={{ fontSize: 12 }}
                                 />
