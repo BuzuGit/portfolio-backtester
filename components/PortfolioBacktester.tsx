@@ -549,19 +549,29 @@ const SortableTh = ({
       aria-sort={active ? (sort!.dir === 'desc' ? 'descending' : 'ascending') : 'none'}
       style={style}
       title={title}
-      className={`${align === 'left' ? 'text-left' : 'text-right'} py-2 px-2 cursor-pointer select-none transition-colors ${
+      className={`relative ${align === 'left' ? 'text-left' : 'text-right'} py-2 px-2 cursor-pointer select-none transition-colors ${
         // A <th> is already bold by default, so the active state is a darker fill and a darker
         // ink — adding a font weight here would actually make it LIGHTER than its neighbours.
         active ? 'bg-gray-200 text-slate-900' : 'bg-gray-100 hover:bg-gray-200'
       }`}
     >
-      {/* inline-flex keeps the arrow glued to the label, so a right-aligned column stays
-          right-aligned and the header does not jump about when the arrow changes. */}
-      <span className="inline-flex items-center gap-1 whitespace-nowrap">
-        {children}
-        <span className={active ? 'text-slate-700' : 'text-gray-300'} style={{ fontSize: 9, lineHeight: 1 }}>
-          {active ? (sort!.dir === 'desc' ? '▼' : '▲') : '⇅'}
-        </span>
+      {/* The label is plain text, free to wrap onto a second line exactly as the original
+          headers did ("Total / Invested").
+          The arrow is deliberately taken OUT of the layout: it sits absolutely in the 8px of
+          right-hand padding every header already has, so it costs zero width. The first
+          version put it beside the label and stopped the label wrapping, which added up to
+          12px to seven columns of Open Positions — 221px in all — and pushed a table that
+          used to fit its card exactly into scrolling sideways. At 8px the glyph is 7px wide,
+          which leaves at least 1px of clearance from the text in the tightest column.
+          aria-hidden because aria-sort on the <th> already tells a screen reader the state;
+          otherwise it would also read out "up down arrow" on every heading. */}
+      {children}
+      <span
+        aria-hidden="true"
+        className={`absolute right-0 top-1/2 -translate-y-1/2 ${active ? 'text-slate-700' : 'text-gray-300'}`}
+        style={{ fontSize: 8, lineHeight: 1 }}
+      >
+        {active ? (sort!.dir === 'desc' ? '▼' : '▲') : '⇅'}
       </span>
     </th>
   );
