@@ -802,8 +802,19 @@ function parseSheetData(csvText: string): { data: AssetRow[]; assets: string[] }
       const cleanValue = rawValue.replace(/,/g, '');
       const value = parseFloat(cleanValue);
 
-      // Only include valid positive numbers
-      if (!isNaN(value) && value > 0) {
+      // Keep any real number, including 0 and negatives.
+      //
+      // This used to require `value > 0`, which quietly deleted real data: the sheet's macro
+      // columns hold interest rates, and a rate of zero or below is a fact, not a gap. It was
+      // costing 109 of RATE_CH's 202 months (the whole Swiss negative-rate era), 98 of RATE_JP
+      // and 76 of RATE_EU — all indistinguishable from a blank cell by the time anything read
+      // them. A genuinely empty cell is still skipped above, before we get here, so "missing"
+      // and "zero" stay tellable apart.
+      //
+      // Consumers were NOT broadened with it: the price-history readers still apply their own
+      // `> 0` test, so backtests, Positions and the Graphs tab behave exactly as before. Only
+      // the Monthly tab, which asks for these values explicitly, shows them.
+      if (isFinite(value)) {
         row[asset] = value;
       }
     });

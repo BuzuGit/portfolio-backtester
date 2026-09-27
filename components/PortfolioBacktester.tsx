@@ -1024,7 +1024,10 @@ const findFxDataIssues = (rows: AssetRow[] | null): FxDataIssue[] => {
 
 // How much history the Monthly tab's charts show. Named once, so the button row, the
 // state and getMonthlyChartData's lookup table can never drift apart.
-type MonthlyChartPeriod = '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | 'max';
+type MonthlyChartPeriod = '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | '15Y' | 'max';
+// The Monthly tab's own button row. Deliberately NOT every value of the type above: '15Y'
+// exists for the Graphs tab, which offers a shorter list of its own, and adding it here
+// would put an extra button on the Monthly tab that nobody asked for.
 const MONTHLY_CHART_PERIODS: MonthlyChartPeriod[] =
   ['1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'max'];
 
@@ -1622,6 +1625,11 @@ const PortfolioBacktester = () => {
   // Which year the "Profit Breakdown by Asset" table shows.
   // null = default to the latest available year in yearsData (computed at render time).
   const [breakdownYear, setBreakdownYear] = useState<number | null>(null);
+  // Is that table expanded? Collapsed by default: it runs to dozens of rows, and it sits
+  // above Statistics and everything below it, so leaving it open means scrolling past a
+  // worksheet you only occasionally want to read. The heading and its Show button stay
+  // visible, so it is still obvious the detail is there.
+  const [breakdownExpanded, setBreakdownExpanded] = useState(false);
   // Which currencies are shown in Charts 3 & 4 (Returns/Growth by Year)
   // PLN selected by default; user can toggle individual currencies on/off
   const [selectedReturnCurrencies, setSelectedReturnCurrencies] = useState<string[]>(['PLN']);
@@ -1774,8 +1782,10 @@ const PortfolioBacktester = () => {
   //  'sma'       = price + the 10-month moving average (the original, default view)
   //  'drawdown'  = price + the high water mark, with the underwater stretches shaded pink
   //  'vsMarket'  = this asset against world equities, both rebased to 100 at the window start
+  //  'price'     = the price line on its own, no overlay — for macro series (interest rates,
+  //                GDP) where a 10-month moving average is meaningless
   const [monthlyPriceChartMode, setMonthlyPriceChartMode] =
-    useState<'sma' | 'drawdown' | 'drawdownReal' | 'vsMarket' | 'inflation'>('sma');
+    useState<'price' | 'sma' | 'drawdown' | 'drawdownReal' | 'vsMarket' | 'inflation'>('sma');
   // Linear (default) or logarithmic Y axis on that same chart. Log is what makes the early
   // years of a big winner readable — see niceLogAxisScale for why.
   const [monthlyPriceChartLog, setMonthlyPriceChartLog] = useState(false);
@@ -1816,7 +1826,7 @@ const PortfolioBacktester = () => {
   // How many months of history each correlation point looks back over.
   const [correlationWindow, setCorrelationWindow] = useState(12);
   // Period selector for the Graphs tab (separate from Monthly Prices so they don't interfere)
-  const [graphsPeriod, setGraphsPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | 'max'>('2Y');
+  const [graphsPeriod, setGraphsPeriod] = useState<'1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '10Y' | '15Y' | 'max'>('2Y');
   // End date for the Graphs tab ('' = most recent month in data)
   const [graphsEndDate, setGraphsEndDate] = useState('');
   // Toggle for showing 10-month SMA overlay on all Graphs tab charts
@@ -5471,10 +5481,17 @@ const PortfolioBacktester = () => {
         return rowDate.getFullYear() === year && rowDate.getMonth() === month;
       });
 
-      // Get the last row with valid price
+      // Get the last row that actually carries a value for this ticker.
+      //
+      // "Carries a value" means the key is present, not that the number is positive. The CSV
+      // parser omits blank cells entirely (see parseSheetData), so presence IS the test — and
+      // that is what lets a macro series show a true 0 or a negative rate instead of a dash.
+      // Asking `price > 0` here is what turned Swiss rates into a row of "-".
       for (let i = monthRows.length - 1; i >= 0; i--) {
-        const price = Number(monthRows[i][ticker]);
-        if (price && price > 0) {
+        const raw = monthRows[i][ticker];
+        if (raw === undefined || raw === '') continue;
+        const price = Number(raw);
+        if (isFinite(price)) {
           return price;
         }
       }
@@ -5644,7 +5661,12 @@ const PortfolioBacktester = () => {
     ticker: string,
     period: MonthlyChartPeriod,
     cutoffDate?: string,  // Optional: if provided, treat this as the last month (for Graphs tab "End Date" filter)
-    targetCurrency?: string  // Optional: convert every price into this currency (''/native = no conversion)
+    targetCurrency?: string,  // Optional: convert every price into this currency (''/native = no conversion)
+    // Opt-in: accept 0 and negative values as real readings rather than skipping them.
+    // Only the Monthly tab passes this, because only it charts the macro series where a zero
+    // or negative interest rate is the actual number. Everything else keeps the old
+    // positive-prices-only rule, so no backtest or Graphs mini-chart changes.
+    allowNonPositive = false
   ) => {
     if (!assetData || assetData.length === 0) return null;
 
@@ -5654,8 +5676,12 @@ const PortfolioBacktester = () => {
     // 1. Extract monthly prices: group by YYYY-MM, take the last valid price per month
     const monthlyMap = new Map<string, { date: string; price: number }>();
     for (const row of assetData) {
-      const p = Number(row[ticker]);
-      if (!p || p <= 0) continue;
+      const raw = row[ticker];
+      const p = Number(raw);
+      // A blank cell never reaches the row at all, so an absent key is the "no data" case.
+      // Whether a 0 or a negative counts as data is the caller's decision — see allowNonPositive.
+      if (raw === undefined || raw === '' || !isFinite(p)) continue;
+      if (!allowNonPositive && p <= 0) continue;
       const d = new Date(row.date);
       if (isNaN(d.getTime())) continue;
       const ym = toYM(d);
@@ -5688,8 +5714,13 @@ const PortfolioBacktester = () => {
       if (price > ath) ath = price;
       const drawdown = ath > 0 ? ((price - ath) / ath) * 100 : 0;
 
-      // SMA distance: how far (in %) the price sits above or below the 10M SMA
-      const smaDistance = sma10 !== null ? ((price - sma10) / sma10) * 100 : null;
+      // SMA distance: how far (in %) the price sits above or below the 10M SMA.
+      // Needs a POSITIVE average to divide by. A macro series can average exactly zero (ten
+      // months of a 0% policy rate), which gave (0-0)/0 = NaN — and a single NaN here reached
+      // the chart's gradient as offset="NaN%", which the browser rejects outright. A negative
+      // average is no better: "12% above" an average of -0.75 means nothing. Either way the
+      // honest answer is "not applicable", which the chart already knows how to skip.
+      const smaDistance = sma10 !== null && sma10 > 0 ? ((price - sma10) / sma10) * 100 : null;
 
       fullData.push({ date, price, sma10, drawdown, smaDistance });
     }
@@ -5698,7 +5729,7 @@ const PortfolioBacktester = () => {
     //    If endDate is provided, first truncate to end at that date, then take last N months
     const periodMonths: Record<string, number> = {
       '1Y': 12, '2Y': 24, '3Y': 36, '4Y': 48, '5Y': 60, '6Y': 72,
-      '7Y': 84, '8Y': 96, '9Y': 108, '10Y': 120
+      '7Y': 84, '8Y': 96, '9Y': 108, '10Y': 120, '15Y': 180
     };
     // When cutoffDate is set, find the last entry on or before that date
     let effectiveData = fullData;
@@ -5762,14 +5793,19 @@ const PortfolioBacktester = () => {
     //    CAGR = ((endPrice / startPrice) ^ (1 / years) - 1) * 100
     const startPrice = visibleData[0].price;
     const endPrice = visibleData[visibleData.length - 1].price;
-    const totalReturn = ((endPrice - startPrice) / startPrice) * 100;
+    // A percentage change needs a positive base. Now that a macro series can legitimately
+    // start a window at 0 or below, "return" stops meaning anything there — 0% to 2% is not
+    // an infinite gain — so say so with null rather than rendering Infinity or a sign-flipped
+    // number. Only reachable when a caller passed allowNonPositive.
+    const hasReturnBase = startPrice > 0;
+    const totalReturn = hasReturnBase ? ((endPrice - startPrice) / startPrice) * 100 : null;
 
     // Years between first and last data point (using actual dates for accuracy)
     const startDate = new Date(visibleData[0].date);
     const endDate = new Date(visibleData[visibleData.length - 1].date);
     const years = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
     // CAGR only makes sense over a period > 0 years; for very short spans just show total return
-    const cagr = years >= 1
+    const cagr = years >= 1 && hasReturnBase
       ? (Math.pow(endPrice / startPrice, 1 / years) - 1) * 100
       : null;
 
@@ -10431,7 +10467,9 @@ const PortfolioBacktester = () => {
                     {monthlySelectedTicker && (() => {
                       const assetInfo = assetLookup.find(l => l.ticker === monthlySelectedTicker);
                       const assetName = assetInfo ? assetInfo.name : monthlySelectedTicker;
-                      const chartResult = getMonthlyChartData(monthlySelectedTicker, monthlyChartPeriod, monthlyEndDate || undefined, monthlyDisplayCurrency);
+                      // The trailing `true` lets this tab — and only this tab — plot a macro
+                      // series through zero and below, so an interest-rate line is unbroken.
+                      const chartResult = getMonthlyChartData(monthlySelectedTicker, monthlyChartPeriod, monthlyEndDate || undefined, monthlyDisplayCurrency, true);
 
                       if (!chartResult) return (
                         <div className="text-center py-4 text-gray-500 mt-4">
@@ -10656,10 +10694,12 @@ const PortfolioBacktester = () => {
                       } else if (lastRow) {
                         priceBubbleDefs.push({ value: lastRow.price, color: '#000000', label: formatPrice(lastRow.price) });
                         // Second bubble follows whichever overlay is on screen: the SMA in the
-                        // default view, the high water mark in either drawdown view.
+                        // default view, the high water mark in either drawdown view. The bare
+                        // 'price' view has no overlay, so it gets no second bubble — otherwise
+                        // an SMA figure would sit at the edge of a chart with no SMA line on it.
                         if (isDrawdownView) {
                           priceBubbleDefs.push({ value: lastRow.hwm, color: CHART_PALETTE.rose, label: formatPrice(lastRow.hwm) });
-                        } else {
+                        } else if (priceChartMode === 'sma') {
                           // The SMA only exists on the nominal series, which is what this branch draws.
                           const lastSma = priceData[priceData.length - 1]?.sma10;
                           if (lastSma != null) {
@@ -10863,10 +10903,14 @@ const PortfolioBacktester = () => {
                           <div className="flex items-center justify-between mb-3 px-2">
                             <h3 className="text-sm font-semibold text-gray-700">
                               {monthlySelectedTicker} — {assetName}
-                              {/* Total return for the visible period, colored green/red */}
-                              <span className={`ml-2 ${totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                {totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(1)}%
-                              </span>
+              {/* Total return for the visible period, colored green/red. Null on a macro
+                  series whose window starts at or below zero — a percentage change has no
+                  meaning there, so the figure is simply left off rather than faked. */}
+                              {totalReturn !== null && (
+                                <span className={`ml-2 ${totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(1)}%
+                                </span>
+                              )}
                               {/* CAGR shown when period is >= 1 year */}
                               {cagr !== null && (
                                 <span className="ml-1 text-xs font-normal text-gray-500">
@@ -11368,6 +11412,10 @@ const PortfolioBacktester = () => {
                               just draw one line on top of another. */}
                           <div className="flex justify-end gap-1 mb-1 px-2 flex-wrap">
                             {([
+                              // Price on its own: same chart as the next button without the red
+                              // SMA line. A moving average of an interest rate or a GDP series
+                              // says nothing, so those are better read bare.
+                              { key: 'price', label: 'Price' },
                               { key: 'sma', label: 'Price & 10m SMA' },
                               { key: 'drawdown', label: 'Price & drawdowns' },
                               // Needs a CPI covering this window; EUR and CHF have none at all.
@@ -12836,7 +12884,7 @@ const PortfolioBacktester = () => {
 
                   {/* Period buttons */}
                   <div className="flex gap-1">
-                    {(['1Y', '2Y', '3Y', '4Y', '5Y', 'Max'] as const).map(p => {
+                    {(['1Y', '2Y', '3Y', '4Y', '5Y', '10Y', '15Y', 'Max'] as const).map(p => {
                       const value = p === 'Max' ? 'max' : p;
                       return (
                         <button
@@ -12926,9 +12974,13 @@ const PortfolioBacktester = () => {
                       {/* Title: Ticker: Price (return%) / Curr DD: (-x.x%) */}
                       <h3 className="text-sm font-semibold text-gray-700 mb-1">
                         {asset.ticker}: <span className="text-gray-400">{formattedPrice}</span>{' '}
-                        <span style={{ color: totalReturn >= 0 ? '#16a34a' : '#dc2626' }}>
-                          ({totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(1)}%)
-                        </span>
+                        {/* Null-safe only for the type's sake: this tab never asks for
+                            non-positive prices, so the return is always a number here. */}
+                        {totalReturn !== null && (
+                          <span style={{ color: totalReturn >= 0 ? '#16a34a' : '#dc2626' }}>
+                            ({totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(1)}%)
+                          </span>
+                        )}
                         {' / '}
                         <span className="font-normal text-gray-500">
                           Curr DD: (<span style={{ color: currDD === 0 ? '#16a34a' : currDD > -5 ? '#ca8a04' : currDD > -20 ? '#dc7c7c' : '#dc2626' }}>{currDD.toFixed(1)}%</span>)
@@ -14251,18 +14303,35 @@ const PortfolioBacktester = () => {
                             Profit Breakdown by Asset — {selectedYear}
                           </h3>
                           <div className="flex items-center gap-2">
-                            <label className="text-xs text-gray-500">Year</label>
-                            <select
-                              value={selectedYear}
-                              onChange={(e) => setBreakdownYear(parseInt(e.target.value, 10))}
-                              className="px-2 py-1 rounded border border-gray-300 text-xs font-medium text-gray-700 bg-white hover:bg-gray-50"
+                            {/* The year only steers the table, so it is pointless while the
+                                table is hidden — it reappears with the rest of the section. */}
+                            {breakdownExpanded && (
+                              <>
+                                <label className="text-xs text-gray-500">Year</label>
+                                <select
+                                  value={selectedYear}
+                                  onChange={(e) => setBreakdownYear(parseInt(e.target.value, 10))}
+                                  className="px-2 py-1 rounded border border-gray-300 text-xs font-medium text-gray-700 bg-white hover:bg-gray-50"
+                                >
+                                  {allYears.map(y => (
+                                    <option key={y} value={y}>{y}</option>
+                                  ))}
+                                </select>
+                              </>
+                            )}
+                            <button
+                              onClick={() => setBreakdownExpanded(v => !v)}
+                              className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                breakdownExpanded
+                                  ? 'bg-slate-800 text-white hover:bg-slate-700'
+                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
                             >
-                              {allYears.map(y => (
-                                <option key={y} value={y}>{y}</option>
-                              ))}
-                            </select>
+                              {breakdownExpanded ? 'Hide' : 'Show'}
+                            </button>
                           </div>
                         </div>
+                        {breakdownExpanded && (<>
                         <p className="text-xs text-gray-400 mb-3">
                           Each shaded row is a whole asset (with a <b>Total</b> when it has several parts); the white
                           rows below break it down. Prices are in the asset&apos;s own currency, with the position&apos;s
@@ -14404,6 +14473,7 @@ const PortfolioBacktester = () => {
                             </tfoot>
                           </table>
                         </div>
+                        </>)}
                       </div>
                     );
                   })()}
