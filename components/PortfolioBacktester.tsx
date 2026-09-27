@@ -10971,6 +10971,16 @@ const PortfolioBacktester = () => {
                               series: { date: string; price: number }[],
                               drawdowns: { drawdown: number }[],
                             ) => {
+                              // Every figure in this table — CAGR, volatility, Sharpe, the value of
+                              // 100 invested — is built on percentage changes, and a percentage change
+                              // needs a positive base. A macro series does not have one: a policy rate
+                              // running -0.75 -> 0 -> 1.0 makes "the return from -0.75 to 0" undefined
+                              // and "from 0 to 1.0" infinite, and those NaNs printed straight into the
+                              // table. There is no sensible number to show, so the table sits this one
+                              // out rather than inventing one. Real assets are unaffected: their prices
+                              // are positive by definition.
+                              if (series.some(p => !(p.price > 0))) return null;
+
                               const statPoints: ReturnPoint[] = series.map((p, i) => ({
                                 date: p.date,
                                 value: p.price,
