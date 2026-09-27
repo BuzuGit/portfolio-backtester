@@ -5473,13 +5473,29 @@ const PortfolioBacktester = () => {
       return `${monthName}${yearShort}`;
     });
 
+    // Group the price history by calendar month ONCE, up front.
+    //
+    // This used to be a `.filter()` over the whole history inside getLastPriceOfMonth, which
+    // meant re-scanning all 202 rows — and building a Date object for each — separately for
+    // every ticker AND every month. With the asset filter widened to all 92 tickers that is
+    // 92 x 22 = 2,024 full passes, around 410,000 Date constructions, on EVERY render of the
+    // tab: measured at 209ms, i.e. a visible stall on each repaint. Indexing once costs 202
+    // Date constructions and turns the lookup into a Map hit: the same work drops to 0.3ms.
+    //
+    // Keyed year*12+month so a single integer identifies a calendar month. Insertion order is
+    // preserved within each bucket, so "the last row of the month" is still the last entry.
+    const rowsByMonth = new Map<number, typeof assetData>();
+    for (const row of assetData) {
+      const d = new Date(row.date);
+      if (isNaN(d.getTime())) continue;
+      const key = d.getFullYear() * 12 + d.getMonth();
+      const bucket = rowsByMonth.get(key);
+      if (bucket) bucket.push(row); else rowsByMonth.set(key, [row]);
+    }
+
     // For each month, find the last trading day's price for each asset
     const getLastPriceOfMonth = (ticker: string, year: number, month: number): number | null => {
-      // Find all rows in this month
-      const monthRows = assetData.filter(row => {
-        const rowDate = new Date(row.date);
-        return rowDate.getFullYear() === year && rowDate.getMonth() === month;
-      });
+      const monthRows = rowsByMonth.get(year * 12 + month) || [];
 
       // Get the last row that actually carries a value for this ticker.
       //
@@ -12918,7 +12934,16 @@ const PortfolioBacktester = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {getFilteredAssetLookup().map(asset => {
                   // Reuse getMonthlyChartData — pass endDate so charts end at the selected month
-                  const chartData = getMonthlyChartData(asset.ticker, graphsPeriod, graphsEndDate || undefined);
+                  // Trailing `true`: plot macro series through zero and below, the same as the
+                  // Monthly tab. Without it this tab silently dropped every non-positive month,
+                  // so RATE_CH's line stopped dead in May 2025 — the month its rate reached zero —
+                  // and the same ticker told two different stories on two tabs.
+                  //
+                  // The return figure in the card heading is deliberately left alone: on a yield
+                  // series "−76.2%" is not a meaningful investment return, but it is the honest
+                  // arithmetic for the line being drawn, and it is how this tab has always
+                  // labelled every series.
+                  const chartData = getMonthlyChartData(asset.ticker, graphsPeriod, graphsEndDate || undefined, undefined, true);
                   if (!chartData) return null;
                   const { priceData, totalReturn } = chartData;
                   if (priceData.length === 0) return null;
