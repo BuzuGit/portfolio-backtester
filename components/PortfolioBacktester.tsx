@@ -14386,10 +14386,12 @@ const PortfolioBacktester = () => {
                             zero line sitting naturally between the winners and the losers. */}
                         {(() => {
                           const barRows = [
-                            ...assets.map(a => ({ label: a.name, ticker: a.ticker, profit: a.totalConverted })),
+                            ...assets.map(a => ({ label: a.name, ticker: a.ticker, profit: a.totalConverted, isOther: false })),
                             // "Other" is in the table unconditionally, so it is here too — leaving
-                            // it out would quietly stop the bars adding up to the Total.
-                            { label: 'Other', ticker: '', profit: other },
+                            // it out would quietly stop the bars adding up to the Total. It is
+                            // flagged rather than detected by its blank ticker, so the black fill
+                            // below keys off something explicit.
+                            { label: 'Other', ticker: '', profit: other, isOther: true },
                           ].sort((x, y) => y.profit - x.profit);
 
                           // Compact axis/label numbers: 12,345 becomes 12k. Twenty bars each
@@ -14403,8 +14405,10 @@ const PortfolioBacktester = () => {
                             return `${v < 0 ? '−' : ''}${body}`;
                           };
 
-                          // One row needs about 22px to stay legible, plus room for the axis.
-                          const chartHeight = Math.max(160, barRows.length * 22 + 40);
+                          // Row pitch and bar thickness go together: 28px of row carrying an 18px
+                          // bar leaves 10px of air, which is the gap that separates neighbours —
+                          // bars are never allowed to fill their slot.
+                          const chartHeight = Math.max(180, barRows.length * 28 + 40);
 
                           // A bar is rounded at the DATA end and square where it meets zero, so the
                           // zero line stays a clean straight edge and the eye reads length from a
@@ -14438,7 +14442,9 @@ const PortfolioBacktester = () => {
                                 <BarChart
                                   layout="vertical"
                                   data={barRows}
-                                  margin={{ top: 5, right: 52, left: 5, bottom: 5 }}
+                                  // Right margin is the runway the value label needs outside the
+                                  // longest gain bar; at 12px type a "−5.7k" wants about 60px.
+                                  margin={{ top: 5, right: 62, left: 5, bottom: 5 }}
                                 >
                                   {/* The axis is hidden rather than styled down: every bar already
                                       carries its value, so a scale underneath would be a second way
@@ -14457,7 +14463,7 @@ const PortfolioBacktester = () => {
                                     interval={0}
                                     axisLine={false}
                                     tickLine={false}
-                                    tick={{ fontSize: 10, fill: '#6b7280' }}
+                                    tick={{ fontSize: 12, fill: '#6b7280' }}
                                   />
                                   <Tooltip
                                     cursor={{ fill: 'rgba(0,0,0,0.04)' }}
@@ -14479,9 +14485,13 @@ const PortfolioBacktester = () => {
                                       the one piece that earns its place: it is the baseline every
                                       bar is measured from. One shade off the surface, solid. */}
                                   <ReferenceLine x={0} stroke="#e5e7eb" strokeWidth={1} />
-                                  <Bar dataKey="profit" isAnimationActive={false} barSize={13} shape={<DivergingBar />}>
+                                  <Bar dataKey="profit" isAnimationActive={false} barSize={18} shape={<DivergingBar />}>
                                     {barRows.map(r => (
-                                      <Cell key={r.ticker || r.label} fill={r.profit >= 0 ? '#16a34a' : '#dc2626'} />
+                                      // "Other" is black, not green or red: it is the residual — cash,
+                                      // fees and anything without a price — rather than a position that
+                                      // did well or badly, so it should not read as a winner or a loser
+                                      // sitting among them.
+                                      <Cell key={r.ticker || r.label} fill={r.isOther ? '#000000' : r.profit >= 0 ? '#16a34a' : '#dc2626'} />
                                     ))}
                                     {/* Sign-aware label placement. Recharts gives the bar's LEFT
                                         edge as x with a positive width either way, so for a loss
@@ -14505,7 +14515,7 @@ const PortfolioBacktester = () => {
                                             // right beside the number already says which way it went;
                                             // colouring the text too doubles the ink for no extra
                                             // information and makes nineteen rows shout at once.
-                                            style={{ fontSize: 10, fill: '#6b7280' }}
+                                            style={{ fontSize: 12, fill: '#6b7280' }}
                                           >
                                             {compact(v)}
                                           </text>
