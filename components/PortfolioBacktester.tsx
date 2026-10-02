@@ -14378,6 +14378,108 @@ const PortfolioBacktester = () => {
                           assets don&apos;t explain.
                         </p>
 
+                        {/* === Profit by asset — the table below, drawn === */}
+                        {/* Same numbers as the Profit ({sym}) column, one bar per asset plus the
+                            same "Other" residual, so the bars reconcile to the Total profit row.
+                            Sorted biggest gain at the top down to biggest loss at the bottom, which
+                            puts the outliers you are looking for at the two ends and leaves the
+                            zero line sitting naturally between the winners and the losers. */}
+                        {(() => {
+                          const barRows = [
+                            ...assets.map(a => ({ label: a.name, ticker: a.ticker, profit: a.totalConverted })),
+                            // "Other" is in the table unconditionally, so it is here too — leaving
+                            // it out would quietly stop the bars adding up to the Total.
+                            { label: 'Other', ticker: '', profit: other },
+                          ].sort((x, y) => y.profit - x.profit);
+
+                          // Compact axis/label numbers: 12,345 becomes 12k. Twenty bars each
+                          // carrying a full "12,345 zł" is unreadable, and the axis already says
+                          // which currency this is.
+                          const compact = (v: number) => {
+                            const a = Math.abs(v);
+                            const body = a >= 10000 ? `${Math.round(a / 1000)}k`
+                              : a >= 1000 ? `${(a / 1000).toFixed(1)}k`
+                                : `${Math.round(a)}`;
+                            return `${v < 0 ? '−' : ''}${body}`;
+                          };
+
+                          // One row needs about 22px to stay legible, plus room for the axis.
+                          const chartHeight = Math.max(160, barRows.length * 22 + 40);
+
+                          return (
+                            <div className="mb-4">
+                              <div className="text-xs text-gray-500 mb-1">Profit by asset ({sym})</div>
+                              <ResponsiveContainer width="100%" height={chartHeight}>
+                                <BarChart
+                                  layout="vertical"
+                                  data={barRows}
+                                  margin={{ top: 5, right: 52, left: 5, bottom: 5 }}
+                                >
+                                  <XAxis type="number" tickFormatter={compact} tick={{ fontSize: 11, fill: '#6b7280' }} />
+                                  {/* interval={0} forces every asset's name to be drawn; Recharts
+                                      drops labels to avoid crowding otherwise, and a bar with no
+                                      name is useless here. */}
+                                  <YAxis
+                                    type="category"
+                                    dataKey="label"
+                                    width={140}
+                                    interval={0}
+                                    tick={{ fontSize: 10, fill: '#374151' }}
+                                  />
+                                  <Tooltip
+                                    cursor={{ fill: 'rgba(0,0,0,0.04)' }}
+                                    content={({ active, payload }) => {
+                                      if (!active || !payload || !payload.length) return null;
+                                      const d = payload[0].payload as { label: string; ticker: string; profit: number };
+                                      return (
+                                        <div className="bg-white border border-gray-200 rounded shadow px-3 py-2 text-xs">
+                                          <div className="font-semibold mb-0.5">
+                                            {d.label}{d.ticker ? <span className="font-normal text-gray-400"> ({d.ticker})</span> : null}
+                                          </div>
+                                          <div className={colorOf(d.profit)}>{fmtC(d.profit)}</div>
+                                          <div className="text-gray-400">{share(d.profit)} of the year</div>
+                                        </div>
+                                      );
+                                    }}
+                                  />
+                                  {/* The zero line is the reference the whole chart is read against */}
+                                  <ReferenceLine x={0} stroke="#9ca3af" strokeWidth={1} />
+                                  <Bar dataKey="profit" isAnimationActive={false} barSize={14}>
+                                    {barRows.map(r => (
+                                      <Cell key={r.ticker || r.label} fill={r.profit >= 0 ? '#16a34a' : '#dc2626'} />
+                                    ))}
+                                    {/* Sign-aware label placement. Recharts gives the bar's LEFT
+                                        edge as x with a positive width either way, so for a loss
+                                        the end of the bar is x, not x+width — using position="right"
+                                        would stack every loss label on top of the zero line. */}
+                                    <LabelList
+                                      dataKey="profit"
+                                      content={(props: { x?: number | string; y?: number | string; width?: number | string; height?: number | string; value?: number | string }) => {
+                                        const x = Number(props.x ?? 0), y = Number(props.y ?? 0);
+                                        const w = Number(props.width ?? 0), h = Number(props.height ?? 0);
+                                        const v = Number(props.value ?? 0);
+                                        if (!isFinite(v) || Math.abs(v) < 0.5) return null;
+                                        const positive = v >= 0;
+                                        return (
+                                          <text
+                                            x={positive ? x + w + 4 : x - 4}
+                                            y={y + h / 2}
+                                            dy={3}
+                                            textAnchor={positive ? 'start' : 'end'}
+                                            style={{ fontSize: 10, fill: positive ? '#15803d' : '#b91c1c' }}
+                                          >
+                                            {compact(v)}
+                                          </text>
+                                        );
+                                      }}
+                                    />
+                                  </Bar>
+                                </BarChart>
+                              </ResponsiveContainer>
+                            </div>
+                          );
+                        })()}
+
                         <div className="overflow-x-auto">
                           <table className="w-full text-xs border-collapse">
                             <thead>
