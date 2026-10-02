@@ -14406,6 +14406,31 @@ const PortfolioBacktester = () => {
                           // One row needs about 22px to stay legible, plus room for the axis.
                           const chartHeight = Math.max(160, barRows.length * 22 + 40);
 
+                          // A bar is rounded at the DATA end and square where it meets zero, so the
+                          // zero line stays a clean straight edge and the eye reads length from a
+                          // single baseline. Recharts always hands over x as the LEFT edge with a
+                          // positive width, so which pair of corners to round depends on the sign.
+                          // The sign comes from the row itself, NOT from props.value: Recharts does
+                          // not hand a plain signed number to a custom shape, so testing it sent
+                          // every loss down the positive branch and collapsed its corner radius to
+                          // zero. `payload` is the datum we supplied, so `profit` is unambiguous.
+                          // Width is read through Math.abs for the same reason — defensive, since a
+                          // negative width would silently produce r = 0 and square off the end.
+                          const DivergingBar = (props: { x?: number; y?: number; width?: number; height?: number; fill?: string; payload?: { profit?: number } }) => {
+                            const x = Number(props.x ?? 0), y = Number(props.y ?? 0);
+                            const w = Math.abs(Number(props.width ?? 0)), h = Math.abs(Number(props.height ?? 0));
+                            if (!isFinite(x) || !isFinite(y) || !w || !h) return <path d="" />;
+                            const left = Math.min(x, x + Number(props.width ?? 0));
+                            const right = left + w;
+                            const r = Math.max(0, Math.min(4, h / 2, w));
+                            const d = Number(props.payload?.profit ?? 0) >= 0
+                              // Gain: grows rightwards, so the rounded end is the right one.
+                              ? `M${left},${y} H${right - r} Q${right},${y} ${right},${y + r} V${y + h - r} Q${right},${y + h} ${right - r},${y + h} H${left} Z`
+                              // Loss: grows leftwards, so the rounded end is the left one.
+                              : `M${right},${y} H${left + r} Q${left},${y} ${left},${y + r} V${y + h - r} Q${left},${y + h} ${left + r},${y + h} H${right} Z`;
+                            return <path d={d} fill={props.fill} />;
+                          };
+
                           return (
                             <div className="mb-4">
                               <div className="text-xs text-gray-500 mb-1">Profit by asset ({sym})</div>
@@ -14415,16 +14440,24 @@ const PortfolioBacktester = () => {
                                   data={barRows}
                                   margin={{ top: 5, right: 52, left: 5, bottom: 5 }}
                                 >
-                                  <XAxis type="number" tickFormatter={compact} tick={{ fontSize: 11, fill: '#6b7280' }} />
-                                  {/* interval={0} forces every asset's name to be drawn; Recharts
-                                      drops labels to avoid crowding otherwise, and a bar with no
-                                      name is useless here. */}
+                                  {/* The axis is hidden rather than styled down: every bar already
+                                      carries its value, so a scale underneath would be a second way
+                                      to read the same number — and it was drawing the heavy rule
+                                      along the bottom. The chart keeps the number axis for its
+                                      scale, it just does not paint it. */}
+                                  <XAxis type="number" hide />
+                                  {/* No axis rule and no tick marks: the names are the labels, the
+                                      line beside them was pure chrome. interval={0} forces every
+                                      asset's name to be drawn — Recharts drops labels to avoid
+                                      crowding otherwise, and a bar with no name is useless here. */}
                                   <YAxis
                                     type="category"
                                     dataKey="label"
                                     width={140}
                                     interval={0}
-                                    tick={{ fontSize: 10, fill: '#374151' }}
+                                    axisLine={false}
+                                    tickLine={false}
+                                    tick={{ fontSize: 10, fill: '#6b7280' }}
                                   />
                                   <Tooltip
                                     cursor={{ fill: 'rgba(0,0,0,0.04)' }}
@@ -14442,9 +14475,11 @@ const PortfolioBacktester = () => {
                                       );
                                     }}
                                   />
-                                  {/* The zero line is the reference the whole chart is read against */}
-                                  <ReferenceLine x={0} stroke="#9ca3af" strokeWidth={1} />
-                                  <Bar dataKey="profit" isAnimationActive={false} barSize={14}>
+                                  {/* With the axes gone this hairline is the only chrome left, and
+                                      the one piece that earns its place: it is the baseline every
+                                      bar is measured from. One shade off the surface, solid. */}
+                                  <ReferenceLine x={0} stroke="#e5e7eb" strokeWidth={1} />
+                                  <Bar dataKey="profit" isAnimationActive={false} barSize={13} shape={<DivergingBar />}>
                                     {barRows.map(r => (
                                       <Cell key={r.ticker || r.label} fill={r.profit >= 0 ? '#16a34a' : '#dc2626'} />
                                     ))}
@@ -14466,7 +14501,11 @@ const PortfolioBacktester = () => {
                                             y={y + h / 2}
                                             dy={3}
                                             textAnchor={positive ? 'start' : 'end'}
-                                            style={{ fontSize: 10, fill: positive ? '#15803d' : '#b91c1c' }}
+                                            // Muted ink, not the bar's green or red. The coloured bar
+                                            // right beside the number already says which way it went;
+                                            // colouring the text too doubles the ink for no extra
+                                            // information and makes nineteen rows shout at once.
+                                            style={{ fontSize: 10, fill: '#6b7280' }}
                                           >
                                             {compact(v)}
                                           </text>
