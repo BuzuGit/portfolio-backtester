@@ -14405,6 +14405,15 @@ const PortfolioBacktester = () => {
                             return `${v < 0 ? '−' : ''}${body}`;
                           };
 
+                          // Leave a margin of empty scale at both ends so the longest bar stops short
+                          // of the plot edge. Without it the biggest loss runs right up to the asset
+                          // names and its value label, which hangs off the outer end, has nowhere to
+                          // go but on top of them.
+                          const maxV = Math.max(0, ...barRows.map(r => r.profit));
+                          const minV = Math.min(0, ...barRows.map(r => r.profit));
+                          const span = (maxV - minV) || 1;
+                          const xDomain: [number, number] = [minV - span * 0.08, maxV + span * 0.08];
+
                           // Row pitch and bar thickness go together: 28px of row carrying an 18px
                           // bar leaves 10px of air, which is the gap that separates neighbours —
                           // bars are never allowed to fill their slot.
@@ -14451,7 +14460,7 @@ const PortfolioBacktester = () => {
                                       to read the same number — and it was drawing the heavy rule
                                       along the bottom. The chart keeps the number axis for its
                                       scale, it just does not paint it. */}
-                                  <XAxis type="number" hide />
+                                  <XAxis type="number" hide domain={xDomain} />
                                   {/* No axis rule and no tick marks: the names are the labels, the
                                       line beside them was pure chrome. interval={0} forces every
                                       asset's name to be drawn — Recharts drops labels to avoid
@@ -14505,9 +14514,16 @@ const PortfolioBacktester = () => {
                                         const v = Number(props.value ?? 0);
                                         if (!isFinite(v) || Math.abs(v) < 0.5) return null;
                                         const positive = v >= 0;
+                                        // Recharts anchors a LOSS bar at the zero line and gives it a
+                                        // NEGATIVE width, so `x` is the zero end, not the far end.
+                                        // Offsetting from x therefore printed every loss amount on top
+                                        // of its own red bar — grey text on red, unreadable. Work out
+                                        // the two edges explicitly and hang the label off the data end.
+                                        const left = Math.min(x, x + w);
+                                        const right = Math.max(x, x + w);
                                         return (
                                           <text
-                                            x={positive ? x + w + 4 : x - 4}
+                                            x={positive ? right + 4 : left - 4}
                                             y={y + h / 2}
                                             dy={3}
                                             textAnchor={positive ? 'start' : 'end'}
