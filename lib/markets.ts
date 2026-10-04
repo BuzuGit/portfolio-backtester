@@ -47,6 +47,17 @@ export interface MarketRow {
   priceCurrency: string;    // e.g. "USD"
   priceUp: boolean | null;  // latest price >= previous month's (native); null if unknown
   priceDate: string;        // date of that latest price, so a stale row can be flagged
+  // Current drawdown: how far the latest price sits below the highest month-end price ever
+  // recorded (native currency, same rule as the Annual tab's "Curr DD"). Percent, <= 0.
+  drawdown: number | null;
+  isAtAth: boolean;         // within 0.01% of the all-time high, shown as "ATH"
+  athPrice: number | null;
+  athDate: string;
+  // 10-month SMA trend signal, exactly as the Monthly tab computes it: the average of the last
+  // 10 month-end prices INCLUDING the latest one (native currency). BUY if the latest price is
+  // above that average, SELL otherwise; null if there aren't 10 months of prices yet.
+  sma10: number | null;
+  signal: 'BUY' | 'SELL' | null;
 }
 
 export interface MarketSection {
@@ -141,6 +152,12 @@ export const buildReturnMatrix = (
     let price: number | null = null;
     let priceUp: boolean | null = null;
     let priceDate = '';
+    let drawdown: number | null = null;
+    let isAtAth = false;
+    let athPrice: number | null = null;
+    let athDate = '';
+    let sma10: number | null = null;
+    let signal: 'BUY' | 'SELL' | null = null;
 
     if (endIdx >= 0) {
       const endRow = rows[endIdx];
@@ -169,12 +186,33 @@ export const buildReturnMatrix = (
       priceDate = String(endRow.date);
       const prev = endIdx > 0 ? Number(rows[endIdx - 1][a.ticker]) : NaN;
       priceUp = prev > 0 ? price >= prev : null;
+
+      // All-time high over the whole history up to the latest price (native currency).
+      for (let i = 0; i <= endIdx; i++) {
+        const p = Number(rows[i][a.ticker]);
+        if (p > 0 && (athPrice === null || p > athPrice)) { athPrice = p; athDate = String(rows[i].date); }
+      }
+      if (athPrice !== null) {
+        drawdown = (price / athPrice - 1) * 100;
+        isAtAth = Math.abs(drawdown) < 0.01;
+      }
+
+      // 10-month SMA: needs a price in each of the last 10 months, like the Monthly tab.
+      const last10 = rows.slice(Math.max(0, endIdx - 9), endIdx + 1)
+        .map(r => Number(r[a.ticker])).filter(p => p > 0);
+      if (last10.length === 10) {
+        sma10 = last10.reduce((s, p) => s + p, 0) / 10;
+        signal = price > sma10 ? 'BUY' : 'SELL';
+      }
     }
 
     const section = a.snapshotSubcategory || 'Other';
     if (!sectionsMap.has(section)) sectionsMap.set(section, []);
     sectionsMap.get(section)!.push({
-      row: { ticker: a.ticker, name: a.name, returns, spark, price, priceCurrency: nativeCcy, priceUp, priceDate },
+      row: {
+        ticker: a.ticker, name: a.name, returns, spark, price, priceCurrency: nativeCcy, priceUp, priceDate,
+        drawdown, isAtAth, athPrice, athDate, sma10, signal,
+      },
       // No order number = after the numbered rows; ties keep the sheet's own order.
       order: a.snapshotOrder ?? Infinity,
       sheetIndex,

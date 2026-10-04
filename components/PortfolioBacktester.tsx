@@ -10143,12 +10143,10 @@ const PortfolioBacktester = () => {
             const monthLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleString('en-GB', { month: 'short', year: 'numeric' });
             const isMtd = !!m && m.endDate.slice(0, 7) === new Date().toISOString().slice(0, 7);
             const summary = m ? summariseMatrix(m, marketsPeriod) : null;
-            const colCount = 2 + (m ? m.columns.length : 0) + 2; // name + bar + periods + trend + price
+            const colCount = 2 + (m ? m.columns.length : 0) + 4; // name + bar + periods + trend + price + DD + signal
 
             return (
               <div className="mt-2">
-                <h2 className="text-xl font-semibold text-gray-800 mb-4">Markets</h2>
-
                 {/* Page-level filters: currency for every return figure, period for the bars and tiles */}
                 <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
                   <div className="flex items-center gap-1">
@@ -10237,6 +10235,8 @@ const PortfolioBacktester = () => {
                               ))}
                               <th className="text-left font-medium px-3 py-2">5Y trend</th>
                               <th className="text-right font-medium px-3 py-2">Price</th>
+                              <th className="text-right font-medium px-3 py-2 whitespace-nowrap">Current DD</th>
+                              <th className="text-center font-medium px-3 py-2 whitespace-nowrap">10SMA signal</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -10299,6 +10299,34 @@ const PortfolioBacktester = () => {
                                           </>
                                         )}
                                       </td>
+
+                                      {/* Current drawdown from the all-time high — same look as the Annual tab's "Curr DD" */}
+                                      {r.drawdown === null ? (
+                                        <td className="px-3 py-1 text-right text-xs text-gray-300">–</td>
+                                      ) : r.isAtAth ? (
+                                        <td className="px-3 py-1 text-right text-xs font-semibold bg-green-100 text-green-700 cursor-help" title={`At all-time high: ${formatPrice(r.price ?? 0)} ${r.priceCurrency}`}>
+                                          ATH
+                                        </td>
+                                      ) : (
+                                        <td
+                                          className="px-3 py-1 text-right text-xs tabular-nums bg-orange-50 text-orange-700 cursor-help"
+                                          title={`ATH ${formatPrice(r.athPrice ?? 0)} ${r.priceCurrency} (${monthLabel(r.athDate)})`}
+                                        >
+                                          {r.drawdown.toFixed(1)}%
+                                        </td>
+                                      )}
+
+                                      {/* 10-month SMA signal — same rule and colours as the Monthly tab */}
+                                      <td
+                                        className={`px-3 py-1 text-center text-xs font-medium ${
+                                          r.signal === 'BUY' ? 'bg-green-100 text-green-700'
+                                            : r.signal === 'SELL' ? 'bg-red-100 text-red-700'
+                                            : 'text-gray-300'
+                                        }`}
+                                        title={r.sma10 !== null ? `10-month SMA ${formatPrice(r.sma10)} ${r.priceCurrency}` : 'Needs 10 months of prices'}
+                                      >
+                                        {r.signal ?? '–'}
+                                      </td>
                                     </tr>
                                   );
                                 })}
@@ -10311,7 +10339,8 @@ const PortfolioBacktester = () => {
                       <p className="text-[11px] text-gray-500 mt-3">
                         Total return (adjusted-close prices) in {marketsCurrency}, converted at each month-end&apos;s exchange rate ·
                         every period ends at the latest price · 3Y/5Y/10Y are cumulative (c), not annualised ·
-                        colour scaled within each column · price in the asset&apos;s own currency, red if below last month-end · – = not enough history
+                        colour scaled within each column · price in the asset&apos;s own currency, red if below last month-end ·
+                        Current DD and 10SMA signal use the asset&apos;s own currency, like the Annual and Monthly tabs · – = not enough history
                       </p>
                     </>
                   )}
