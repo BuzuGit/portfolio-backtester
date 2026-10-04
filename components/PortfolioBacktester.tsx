@@ -10121,23 +10121,42 @@ const PortfolioBacktester = () => {
               return r === 0 ? '0.0' : `${r > 0 ? '+' : ''}${r.toFixed(1)}`;
             };
 
+            // Macro rows (rates in bp, inflation in %) follow different rules from prices:
+            //  - colours are REVERSED: rising rates/inflation show red, falling green;
+            //  - rate rows are in basis points, so they get their own bar and colour scale.
+            const isMacroKind = (r: MarketRow) => r.kind === 'rate' || r.kind === 'cpi';
+            const isMacroTable = allRows.length > 0 && allRows.every(isMacroKind);
+            const fmtBp = (v: number): string => {
+              const r = Math.round(v);
+              return r === 0 ? '0' : `${r > 0 ? '+' : ''}${r}`;
+            };
+            const fmtCell = (r: MarketRow, v: number) => (r.kind === 'rate' ? fmtBp(v) : fmtRet(v));
+            // Macro rows keep a rate / YoY inflation in the row's price fields; it is a percentage,
+            // not a share price, so it is printed as one ("4.00%") rather than through formatPrice.
+            const fmtPct = (v: number) => `${v.toFixed(2)}%`;
+
             // Bar chart scale for the focused period: from the most negative to the most positive
-            // asset, always including zero, so every bar starts from the same zero line.
-            const focusVals = allRows.map(r => r.returns[marketsPeriod]).filter((v): v is number => v !== null);
-            const barLo = Math.min(0, ...focusVals);
-            const barHi = Math.max(0, ...focusVals);
-            const barSpan = (barHi - barLo) || 1;
-            const zeroPct = (-barLo / barSpan) * 100;
+            // row, always including zero, so every bar starts from the same zero line. Rows in bp
+            // and rows in % each get their own scale (+85 bp would otherwise dwarf +3% inflation).
+            const barScale = (bp: boolean) => {
+              const vals = allRows.filter(r => (r.kind === 'rate') === bp)
+                .map(r => r.returns[marketsPeriod]).filter((v): v is number => v !== null);
+              const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+              const span = (hi - lo) || 1;
+              return { span, zeroPct: (-lo / span) * 100 };
+            };
+            const barScales = { pct: barScale(false), bp: barScale(true) };
             // Medium shades of the same green/red the cells use, so bars and cells read as one palette.
             const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
 
-            // 5-year trend line drawn as a tiny SVG: green if it ends above where it started, red if below.
-            const sparkline = (vals: number[]) => {
+            // 5-year trend line drawn as a tiny SVG: green if it ends above where it started, red if
+            // below (the other way round for Macro rows, where "up" is rising rates or inflation).
+            const sparkline = (vals: number[], reversed = false) => {
               if (vals.length < 2) return <span className="text-gray-300">–</span>;
               const W = 80, H = 24;
               const lo = Math.min(...vals), hi = Math.max(...vals), sp = (hi - lo) || 1;
               const pts = vals.map((v, i) => `${((i / (vals.length - 1)) * W).toFixed(1)},${(H - 1 - ((v - lo) / sp) * (H - 2)).toFixed(1)}`).join(' ');
-              const col = vals[vals.length - 1] >= vals[0] ? '#15803d' : '#b91c1c';
+              const col = (vals[vals.length - 1] >= vals[0]) !== reversed ? '#15803d' : '#b91c1c';
               return (
                 <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block">
                   <polygon points={`0,${H} ${pts} ${W},${H}`} fill={col} opacity={0.08} />
@@ -10168,6 +10187,28 @@ const PortfolioBacktester = () => {
             };
             const returnTooltip = (r: MarketRow, p: MarketsPeriod, v: number): string => {
               const w = r.working[p];
+              // Rates: change in bp, plus the % growth of the rate itself (when it started above zero).
+              if (r.kind === 'rate') {
+                const head = `${r.name} · ${p} change: ${fmtBp(v)} bp`;
+                if (!w) return head;
+                const growth = w.start.result > 0
+                  ? `${fmtRet((w.end.result / w.start.result - 1) * 100)}%`
+                  : 'n/a (starting rate was zero or negative)';
+                return `${head}\n`
+                  + `Start ${dayLabel(w.startDate)}: ${w.start.result.toFixed(2)}%\n`
+                  + `End ${dayLabel(w.endDate)}: ${w.end.result.toFixed(2)}%\n`
+                  + `Change = end − start = ${fmtBp(v)} bp (${w.end.result >= w.start.result ? '+' : ''}${(w.end.result - w.start.result).toFixed(2)} pp)\n`
+                  + `Growth = end ÷ start − 1 = ${growth}`;
+              }
+              // Inflation: the CPI index at both ends, anchored at the last real CPI print.
+              if (r.kind === 'cpi') {
+                const head = `${r.name} · ${p} inflation: ${fmtRet(v)}%`;
+                if (!w) return head;
+                return `${head}\n`
+                  + `Start ${dayLabel(w.startDate)}: CPI ${w.start.result.toFixed(2)}\n`
+                  + `End ${dayLabel(w.endDate)} (last CPI print): CPI ${w.end.result.toFixed(2)}\n`
+                  + `Inflation = end ÷ start − 1 = ${fmtRet((w.end.result / w.start.result - 1) * 100)}%`;
+              }
               const ccy = marketsCurrency === 'Original' ? `${r.priceCurrency} (own currency)` : marketsCurrency;
               const head = `${r.name} · ${p} return${r.isFx ? '' : ` in ${ccy}`}: ${fmtRet(v)}%`;
               if (!w) return head;
@@ -10182,7 +10223,8 @@ const PortfolioBacktester = () => {
               + '• SMA = average of the last 10 month-end prices, current month included, in the asset\'s own currency.\n'
               + '• BUY when the latest price is above the SMA, SELL when it is at or below it.\n'
               + '• Needs a price in each of those 10 months; otherwise shown as –.';
-            const colCount = 2 + (m ? m.columns.length : 0) + 4; // name + bar + periods + trend + price + DD + signal
+            // name + bar + periods + trend + price + (DD + signal | ATH + vs peak) — four after the periods either way
+            const colCount = 2 + (m ? m.columns.length : 0) + 4;
 
             return (
               <div className="mt-2">
@@ -10233,7 +10275,9 @@ const PortfolioBacktester = () => {
                     <div>
                       <h3 className="text-md font-semibold text-gray-800 inline">Return matrix</h3>
                       <span className="text-xs text-gray-500 ml-2 uppercase tracking-wide">
-                        {activeMarketsCategory} · total return in {marketsCurrency === 'Original' ? "each asset's own currency" : marketsCurrency}
+                        {activeMarketsCategory} · {isMacroTable
+                          ? 'rates: change in bp · inflation: cumulative %'
+                          : `total return in ${marketsCurrency === 'Original' ? "each asset's own currency" : marketsCurrency}`}
                       </span>
                     </div>
                     {m && (
@@ -10249,8 +10293,9 @@ const PortfolioBacktester = () => {
                     </p>
                   ) : (
                     <>
-                      {/* Summary tiles for the focused period */}
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+                      {/* Summary tiles for the focused period. Hidden for Macro: there a "leader" would */}
+                      {/* compare a change in bp with an inflation %, which means nothing. */}
+                      {!isMacroTable && <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
                         {[
                           { label: 'Leader', value: summary?.leader ? fmtRet(summary.leader.value) : '–', sub: summary?.leader?.name ?? '', cls: 'text-green-700' },
                           { label: 'Laggard', value: summary?.laggard ? fmtRet(summary.laggard.value) : '–', sub: summary?.laggard?.name ?? '', cls: 'text-red-700' },
@@ -10265,7 +10310,7 @@ const PortfolioBacktester = () => {
                             </div>
                           </div>
                         ))}
-                      </div>
+                      </div>}
 
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm border-collapse">
@@ -10281,7 +10326,7 @@ const PortfolioBacktester = () => {
                                   {/* The fixed-width div is what holds this column open: a table ignores min-width */}
                                   {/* on cells, and the bars inside are absolutely positioned so they claim no width. */}
                                   <th className="text-left font-medium px-3 py-2">
-                                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod} return</span></div>
+                                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod} {isMacroTable ? 'change' : 'return'}</span></div>
                                   </th>
                                   {m.columns.map(p => (
                                     <th
@@ -10294,13 +10339,27 @@ const PortfolioBacktester = () => {
                                     </th>
                                   ))}
                                   <th className="text-left font-medium px-2 py-2 whitespace-nowrap">5Y trend</th>
-                                  <th className="text-right font-medium px-2 py-2">Price</th>
-                                  <th className="text-right font-medium px-2 py-2 whitespace-nowrap" title="Current drawdown: how far the latest price is below its all-time high (asset's own currency)">Curr DD</th>
-                                  <th className="text-center font-medium px-2 py-2 cursor-help" title={SIGNAL_RULE}>Signal</th>
+                                  {isMacroTable ? (
+                                    <>
+                                      <th className="text-right font-medium px-2 py-2 cursor-help" title="Latest rate, or latest year-on-year inflation">Value</th>
+                                      <th className="text-right font-medium px-2 py-2 cursor-help" title="Highest value ever recorded (rate, or YoY inflation)">ATH</th>
+                                      <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title="ATH − current value, in percentage points">vs peak</th>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <th className="text-right font-medium px-2 py-2">Price</th>
+                                      <th className="text-right font-medium px-2 py-2 whitespace-nowrap" title="Current drawdown: how far the latest price is below its all-time high (asset's own currency)">Curr DD</th>
+                                      <th className="text-center font-medium px-2 py-2 cursor-help" title={SIGNAL_RULE}>Signal</th>
+                                    </>
+                                  )}
                                 </tr>
                                 {s.rows.map(r => {
                                   const fv = r.returns[marketsPeriod];
+                                  const macro = isMacroKind(r);
+                                  const { span: barSpan, zeroPct } = r.kind === 'rate' ? barScales.bp : barScales.pct;
                                   const w = fv === null ? 0 : (Math.abs(fv) / barSpan) * 100;
+                                  // Bar colour: green = up for prices; reversed for rates/inflation.
+                                  const barColour = fv !== null && (fv >= 0) !== macro ? BAR_UP : BAR_DOWN;
                                   const stale = !!r.priceDate && r.priceDate.slice(0, 7) !== m.endDate.slice(0, 7);
                                   return (
                                     <tr key={r.ticker} className="border-b border-gray-100 hover:bg-gray-50">
@@ -10313,12 +10372,12 @@ const PortfolioBacktester = () => {
                                             <div className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: `${zeroPct}%` }} />
                                             <div
                                               className="absolute top-0.5 bottom-0.5 rounded-sm"
-                                              style={{ left: `${fv >= 0 ? zeroPct : zeroPct - w}%`, width: `${w}%`, background: fv >= 0 ? BAR_UP : BAR_DOWN }}
+                                              style={{ left: `${fv >= 0 ? zeroPct : zeroPct - w}%`, width: `${w}%`, background: barColour }}
                                             />
                                             <span
                                               className="absolute top-1/2 -translate-y-1/2 text-xs tabular-nums text-gray-700 whitespace-nowrap"
                                               style={fv >= 0 ? { left: `calc(${zeroPct + w}% + 4px)` } : { right: `calc(${100 - zeroPct + w}% + 4px)` }}
-                                            >{fmtRet(fv)}</span>
+                                            >{fmtCell(r, fv)}{r.kind === 'rate' && <span className="text-[9px] text-gray-400 ml-0.5">bp</span>}</span>
                                           </div>
                                         )}
                                       </td>
@@ -10327,18 +10386,47 @@ const PortfolioBacktester = () => {
                                       {m.columns.map(p => {
                                         const v = r.returns[p];
                                         if (v === null) return <td key={p} className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
-                                        const bg = returnHeatColor(Math.max(-1, Math.min(1, v / m.colourCaps[p])) * 40);
+                                        // Rate rows use the bp scale; Macro rows flip the colour (up = red).
+                                        const cap = r.kind === 'rate' ? m.colourCapsBp[p] : m.colourCaps[p];
+                                        const bg = returnHeatColor(Math.max(-1, Math.min(1, v / cap)) * 40 * (macro ? -1 : 1));
                                         return (
                                           <td key={p} className="px-px py-0.5" title={returnTooltip(r, p, v)}>
                                             <div className="rounded px-1 py-1 cursor-help text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
-                                              {fmtRet(v)}
+                                              {fmtCell(r, v)}
                                             </div>
                                           </td>
                                         );
                                       })}
 
-                                      <td className="px-2 py-1">{sparkline(r.spark)}</td>
+                                      <td className="px-2 py-1">{sparkline(r.spark, macro)}</td>
 
+                                      {isMacroTable ? (
+                                        <>
+                                          {/* Value: latest rate / YoY inflation — red if it rose vs the month before */}
+                                          <td className="px-2 py-1 text-right text-xs whitespace-nowrap tabular-nums">
+                                            {r.price === null ? <span className="text-gray-300">–</span> : (
+                                              <>
+                                                <span className={r.priceUp === true ? 'text-red-600' : 'text-gray-900'}>{fmtPct(r.price)}</span>
+                                                {stale && <span className="text-[10px] text-amber-600 ml-1" title={`Latest value is from ${r.priceDate}${r.kind === 'cpi' ? ' (last CPI print)' : ''}`}>({monthLabel(r.priceDate)})</span>}
+                                              </>
+                                            )}
+                                          </td>
+                                          {/* ATH: highest value ever recorded */}
+                                          <td
+                                            className={`px-2 py-1 text-right text-xs tabular-nums cursor-help ${r.isAtAth ? 'font-semibold text-red-700' : 'text-gray-700'}`}
+                                            title={r.athPrice === null ? '' : `Highest ${r.kind === 'cpi' ? 'YoY inflation' : 'value'} recorded: ${fmtPct(r.athPrice)} (${monthLabel(r.athDate)})${r.isAtAth ? ' — at that peak now' : ''}`}
+                                          >
+                                            {r.athPrice === null ? '–' : `${fmtPct(r.athPrice)}`}
+                                          </td>
+                                          {/* vs peak: ATH − current, in percentage points */}
+                                          <td
+                                            className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap text-gray-700 cursor-help"
+                                            title={r.athPrice === null || r.price === null ? '' : `Peak ${fmtPct(r.athPrice)} (${monthLabel(r.athDate)}) − current ${fmtPct(r.price)} = ${(r.athPrice - r.price).toFixed(2)} pp`}
+                                          >
+                                            {r.athPrice === null || r.price === null ? '–' : <>{(r.athPrice - r.price).toFixed(2)}<span className="text-[9px] text-gray-400 ml-0.5">pp</span></>}
+                                          </td>
+                                        </>
+                                      ) : (<>
                                       {/* Latest price in the asset's own currency: red if below last month-end, black otherwise */}
                                       <td className="px-2 py-1 text-right text-xs whitespace-nowrap tabular-nums">
                                         {r.price === null ? <span className="text-gray-300">–</span> : (
@@ -10379,6 +10467,7 @@ const PortfolioBacktester = () => {
                                       >
                                         {r.signal ?? '–'}
                                       </td>
+                                      </>)}
                                     </tr>
                                   );
                                 })}
@@ -10388,6 +10477,15 @@ const PortfolioBacktester = () => {
                         </table>
                       </div>
 
+                      {isMacroTable ? (
+                      <p className="text-[11px] text-gray-500 mt-3">
+                        Rates and 10Y yields: period columns are the change in basis points (hover for the % growth) ·
+                        inflation: cumulative change in the CPI index over the period (1Y = year-on-year), measured from the
+                        last month the index actually changed (later months repeat it until the next print) ·
+                        Value = latest rate / YoY inflation, red if it rose vs the month before · ATH = highest ever recorded ·
+                        vs peak = ATH − Value in pp · colours reversed: rising = red · the currency button does not apply · – = not enough history
+                      </p>
+                      ) : (
                       <p className="text-[11px] text-gray-500 mt-3">
                         {marketsCurrency === 'Original'
                           ? <>Total return (adjusted-close prices) in each asset&apos;s own currency, no FX conversion · </>
@@ -10398,6 +10496,7 @@ const PortfolioBacktester = () => {
                         FX rows read BASE/OTHER (units of the other currency per 1 base, cross rates via PLN), so + = the base
                         currency strengthened; their price, Curr DD and Signal are on that rate · – = not enough history
                       </p>
+                      )}
                     </>
                   )}
                 </div>

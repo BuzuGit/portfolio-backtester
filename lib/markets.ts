@@ -63,11 +63,19 @@ export interface PeriodWorking {
   end: ValueWorking;
 }
 
+// What a row measures, which decides how its numbers are built and shown:
+//   asset — a price; returns are % changes, convertible between currencies
+//   fx    — an exchange rate shown as BASE/OTHER
+//   rate  — an interest rate or bond yield in %; "returns" are CHANGES in basis points
+//   cpi   — a consumer price index; returns are cumulative inflation in %, Value is YoY inflation
+export type MarketRowKind = 'asset' | 'fx' | 'rate' | 'cpi';
+
 export interface MarketRow {
   ticker: string;
   name: string;             // for FX rows, the pair as shown, e.g. "USD/EUR"
+  kind: MarketRowKind;
   isFx: boolean;            // FX row: price/DD/signal are on the shown exchange rate
-  returns: Record<MarketsPeriod, number | null>; // percent; null = not enough history (shown as "–")
+  returns: Record<MarketsPeriod, number | null>; // percent (bp for 'rate' rows); null = not enough history ("–")
   working: Record<MarketsPeriod, PeriodWorking | null>; // the prices/rates/dates behind each return
   spark: number[];          // last 5 years of prices in the SELECTED currency, oldest first
   price: number | null;     // latest price in the asset's OWN currency
@@ -96,6 +104,7 @@ export interface ReturnMatrix {
   sections: MarketSection[];
   columns: MarketsPeriod[];                  // table column order, with YTD slotted in by date
   colourCaps: Record<MarketsPeriod, number>; // per-column scale for the red/green cell colour
+  colourCapsBp: Record<MarketsPeriod, number>; // the same for 'rate' rows, whose cells are in bp
   endDate: string;                           // the latest date in the price sheet
 }
 
@@ -151,6 +160,114 @@ const isFxPair = (a: AssetLookup): boolean =>
  */
 export const formatFxRate = (v: number): string => v.toFixed(Math.abs(v) >= 100 ? 2 : 4);
 
+// A Macro row (the Lookup's asset class says "Macro"): rates, yields and inflation. These are
+// not prices, so they never go through currency conversion. A ticker starting "CPI" is a
+// consumer price INDEX; everything else in Macro is a rate quoted in percent.
+const isMacroRow = (a: AssetLookup): boolean => (a.assetClass || '').toLowerCase() === 'macro';
+const isCpiRow = (a: AssetLookup): boolean => /^CPI/i.test(a.ticker);
+
+/**
+ * Builds one Macro row. Two kinds:
+ *
+ * RATE (reference rates, 10Y yields): the period columns are the CHANGE in basis points
+ * (US 10Y from 4.44% to 5.29% over 1Y = +85 bp). A % change of a rate would be meaningless —
+ * 0.25% -> 4.00% reads as "+1,500%" — and would break on a 0% or negative rate. Value is
+ * the latest rate; ATH is the highest rate ever recorded.
+ *
+ * CPI (inflation): the sheet holds a price INDEX (PL = 179.57), so the period columns are
+ * cumulative inflation over the period (1Y = year-on-year). Value and ATH use YoY inflation,
+ * because the index level itself means nothing and its "high" is almost always today.
+ * CPI is published with a lag and the sheet repeats the last print into later months, so
+ * every CPI figure is anchored at the LAST MONTH THE INDEX ACTUALLY CHANGED — otherwise the
+ * repeated months would turn 1Y inflation into a 10-month figure. (A genuinely flat print
+ * in the latest month would be read as a repeat and dated one month earlier; rare.)
+ */
+const buildMacroRow = (
+  a: AssetLookup,
+  rows: AssetRow[],
+  indexByMonth: Map<number, number>,
+): MarketRow => {
+  const cpi = isCpiRow(a);
+  // Rates can be 0 or negative (Swiss rates were for years), so presence is the test, not > 0.
+  const level = (r: AssetRow): number | null => {
+    const raw = r[a.ticker];
+    if (raw === undefined || raw === '') return null;
+    const v = Number(raw);
+    return isFinite(v) ? v : null;
+  };
+
+  let endIdx = rows.length - 1;
+  while (endIdx >= 0 && level(rows[endIdx]) === null) endIdx--;
+  if (cpi) while (endIdx > 0 && level(rows[endIdx - 1]) === level(rows[endIdx])) endIdx--;
+
+  // Year-on-year inflation at row i, from the index 12 months earlier.
+  const yoyAt = (i: number): number | null => {
+    const prevIdx = indexByMonth.get(monthKey(String(rows[i].date)) - 12);
+    const now = level(rows[i]);
+    const then = prevIdx === undefined ? null : level(rows[prevIdx]);
+    return now !== null && then !== null && then > 0 ? (now / then - 1) * 100 : null;
+  };
+  // The number shown as Value and used for ATH / trend: YoY for CPI, the rate itself otherwise.
+  const shown = (i: number): number | null => (cpi ? yoyAt(i) : level(rows[i]));
+
+  const returns = {} as Record<MarketsPeriod, number | null>;
+  const working = {} as Record<MarketsPeriod, PeriodWorking | null>;
+  MARKETS_PERIODS.forEach(p => { returns[p] = null; working[p] = null; });
+  const unitLabel = cpi ? 'CPI' : '%';
+  const w = (v: number): ValueWorking => ({ first: v, firstLabel: unitLabel, ops: [], result: v, resultUnit: unitLabel });
+
+  let spark: number[] = [];
+  let value: number | null = null;
+  let valueUp: boolean | null = null;
+  let valueDate = '';
+  let ath: number | null = null;
+  let athDate = '';
+
+  if (endIdx >= 0) {
+    const endRow = rows[endIdx];
+    const endKey = monthKey(String(endRow.date));
+    const e = level(endRow) as number;
+    MARKETS_PERIODS.forEach(p => {
+      const startKey = p === 'YTD' ? (Math.floor(endKey / 12) - 1) * 12 + 11 : endKey - PERIOD_MONTHS[p];
+      const startIdx = indexByMonth.get(startKey);
+      if (startIdx === undefined) return;
+      const s = level(rows[startIdx]);
+      if (s === null) return;
+      if (cpi) {
+        if (!(s > 0)) return;
+        returns[p] = (e / s - 1) * 100;          // cumulative inflation, %
+      } else {
+        returns[p] = (e - s) * 100;              // change in basis points
+      }
+      working[p] = { startDate: String(rows[startIdx].date), start: w(s), endDate: String(endRow.date), end: w(e) };
+    });
+
+    // 5-year trend of the shown number (the rate, or YoY inflation).
+    for (let i = Math.max(0, endIdx - SPARK_POINTS + 1); i <= endIdx; i++) {
+      const v = shown(i);
+      if (v !== null) spark.push(v);
+    }
+
+    value = shown(endIdx);
+    valueDate = String(endRow.date);
+    const prev = endIdx > 0 ? shown(endIdx - 1) : null;
+    // STRICTLY rose: for Macro "up" is the warning colour, and an unchanged rate isn't news.
+    valueUp = value !== null && prev !== null ? value > prev : null;
+
+    for (let i = 0; i <= endIdx; i++) {
+      const v = shown(i);
+      if (v !== null && (ath === null || v > ath)) { ath = v; athDate = String(rows[i].date); }
+    }
+  }
+
+  return {
+    ticker: a.ticker, name: a.name, kind: cpi ? 'cpi' : 'rate', isFx: false, returns, working, spark,
+    price: value, priceCurrency: '%', priceUp: valueUp, priceDate: valueDate,
+    drawdown: null, isAtAth: value !== null && ath !== null && value >= ath, athPrice: ath, athDate,
+    sma10: null, signal: null,
+  };
+};
+
 /** The 85th percentile of |x| — the picture's colour rule, so one outlier can't wash out the rest. */
 const colourCap = (values: number[]): number => {
   const abs = values.map(Math.abs).sort((a, b) => a - b);
@@ -182,6 +299,18 @@ export const buildReturnMatrix = (
   lookup.forEach((a, sheetIndex) => {
     const placement = (a.snapshots || []).find(s => s.category.toLowerCase() === wanted);
     if (!placement) return;
+
+    // Files the finished row under its subcategory. No order number = after the numbered
+    // rows; ties keep the sheet's own order.
+    const addRow = (row: MarketRow) => {
+      const section = placement.subcategory || 'Other';
+      if (!sectionsMap.has(section)) sectionsMap.set(section, []);
+      sectionsMap.get(section)!.push({ row, order: placement.order ?? Infinity, sheetIndex });
+    };
+
+    // Rates and inflation have their own rules (see buildMacroRow) and ignore the currency.
+    if (isMacroRow(a)) { addRow(buildMacroRow(a, rows, indexByMonth)); return; }
+
     const nativeCcy = a.currency || 'PLN';
 
     // Two ways to read a value off a month's row:
@@ -321,16 +450,9 @@ export const buildReturnMatrix = (
       }
     }
 
-    const section = placement.subcategory || 'Other';
-    if (!sectionsMap.has(section)) sectionsMap.set(section, []);
-    sectionsMap.get(section)!.push({
-      row: {
-        ticker: a.ticker, name, isFx, returns, working, spark, price, priceCurrency, priceUp, priceDate,
-        drawdown, isAtAth, athPrice, athDate, sma10, signal,
-      },
-      // No order number = after the numbered rows; ties keep the sheet's own order.
-      order: placement.order ?? Infinity,
-      sheetIndex,
+    addRow({
+      ticker: a.ticker, name, kind: isFx ? 'fx' : 'asset', isFx, returns, working, spark, price, priceCurrency, priceUp, priceDate,
+      drawdown, isAtAth, athPrice, athDate, sma10, signal,
     });
   });
 
@@ -341,13 +463,18 @@ export const buildReturnMatrix = (
   }));
 
   // Each column gets its own colour scale (the picture's rule): +2% is vivid in 1M but pale in 10Y.
+  // Rate rows (bp) get a scale of their own: +85 bp and +3.2% inflation can't share one.
   const allRows = sections.flatMap(s => s.rows);
   const colourCaps = {} as Record<MarketsPeriod, number>;
+  const colourCapsBp = {} as Record<MarketsPeriod, number>;
+  const capFor = (rs: MarketRow[], p: MarketsPeriod) =>
+    colourCap(rs.map(r => r.returns[p]).filter((v): v is number => v !== null));
   MARKETS_PERIODS.forEach(p => {
-    colourCaps[p] = colourCap(allRows.map(r => r.returns[p]).filter((v): v is number => v !== null));
+    colourCaps[p] = capFor(allRows.filter(r => r.kind !== 'rate'), p);
+    colourCapsBp[p] = capFor(allRows.filter(r => r.kind === 'rate'), p);
   });
 
-  return { sections, columns: orderedColumns(endDate), colourCaps, endDate };
+  return { sections, columns: orderedColumns(endDate), colourCaps, colourCapsBp, endDate };
 };
 
 /**
