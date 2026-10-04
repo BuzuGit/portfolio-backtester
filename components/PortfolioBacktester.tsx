@@ -1674,6 +1674,9 @@ const PortfolioBacktester = () => {
   // Markets "Returns" (period returns, the default) or "Stats" (CAGR, Vol, Sharpe, drawdowns and
   // stress-year returns for the selected period) for the asset sections.
   const [marketsView, setMarketsView] = useState<'returns' | 'stats'>('returns');
+  // Each view remembers its own period: Stats opens on 5Y (a year or more is what its CAGR / Vol /
+  // Sharpe need), Returns keeps whatever was last chosen there. Switching view swaps them over.
+  const marketsSavedPeriod = useRef<Record<'returns' | 'stats', MarketsPeriod>>({ returns: 'YTD', stats: '5Y' });
   // Which year the "Profit Breakdown by Asset" table shows.
   // null = default to the latest available year in yearsData (computed at render time).
   const [breakdownYear, setBreakdownYear] = useState<number | null>(null);
@@ -10346,12 +10349,13 @@ const PortfolioBacktester = () => {
             const colCount = 2 + (m ? m.columns.length : 0) + 4;
 
             // ---- STATS VIEW ----
-            // A section switches to Stats when the Stats button is on and every row in it is an asset
-            // (FX and macro sections keep their Returns columns). Columns, for the selected period:
+            // A section switches to Stats when the Stats button is on and every row in it is an asset or
+            // an FX pair (FX is shown as an asset here; macro sections keep their own columns).
+            // Columns, for the selected period:
             // a Max DD bar, CAGR, 2x time, Vol, Sharpe, Max DD, Longest DD, Curr DD, the trend line,
             // then the calendar-year returns for the stress years (STATS_YEARS: 2018, 2020, 2022).
             const isStatsSection = (s: { rows: MarketRow[] }) =>
-              marketsView === 'stats' && s.rows.length > 0 && s.rows.every(r => r.kind === 'asset');
+              marketsView === 'stats' && s.rows.length > 0 && s.rows.every(r => r.kind === 'asset' || r.kind === 'fx'); // FX is shown as an asset here, so it gets Stats too
             const statsRows = m ? m.sections.filter(isStatsSection).flatMap(s => s.rows) : [];
             const maxAbs = (vals: (number | null | undefined)[]) =>
               Math.max(1e-9, ...vals.filter((v): v is number => v !== null && v !== undefined).map(Math.abs));
@@ -10376,12 +10380,12 @@ const PortfolioBacktester = () => {
                 <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
                   <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name}</th>
                   <th className="text-left font-medium px-3 py-2">
-                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod} max drawdown</span></div>
+                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod === 'Max' ? 'Max drawdown · all history' : `Max drawdown · ${marketsPeriod}`}</span></div>
                   </th>
                   {['CAGR', '2x time', 'Vol', 'Sharpe', 'Max DD', 'Longest DD', 'Curr DD'].map(h => (
                     <th key={h} className="text-center font-medium px-0.5 py-2 w-14 leading-tight">{h}</th>
                   ))}
-                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap">{marketsTrendPeriod} trend</th>
+                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap">{marketsTrendPeriod === 'Max' ? 'Full' : marketsTrendPeriod} trend</th>
                   {STATS_YEARS.map(y => <th key={y} className="text-center font-medium px-0.5 py-2 w-14">{y}</th>)}
                 </tr>
                 {s.rows.map(r => {
@@ -10480,7 +10484,15 @@ const PortfolioBacktester = () => {
                       {([['returns', 'Returns'], ['stats', 'Stats']] as const).map(([v, label]) => (
                         <button
                           key={v}
-                          onClick={() => setMarketsView(v)}
+                          onClick={() => {
+                            if (v === marketsView) return;
+                            // Park this view's period, restore the other view's (Stats starts on 5Y).
+                            marketsSavedPeriod.current[marketsView] = marketsPeriod;
+                            const next = marketsSavedPeriod.current[v];
+                            setMarketsView(v);
+                            setMarketsPeriod(next);
+                            if (next === '1Y' || next === '3Y' || next === '5Y' || next === '10Y' || next === 'Max') setMarketsTrendPeriod(next);
+                          }}
                           className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                             marketsView === v ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                           }`}
@@ -10602,7 +10614,7 @@ const PortfolioBacktester = () => {
                                     <div className="w-[200px]"><span className="text-gray-800 font-semibold">{
                                       s.rows.every(r => r.kind === 'cpiyoy')
                                         ? (marketsPeriod === 'YTD' ? 'Now vs Dec' : marketsPeriod === 'Max' ? 'Now vs start' : `Now vs ${marketsPeriod} ago`)
-                                        : `${marketsPeriod} ${isMacroSection(s.rows) ? 'change' : 'return'}`
+                                        : marketsPeriod === 'Max' ? (isMacroSection(s.rows) ? 'Change since start' : 'Return since start') : `${marketsPeriod} ${isMacroSection(s.rows) ? 'change' : 'return'}`
                                     }</span></div>
                                   </th>
                                   {m.columns.map(p => (
@@ -10615,7 +10627,7 @@ const PortfolioBacktester = () => {
                                       </span>
                                     </th>
                                   ))}
-                                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap">{marketsTrendPeriod} trend</th>
+                                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap">{marketsTrendPeriod === 'Max' ? 'Full' : marketsTrendPeriod} trend</th>
                                   {isMacroSection(s.rows) ? (
                                     <>
                                       <th className="text-right font-medium px-2 py-2 cursor-help" title="Latest rate, or latest year-on-year inflation">Value</th>
