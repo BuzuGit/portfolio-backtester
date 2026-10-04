@@ -1664,6 +1664,9 @@ const PortfolioBacktester = () => {
   // Which SnapshotCategory the table shows ("Assets", "Factor", ...). '' = the first one in the sheet.
   const [marketsCategory, setMarketsCategory] = useState<string>('');
   const [marketsPeriod, setMarketsPeriod] = useState<MarketsPeriod>('YTD');
+  // How many years the trend sparkline covers. Follows the period button for 1Y/3Y/5Y/10Y; the
+  // shorter periods (YTD/1M/3M/6M) are too short for a trend, so they leave it where it was.
+  const [marketsTrendPeriod, setMarketsTrendPeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y'>('5Y');
   // Which year the "Profit Breakdown by Asset" table shows.
   // null = default to the latest available year in yearsData (computed at render time).
   const [breakdownYear, setBreakdownYear] = useState<number | null>(null);
@@ -10149,7 +10152,11 @@ const PortfolioBacktester = () => {
             // Medium shades of the same green/red the cells use, so bars and cells read as one palette.
             const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
 
-            // 5-year trend line drawn as a tiny SVG: green if it ends above where it started, red if
+            // The sparkline shows the last N years of each row's (up to 10-year) history: N years of
+            // monthly steps = 12N + 1 month-end points.
+            const trendPoints = { '1Y': 13, '3Y': 37, '5Y': 61, '10Y': 121 }[marketsTrendPeriod];
+
+            // Trend line drawn as a tiny SVG: green if it ends above where it started, red if
             // below (the other way round for Macro rows, where "up" is rising rates or inflation).
             const sparkline = (vals: number[], reversed = false) => {
               if (vals.length < 2) return <span className="text-gray-300">–</span>;
@@ -10248,7 +10255,10 @@ const PortfolioBacktester = () => {
                     {MARKETS_PERIODS.map(p => (
                       <button
                         key={p}
-                        onClick={() => setMarketsPeriod(p)}
+                        onClick={() => {
+                          setMarketsPeriod(p);
+                          if (p === '1Y' || p === '3Y' || p === '5Y' || p === '10Y') setMarketsTrendPeriod(p);
+                        }}
                         className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                           marketsPeriod === p ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                         }`}
@@ -10338,7 +10348,7 @@ const PortfolioBacktester = () => {
                                       </span>
                                     </th>
                                   ))}
-                                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap">5Y trend</th>
+                                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap">{marketsTrendPeriod} trend</th>
                                   {isMacroTable ? (
                                     <>
                                       <th className="text-right font-medium px-2 py-2 cursor-help" title="Latest rate, or latest year-on-year inflation">Value</th>
@@ -10398,7 +10408,7 @@ const PortfolioBacktester = () => {
                                         );
                                       })}
 
-                                      <td className="px-2 py-1">{sparkline(r.spark, macro)}</td>
+                                      <td className="px-2 py-1">{sparkline(r.spark.slice(-trendPoints), macro)}</td>
 
                                       {isMacroTable ? (
                                         <>

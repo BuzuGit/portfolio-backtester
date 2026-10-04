@@ -39,8 +39,9 @@ const PERIOD_MONTHS: Record<Exclude<MarketsPeriod, 'YTD'>, number> = {
   '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, '5Y': 60, '10Y': 120,
 };
 
-// The trend sparkline always shows 5 years: 60 monthly steps = 61 month-end points.
-const SPARK_POINTS = 61;
+// The trend sparkline keeps up to 10 years: 120 monthly steps = 121 month-end points. The table
+// shows the last 1, 3, 5 or 10 years of it, depending on the chosen trend window.
+const SPARK_POINTS = 121;
 
 /**
  * How one value in the table was built from the sheet, so a tooltip can show the working:
@@ -77,7 +78,7 @@ export interface MarketRow {
   isFx: boolean;            // FX row: price/DD/signal are on the shown exchange rate
   returns: Record<MarketsPeriod, number | null>; // percent (bp for 'rate' rows); null = not enough history ("–")
   working: Record<MarketsPeriod, PeriodWorking | null>; // the prices/rates/dates behind each return
-  spark: number[];          // last 5 years of prices in the SELECTED currency, oldest first
+  spark: number[];          // last 10 years of prices in the SELECTED currency, oldest first (months with no price skipped)
   price: number | null;     // latest price in the asset's OWN currency
   priceCurrency: string;    // e.g. "USD"
   priceUp: boolean | null;  // latest price >= previous month's (native); null if unknown
@@ -242,7 +243,7 @@ const buildMacroRow = (
       working[p] = { startDate: String(rows[startIdx].date), start: w(s), endDate: String(endRow.date), end: w(e) };
     });
 
-    // 5-year trend of the shown number (the rate, or YoY inflation).
+    // Trend (up to 10 years) of the shown number (the rate, or YoY inflation).
     for (let i = Math.max(0, endIdx - SPARK_POINTS + 1); i <= endIdx; i++) {
       const v = shown(i);
       if (v !== null) spark.push(v);
@@ -419,7 +420,7 @@ export const buildReturnMatrix = (
         }
       });
 
-      // 5-year trend line in the selected currency. Months with no price are simply skipped.
+      // Trend line (up to 10 years) in the selected currency. Months with no price are simply skipped.
       spark = rows.slice(Math.max(0, endIdx - SPARK_POINTS + 1), endIdx + 1)
         .map(conv)
         .filter((v): v is number => v !== null);
