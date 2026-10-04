@@ -10536,9 +10536,12 @@ const PortfolioBacktester = () => {
                                           className="text-gray-800 hover:text-slate-900 hover:underline underline-offset-2 text-left"
                                           title={`${r.ticker} — open full details in the Monthly tab${r.isFx ? ` (shows the sheet's ${r.ticker} series)` : ''}`}
                                         >
-                                          {/* Inflation 1Y rate rows carry today's rate in the name ("Inflation PL - 3.2%"), */}
-                                          {/* so the next column's "Accelerating +0.2 pp" reads against it directly. */}
-                                          {r.kind === 'cpiyoy' && r.price !== null ? `${r.name} - ${fmtPct1(r.price)}` : r.name}
+                                          {/* Inflation 1Y rate and rate/yield rows carry today's level in the name */}
+                                          {/* ("Inflation PL - 3.2%", "Rate PL - 3.75%", "10Y Yield US - 5.29%"), so the */}
+                                          {/* changes next to it read against it directly. Rates keep two decimals. */}
+                                          {r.price !== null && r.kind === 'cpiyoy' ? `${r.name} - ${fmtPct1(r.price)}`
+                                            : r.price !== null && r.kind === 'rate' ? `${r.name} - ${fmtPct(r.price)}`
+                                            : r.name}
                                         </button>
                                       </td>
 
