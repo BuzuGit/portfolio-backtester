@@ -7658,6 +7658,15 @@ const PortfolioBacktester = () => {
   // RENDER THE UI
   // ----------------------------------------
 
+  // A filter bar that stays pinned to the top of the window while the page scrolls under it.
+  // White background so rows passing underneath don't show through; z-40 keeps it (and its
+  // dropdown menus) above the tables and charts — including the tables' OWN pinned header
+  // cells, which go up to z-30 (the Correlations corner cell), so anything lower would let that
+  // cell draw over the filters. For "sticky" to last the whole page, the bar must sit DIRECTLY
+  // inside the tab's outer box — inside anything shorter it would stop being pinned when that
+  // shorter box scrolls away.
+  const PINNED_FILTERS = 'sticky top-0 z-40 bg-white pt-2 pb-1';
+
   // Every view, in menu order. The sidebar (wide screens) and the slide-in drawer (narrow
   // screens) are both drawn from this one list, so they can never disagree.
   const NAV_VIEWS: { view: typeof activeView; label: string }[] = [
@@ -9292,9 +9301,6 @@ const PortfolioBacktester = () => {
           {/* This table shows yearly returns for ALL assets in the lookup table */}
           {isConnected && assetData && activeView === 'annualReturns' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">
-                {annualViewMode === 'returns' ? 'Annual Returns' : 'Annual Prices'}
-              </h2>
 
               {(() => {
                 // Use memoized annual returns — avoids recalculating when toggling view mode
@@ -9876,7 +9882,6 @@ const PortfolioBacktester = () => {
           {/* Best To Worst Section - Shows assets ranked by return for a selected year */}
           {isConnected && assetData && activeView === 'bestToWorst' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Best To Worst</h2>
 
               {(() => {
                 // Use memoized annual returns
@@ -9913,7 +9918,9 @@ const PortfolioBacktester = () => {
 
                 return (
                   <>
-                  {/* Filter controls + Year/Period selectors on one line */}
+                  {/* Filter controls + Year/Period selectors on one line (pinned while scrolling; */}
+                  {/* in the Return Map this includes its Years / Currency / Colour options) */}
+                  <div className={PINNED_FILTERS}>
                   <AssetFilterControls>
                     {/* (Ranking vs Return Map is chosen in the left panel, under "Best To Worst".) */}
                     {bestToWorstLayout === 'map' && (
@@ -9996,6 +10003,7 @@ const PortfolioBacktester = () => {
                     </div>
                     </>)}
                   </AssetFilterControls>
+                  </div>
 
                   {bestToWorstLayout === 'map' && renderReturnMap(annualReturns, years)}
 
@@ -10233,7 +10241,7 @@ const PortfolioBacktester = () => {
                   + `End ${dayLabel(w.endDate)} (last CPI print): CPI ${w.end.result.toFixed(2)}\n`
                   + `Inflation = end ÷ start − 1 = ${fmtRet((w.end.result / w.start.result - 1) * 100)}%`;
               }
-              const ccy = marketsCurrency === 'Original' ? `${r.priceCurrency} (own currency)` : marketsCurrency;
+              const ccy = marketsCurrency === 'Native' ? `${r.priceCurrency} (own currency)` : marketsCurrency;
               const head = `${r.name} · ${p} return${r.isFx ? '' : ` in ${ccy}`}: ${fmtRet(v)}%`;
               if (!w) return head;
               const mtd = isMtd && w.endDate.slice(0, 7) === m?.endDate.slice(0, 7) ? ' (month to date)' : '';
@@ -10253,7 +10261,7 @@ const PortfolioBacktester = () => {
             // it, never removing anything else you had selected. Then select it, switch tab, and
             // scroll to the panel once drawn.
             // Currency: an ordinary asset opens in the currency chosen here (MWIG40 viewed in USD
-            // stays in USD), or in its own currency when this tab is on "Original". FX and Macro
+            // stays in USD), or in its own currency when this tab is on "Native". FX and Macro
             // rows open in their own currency, because this tab never converts those either.
             const openInMonthly = (r: MarketRow) => {
               const ticker = r.ticker;
@@ -10266,7 +10274,7 @@ const PortfolioBacktester = () => {
               setSelectedAssetSubcategories(prev => add(prev, a.assetSubcategory));
               setMonthlySelectedTicker(ticker);
               setMonthlyDisplayCurrency(
-                r.kind === 'asset' && marketsCurrency !== 'Original' ? marketsCurrency : getAssetCurrency(ticker),
+                r.kind === 'asset' && marketsCurrency !== 'Native' ? marketsCurrency : getAssetCurrency(ticker),
               );
               setActiveView('monthlyPrices');
               // The Monthly tab is heavy; look for the panel a few times rather than guessing a delay.
@@ -10286,11 +10294,11 @@ const PortfolioBacktester = () => {
             return (
               <div className="mt-2">
                 {/* Page-level filters: currency for every return figure, period for the bars and tiles. */}
-                {/* "Original" = no conversion. Which category is shown is chosen in the left panel. */}
-                <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+                {/* "Native" = no conversion. Which category is shown is chosen in the left panel. */}
+                <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
-                    {(['Original', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
+                    {(['Native', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
                       <button
                         key={c}
                         onClick={() => setMarketsCurrency(c)}
@@ -10326,7 +10334,7 @@ const PortfolioBacktester = () => {
                       <span className="text-xs text-gray-500 ml-2 uppercase tracking-wide">
                         {activeMarketsCategory} · {isMacroTable
                           ? 'rates: change in bp · inflation: cumulative %'
-                          : `total return in ${marketsCurrency === 'Original' ? "each asset's own currency" : marketsCurrency}`}
+                          : `total return in ${marketsCurrency === 'Native' ? "each asset's own currency" : marketsCurrency}`}
                       </span>
                     </div>
                     {m && (
@@ -10562,7 +10570,7 @@ const PortfolioBacktester = () => {
                       </p>
                       ) : (
                       <p className="text-[11px] text-gray-500 mt-3">
-                        {marketsCurrency === 'Original'
+                        {marketsCurrency === 'Native'
                           ? <>Total return (adjusted-close prices) in each asset&apos;s own currency, no FX conversion · </>
                           : <>Total return (adjusted-close prices) in {marketsCurrency}, converted at each month-end&apos;s exchange rate · </>}
                         every period ends at the latest price · 3Y/5Y/10Y are cumulative (c), not annualised ·
@@ -10582,9 +10590,6 @@ const PortfolioBacktester = () => {
           {/* Monthly Prices Section - Shows 13 months of raw prices with heatmap and signals */}
           {isConnected && assetData && activeView === 'monthlyPrices' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">
-                {monthlyViewMode === 'prices' ? 'Monthly Prices' : 'Monthly Returns'}
-              </h2>
 
               {/* Filter controls: Assets, Class, Currency + Prices/Returns toggle + End Date */}
               <AssetFilterControls>
@@ -13401,8 +13406,8 @@ const PortfolioBacktester = () => {
               with the ticker and period return in the title. */}
           {isConnected && assetData && activeView === 'graphs' && (
             <div className="mt-2">
-              {/* Controls row: filters + SMA toggle on left, period buttons on right */}
-              <div className="flex justify-between items-start mb-4">
+              {/* Controls row: filters + SMA toggle on left, period buttons on right (pinned while scrolling) */}
+              <div className={`${PINNED_FILTERS} flex justify-between items-start mb-4`}>
                 <AssetFilterControls>
                   {/* SMA toggle — rendered inside the filter flex container for perfect alignment */}
                   <button
@@ -13652,8 +13657,8 @@ const PortfolioBacktester = () => {
 
                 return (
                   <div className="bg-white p-4 rounded-lg shadow">
-                    {/* Controls Row */}
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+                    {/* Controls Row (pinned while scrolling — this white box holds the whole tab) */}
+                    <div className={`${PINNED_FILTERS} grid grid-cols-2 md:grid-cols-5 gap-4 mb-4`}>
                       {/* Asset Selector */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Asset</label>
@@ -14228,9 +14233,10 @@ const PortfolioBacktester = () => {
           {/* 0 means no relationship at all. */}
           {isConnected && assetData && activeView === 'correlationMatrix' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Correlations</h2>
 
               {/* Reuse the same asset/class/currency filter controls as other tabs, with Correlation Period added inline */}
+              {/* (wrapped so it stays pinned while scrolling) */}
+              <div className={PINNED_FILTERS}>
               <AssetFilterControls>
                 {/* Correlation Period dropdown — styled to match the other filter buttons */}
                 <div className="relative">
@@ -14248,6 +14254,7 @@ const PortfolioBacktester = () => {
                   </div>
                 </div>
               </AssetFilterControls>
+              </div>
 
               {/* Render the correlation matrix table */}
               {(() => {
@@ -14536,7 +14543,6 @@ const PortfolioBacktester = () => {
           {/* ============================================ */}
           {isConnected && activeView === 'portfolio' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Portfolio</h2>
 
               {yearsData.length === 0 ? (
                 <div className="bg-yellow-50 p-4 rounded-lg text-yellow-800">
@@ -15991,7 +15997,6 @@ const PortfolioBacktester = () => {
           {/* ============================================ */}
           {isConnected && assetData && activeView === 'positions' && (
             <div className="mt-2">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Positions</h2>
 
               {/* --- Positions Tab Filter Controls --- */}
               {/* Shared filter for both open and closed positions */}
