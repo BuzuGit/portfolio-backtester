@@ -10301,7 +10301,9 @@ const PortfolioBacktester = () => {
                       {/* compare a change in bp with an inflation %, which means nothing. */}
                       {/* Leader/Laggard put the ASSET NAME up front in bold — "which one" is the point of */}
                       {/* those tiles. Trend is today's 10-month-SMA signal, so it has no period in its label. */}
-                      {!isMacroTable && <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+                      {/* Leader and Laggard get wider tiles (1.3 shares each vs 1) because they hold */}
+                      {/* the only long text — an asset name — and that name must fit on one line. */}
+                      {!isMacroTable && <div className="grid grid-cols-2 md:grid-cols-[1.3fr_1.3fr_1fr_1fr_1fr] gap-2 mb-4">
                         {[
                           { label: `Leader · ${marketsPeriod}`, value: summary?.leader ? fmtRet(summary.leader.value) : '–', name: summary?.leader?.name ?? '', sub: '', cls: 'text-green-700' },
                           { label: `Laggard · ${marketsPeriod}`, value: summary?.laggard ? fmtRet(summary.laggard.value) : '–', name: summary?.laggard?.name ?? '', sub: '', cls: 'text-red-700' },
@@ -10310,18 +10312,24 @@ const PortfolioBacktester = () => {
                           { label: 'Trend · 10M SMA', value: summary ? `${summary.buy}/${summary.signalTotal}` : '–', name: '', sub: 'on BUY signal', cls: 'text-gray-800' },
                         ].map(t => (
                           <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0">
-                            <div className="text-[10px] uppercase tracking-wide text-gray-500">{t.label}</div>
                             {t.name ? (
-                              <div className="flex items-baseline justify-between gap-2">
-                                {/* Wraps rather than truncates: a cut-off name would defeat the tile's purpose */}
-                                <span className="text-sm font-semibold text-gray-900 leading-tight min-w-0 break-words">{t.name}</span>
-                                <span className={`text-sm font-bold tabular-nums ${t.cls}`}>{t.value}</span>
-                              </div>
+                              <>
+                                {/* Figure sits up on the label line so the name gets a whole line to */}
+                                {/* itself, on ONE line. truncate is only a last resort on a phone. */}
+                                <div className="flex items-baseline justify-between gap-2">
+                                  <span className="text-[10px] uppercase tracking-wide text-gray-500">{t.label}</span>
+                                  <span className={`text-sm font-bold tabular-nums ${t.cls}`}>{t.value}</span>
+                                </div>
+                                <div className="text-sm font-semibold text-gray-900 whitespace-nowrap truncate" title={t.name}>{t.name}</div>
+                              </>
                             ) : (
+                              <>
+                              <div className="text-[10px] uppercase tracking-wide text-gray-500">{t.label}</div>
                               <div className="text-sm">
                                 <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
                                 <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
                               </div>
+                              </>
                             )}
                           </div>
                         ))}
