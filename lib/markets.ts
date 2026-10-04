@@ -26,9 +26,9 @@
 
 import type { AssetRow, AssetLookup } from './fetchData';
 
-// 'Original' = no conversion: each asset's returns stay in its own currency (S&P 500 in USD,
+// 'Native' = no conversion: each asset's returns stay in its own currency (S&P 500 in USD,
 // WIG20 in PLN...), i.e. what a local investor in that asset experienced.
-export type MarketsCurrency = 'Original' | 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD';
+export type MarketsCurrency = 'Native' | 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD';
 export type MarketsPeriod = 'YTD' | '1M' | '3M' | '6M' | '1Y' | '3Y' | '5Y' | '10Y';
 
 // The period buttons, in the order the user asked for them.
@@ -137,7 +137,7 @@ export const orderedColumns = (endDate: string): MarketsPeriod[] => {
 const convertedPrice = (row: AssetRow, ticker: string, nativeCcy: string, target: MarketsCurrency): number | null => {
   const price = Number(row[ticker]);
   if (!(price > 0)) return null;
-  if (target === 'Original' || nativeCcy === target) return price; // no FX involved at all
+  if (target === 'Native' || nativeCcy === target) return price; // no FX involved at all
   const toPln = (ccy: string): number | null => {
     if (ccy === 'PLN') return 1;
     const rate = Number(row[`${ccy}PLN`]);
@@ -327,11 +327,11 @@ export const buildReturnMatrix = (
       const p = positive(r, a.ticker), v = conv(r);
       if (p === null || v === null) return null;
       const ops: ValueWorking['ops'] = [];
-      if (currency !== 'Original' && nativeCcy !== currency) {
+      if (currency !== 'Native' && nativeCcy !== currency) {
         if (nativeCcy !== 'PLN') ops.push({ op: '×', value: rateOf(r, nativeCcy), label: `${nativeCcy}PLN` });
         if (currency !== 'PLN') ops.push({ op: '÷', value: rateOf(r, currency), label: `${currency}PLN` });
       }
-      return { first: p, firstLabel: nativeCcy, ops, result: v, resultUnit: currency === 'Original' ? nativeCcy : currency };
+      return { first: p, firstLabel: nativeCcy, ops, result: v, resultUnit: currency === 'Native' ? nativeCcy : currency };
     };
     let name = a.name;
     let priceCurrency = nativeCcy;
@@ -343,11 +343,11 @@ export const buildReturnMatrix = (
     // stands for its non-base currency — USDPLN stands for USD, unless USD IS the base, in
     // which case it stands for PLN. That way the four sheet rows always show the four
     // currencies other than the base, with cross rates rebuilt through the PLN hub
-    // (USD/EUR = USDPLN / EURPLN). 'Original' shows the sheet's pairs exactly as written.
+    // (USD/EUR = USDPLN / EURPLN). 'Native' shows the sheet's pairs exactly as written.
     if (isFx) {
       const pairBase = a.ticker.slice(0, 3), pairQuote = a.ticker.slice(3);
       let base: string, other: string;
-      if (currency === 'Original') {
+      if (currency === 'Native') {
         base = pairBase; other = pairQuote;
         conv = nat = r => positive(r, a.ticker);
         explain = r => {
