@@ -175,6 +175,9 @@ export interface MarketRow {
   // Stats view (price rows; empty for macro): risk/return per period, and stress-year returns.
   stats: Record<MarketsPeriod, PeriodStats | null>;
   yearReturns: Record<number, number | null>;
+  // Rate rows only: the most recent month the rate changed — the last policy decision for a
+  // reference rate (from -> to, in %). null if it never changed in the data.
+  lastMove?: { date: string; from: number; to: number } | null;
 }
 
 export interface MarketSection {
@@ -364,11 +367,25 @@ const buildMacroRow = (
     }
   }
 
+  // Rates: the last month the rate actually changed (walking back from the latest value,
+  // skipping months with no value) — for a reference rate, the latest policy decision.
+  let lastMove: { date: string; from: number; to: number } | null = null;
+  if (!cpi && endIdx > 0) {
+    let later = endIdx;
+    for (let i = endIdx - 1; i >= 0; i--) {
+      const v = level(rows[i]);
+      if (v === null) continue;
+      const lv = level(rows[later]) as number;
+      if (v !== lv) { lastMove = { date: String(rows[later].date), from: v, to: lv }; break; }
+      later = i;
+    }
+  }
+
   return {
     ticker: a.ticker, name: a.name, kind: cpi ? (mode === 'yoy' ? 'cpiyoy' : 'cpi') : 'rate', isFx: false, returns, working, spark,
     price: value, priceCurrency: '%', priceUp: valueUp, priceDate: valueDate,
     drawdown: null, isAtAth: value !== null && ath !== null && value >= ath, athPrice: ath, athDate,
-    sma10: null, signal: null, stats: emptyStats(), yearReturns: {},
+    sma10: null, signal: null, stats: emptyStats(), yearReturns: {}, lastMove,
   };
 };
 
