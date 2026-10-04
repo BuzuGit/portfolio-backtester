@@ -22,6 +22,7 @@ import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
+import { buildReturnMatrix, summariseMatrix, MARKETS_PERIODS, MarketsCurrency, MarketsPeriod } from '@/lib/markets';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -1609,7 +1610,8 @@ const PortfolioBacktester = () => {
   // 'bestToWorst' = show assets ranked by return for a selected year
   // 'monthlyPrices' = show monthly price heatmap with SMA signals
   // 'trendFollowing' = compare Buy & Hold vs 10-month SMA trend following strategy
-  const [activeView, setActiveView] = useState<'backtest' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'graphs' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'positions'>('backtest');
+  // 'markets' = one-screen market overview (Return matrix), driven by the Lookup tab's Snapshot columns
+  const [activeView, setActiveView] = useState<'backtest' | 'markets' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'graphs' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'positions'>('backtest');
 
   // The year selected for the "Best To Worst" ranking view
   // Defaults to null, and will be set to the most recent year when data loads
@@ -1654,6 +1656,12 @@ const PortfolioBacktester = () => {
   const [yearsData, setYearsData] = useState<YearsRow[]>([]);
   // Which currency to display monetary values in (Charts 1 & 2)
   const [portfolioCurrency, setPortfolioCurrency] = useState<'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD'>('PLN');
+
+  // Markets tab state: which currency the returns are shown in, and which period the bar
+  // chart and the summary tiles focus on. Separate from the Portfolio tab's currency on
+  // purpose, so switching one tab never quietly changes the other.
+  const [marketsCurrency, setMarketsCurrency] = useState<MarketsCurrency>('PLN');
+  const [marketsPeriod, setMarketsPeriod] = useState<MarketsPeriod>('YTD');
   // Which year the "Profit Breakdown by Asset" table shows.
   // null = default to the latest available year in yearsData (computed at render time).
   const [breakdownYear, setBreakdownYear] = useState<number | null>(null);
@@ -4770,6 +4778,14 @@ const PortfolioBacktester = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const memoizedAnnualReturns = useMemo(() => calculateAssetsAnnualReturns(), [assetData, assetLookup]);
 
+  // Markets tab: the whole Return matrix for the selected currency (see lib/markets.ts).
+  // Recomputed only when the data or the currency changes — switching the period button just
+  // re-reads it, because every period's figure is already in there.
+  const marketsMatrix = useMemo(
+    () => buildReturnMatrix(assetData, assetLookup, marketsCurrency),
+    [assetData, assetLookup, marketsCurrency],
+  );
+
   // Calendar-year returns of the xxxPLN exchange rates, for the Return Map's currency buttons.
   // Same method as calculateAssetsAnnualReturns (last price of the year vs last price of the prior
   // year), but done in one pass over the data and for FX pairs even if they aren't in the lookup table.
@@ -7727,6 +7743,16 @@ const PortfolioBacktester = () => {
                 Backtest
               </button>
               <button
+                onClick={() => setActiveView('markets')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeView === 'markets'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                Markets
+              </button>
+              <button
                 onClick={() => setActiveView('monthlyPrices')}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeView === 'monthlyPrices'
@@ -10075,6 +10101,224 @@ const PortfolioBacktester = () => {
               })()}
             </div>
           )}
+
+          {/* Markets tab — a one-screen overview. Section 1 is the Return matrix: every Lookup row */}
+          {/* marked "Assets", grouped by SnapshotSubCategory. All the arithmetic is in lib/markets.ts. */}
+          {isConnected && assetData && activeView === 'markets' && (() => {
+            const m = marketsMatrix;
+            const allRows = m ? m.sections.flatMap(s => s.rows) : [];
+
+            // "+12.3" / "-4.5" / "0.0" — rounded first, so a -0.04 never prints as "-0.0".
+            const fmtRet = (v: number): string => {
+              const r = Math.round(v * 10) / 10;
+              return r === 0 ? '0.0' : `${r > 0 ? '+' : ''}${r.toFixed(1)}`;
+            };
+
+            // Bar chart scale for the focused period: from the most negative to the most positive
+            // asset, always including zero, so every bar starts from the same zero line.
+            const focusVals = allRows.map(r => r.returns[marketsPeriod]).filter((v): v is number => v !== null);
+            const barLo = Math.min(0, ...focusVals);
+            const barHi = Math.max(0, ...focusVals);
+            const barSpan = (barHi - barLo) || 1;
+            const zeroPct = (-barLo / barSpan) * 100;
+            // Medium shades of the same green/red the cells use, so bars and cells read as one palette.
+            const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
+
+            // 5-year trend line drawn as a tiny SVG: green if it ends above where it started, red if below.
+            const sparkline = (vals: number[]) => {
+              if (vals.length < 2) return <span className="text-gray-300">–</span>;
+              const W = 96, H = 24;
+              const lo = Math.min(...vals), hi = Math.max(...vals), sp = (hi - lo) || 1;
+              const pts = vals.map((v, i) => `${((i / (vals.length - 1)) * W).toFixed(1)},${(H - 1 - ((v - lo) / sp) * (H - 2)).toFixed(1)}`).join(' ');
+              const col = vals[vals.length - 1] >= vals[0] ? '#15803d' : '#b91c1c';
+              return (
+                <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block">
+                  <polygon points={`0,${H} ${pts} ${W},${H}`} fill={col} opacity={0.08} />
+                  <polyline points={pts} fill="none" stroke={col} strokeWidth={1.25} strokeLinejoin="round" />
+                </svg>
+              );
+            };
+
+            // "Oct 2026", flagged as month-to-date when the latest row is the current calendar month.
+            const monthLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleString('en-GB', { month: 'short', year: 'numeric' });
+            const isMtd = !!m && m.endDate.slice(0, 7) === new Date().toISOString().slice(0, 7);
+            const summary = m ? summariseMatrix(m, marketsPeriod) : null;
+            const colCount = 2 + (m ? m.columns.length : 0) + 2; // name + bar + periods + trend + price
+
+            return (
+              <div className="mt-2">
+                <h2 className="text-xl font-semibold text-gray-800 mb-4">Markets</h2>
+
+                {/* Page-level filters: currency for every return figure, period for the bars and tiles */}
+                <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                    {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setMarketsCurrency(c)}
+                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                          marketsCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >{c}</button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-gray-500 mr-1">Period:</span>
+                    {MARKETS_PERIODS.map(p => (
+                      <button
+                        key={p}
+                        onClick={() => setMarketsPeriod(p)}
+                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                          marketsPeriod === p ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >{p}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+                  {/* Card header */}
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+                    <div>
+                      <h3 className="text-md font-semibold text-gray-800 inline">Return matrix</h3>
+                      <span className="text-xs text-gray-500 ml-2 uppercase tracking-wide">
+                        Asset × horizon · total return in {marketsCurrency}
+                      </span>
+                    </div>
+                    {m && (
+                      <span className="text-xs text-gray-500 border border-gray-200 rounded px-2 py-0.5">
+                        Data as of {monthLabel(m.endDate)}{isMtd ? ' (month to date)' : ''}
+                      </span>
+                    )}
+                  </div>
+
+                  {!m || allRows.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-6 text-center">
+                      No rows have SnapshotCategory = &quot;Assets&quot; in the Lookup tab yet.
+                    </p>
+                  ) : (
+                    <>
+                      {/* Summary tiles for the focused period */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+                        {[
+                          { label: 'Leader', value: summary?.leader ? fmtRet(summary.leader.value) : '–', sub: summary?.leader?.name ?? '', cls: 'text-green-700' },
+                          { label: 'Laggard', value: summary?.laggard ? fmtRet(summary.laggard.value) : '–', sub: summary?.laggard?.name ?? '', cls: 'text-red-700' },
+                          { label: 'Dispersion', value: summary?.dispersion != null ? `${summary.dispersion.toFixed(1)} pp` : '–', sub: 'best − worst', cls: 'text-gray-800' },
+                          { label: 'Positive', value: summary ? `${summary.positive}/${summary.total}` : '–', sub: 'assets above 0', cls: 'text-gray-800' },
+                        ].map(t => (
+                          <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                            <div className="text-[10px] uppercase tracking-wide text-gray-500">{t.label} · {marketsPeriod}</div>
+                            <div className="text-sm">
+                              <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
+                              <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm border-collapse">
+                          <thead>
+                            <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
+                              <th className="text-left font-medium px-3 py-2">Asset</th>
+                              <th className="text-left font-medium px-3 py-2 min-w-[16rem]">
+                                <span className="text-gray-800 font-semibold">{marketsPeriod} return</span>
+                              </th>
+                              {m.columns.map(p => (
+                                <th
+                                  key={p}
+                                  className={`text-center px-1 py-2 w-16 ${p === marketsPeriod ? 'text-gray-900 font-bold' : 'font-medium'}`}
+                                >
+                                  <span className={p === marketsPeriod ? 'border-b-2 border-slate-800 pb-0.5' : ''}>
+                                    {p}{['3Y', '5Y', '10Y'].includes(p) && <sup className="text-[8px] ml-px">c</sup>}
+                                  </span>
+                                </th>
+                              ))}
+                              <th className="text-left font-medium px-3 py-2">5Y trend</th>
+                              <th className="text-right font-medium px-3 py-2">Price</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {m.sections.map(s => (
+                              <React.Fragment key={s.name}>
+                                {/* Section header row, e.g. "EQUITIES · 4" */}
+                                <tr>
+                                  <td colSpan={colCount} className="px-3 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500 border-b border-gray-200">
+                                    {s.name} · {s.rows.length}
+                                  </td>
+                                </tr>
+                                {s.rows.map(r => {
+                                  const fv = r.returns[marketsPeriod];
+                                  const w = fv === null ? 0 : (Math.abs(fv) / barSpan) * 100;
+                                  const stale = !!r.priceDate && r.priceDate.slice(0, 7) !== m.endDate.slice(0, 7);
+                                  return (
+                                    <tr key={r.ticker} className="border-b border-gray-100 hover:bg-gray-50">
+                                      <td className="px-3 py-1 text-gray-800 whitespace-nowrap" title={r.ticker}>{r.name}</td>
+
+                                      {/* Horizontal bar for the focused period; label sits just past the bar's end */}
+                                      <td className="px-3 py-1">
+                                        {fv === null ? <span className="text-gray-300 text-xs">–</span> : (
+                                          <div className="relative h-4 mx-12">
+                                            <div className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: `${zeroPct}%` }} />
+                                            <div
+                                              className="absolute top-0.5 bottom-0.5 rounded-sm"
+                                              style={{ left: `${fv >= 0 ? zeroPct : zeroPct - w}%`, width: `${w}%`, background: fv >= 0 ? BAR_UP : BAR_DOWN }}
+                                            />
+                                            <span
+                                              className="absolute top-1/2 -translate-y-1/2 text-xs tabular-nums text-gray-700 whitespace-nowrap"
+                                              style={fv >= 0 ? { left: `calc(${zeroPct + w}% + 4px)` } : { right: `calc(${100 - zeroPct + w}% + 4px)` }}
+                                            >{fmtRet(fv)}</span>
+                                          </div>
+                                        )}
+                                      </td>
+
+                                      {/* One heat-coloured cell per period; each column has its own colour scale */}
+                                      {m.columns.map(p => {
+                                        const v = r.returns[p];
+                                        if (v === null) return <td key={p} className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
+                                        const bg = returnHeatColor(Math.max(-1, Math.min(1, v / m.colourCaps[p])) * 40);
+                                        return (
+                                          <td key={p} className="px-0.5 py-0.5">
+                                            <div className="rounded px-1.5 py-1 text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
+                                              {fmtRet(v)}
+                                            </div>
+                                          </td>
+                                        );
+                                      })}
+
+                                      <td className="px-3 py-1">{sparkline(r.spark)}</td>
+
+                                      {/* Latest price in the asset's own currency: red if below last month-end, black otherwise */}
+                                      <td className="px-3 py-1 text-right whitespace-nowrap tabular-nums">
+                                        {r.price === null ? <span className="text-gray-300 text-xs">–</span> : (
+                                          <>
+                                            <span className={r.priceUp === false ? 'text-red-600' : 'text-gray-900'}>{formatPrice(r.price)}</span>
+                                            <span className="text-[10px] text-gray-400 ml-1">{r.priceCurrency}</span>
+                                            {stale && <span className="text-[10px] text-amber-600 ml-1" title={`Latest price is from ${r.priceDate}`}>({monthLabel(r.priceDate)})</span>}
+                                          </>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </React.Fragment>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <p className="text-[11px] text-gray-500 mt-3">
+                        Total return (adjusted-close prices) in {marketsCurrency}, converted at each month-end&apos;s exchange rate ·
+                        every period ends at the latest price · 3Y/5Y/10Y are cumulative (c), not annualised ·
+                        colour scaled within each column · price in the asset&apos;s own currency, red if below last month-end · – = not enough history
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Monthly Prices Section - Shows 13 months of raw prices with heatmap and signals */}
           {isConnected && assetData && activeView === 'monthlyPrices' && (

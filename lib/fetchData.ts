@@ -96,6 +96,11 @@ export interface AssetLookup {
   fx: string;               // e.g., "USDPLN", "SGDPLN", "" for PLN assets
   assetClass: string;       // e.g., "Equities", "Fixed Income", "Alternatives"
   assetSubcategory: string; // e.g., "US Stocks", "Emerging Markets", "Gold" — finer grouping within asset class
+  // Markets tab instructions (columns 7-9). Blank or "-" in the sheet arrives here as '' / null,
+  // which means "leave this row out of the Markets tab".
+  snapshotCategory?: string;     // which Markets section the row feeds, e.g. "Assets"
+  snapshotSubcategory?: string;  // group inside that section, e.g. "Equities", "Alternatives"
+  snapshotOrder?: number | null; // row order inside its group (1 = first)
 }
 
 // Annual portfolio summary data from the "Years" sheet
@@ -582,9 +587,19 @@ function parseLookupTable(csvText: string): AssetLookup[] {
     const assetClass = values.length > 4 ? values[4].trim() : '';
     // Asset subcategory defaults to empty string if not specified (column 6)
     const assetSubcategory = values.length > 5 ? values[5].trim() : '';
+    // Markets tab columns 7-9 (SnapshotCategory, SnapshotSubCategory, SnapshotSubCategoryOrder).
+    // A "-" is the sheet's way of saying "not included", so it is treated exactly like a blank.
+    const snap = (i: number) => {
+      const v = values.length > i ? values[i].trim() : '';
+      return v === '-' ? '' : v;
+    };
+    const snapshotCategory = snap(6);
+    const snapshotSubcategory = snap(7);
+    const orderNum = parseFloat(snap(8));
+    const snapshotOrder = isNaN(orderNum) ? null : orderNum;
 
     if (ticker && name) {
-      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory });
+      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshotCategory, snapshotSubcategory, snapshotOrder });
     }
   }
 
