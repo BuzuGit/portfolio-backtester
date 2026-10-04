@@ -99,6 +99,9 @@ export interface AssetLookup {
   // Markets tab instructions (columns 7-9). One entry per Markets section the row appears in;
   // an empty list (blank or "-" in the sheet) means "leave this row out of the Markets tab".
   snapshots?: SnapshotPlacement[];
+  // Markets "Country" view (column 10, SnapshotCountry): the country this row belongs to, written
+  // as its currency code ("PLN", "USD"...). '' = not part of any country page.
+  snapshotCountry?: string;
 }
 
 // Where one Lookup row appears in the Markets tab. A row can appear in several sections: the
@@ -614,8 +617,11 @@ function parseLookupTable(csvText: string): AssetLookup[] {
       });
     });
 
+    // Column 10, SnapshotCountry: a single currency code; "-" counts as blank.
+    const snapshotCountry = (snapList(9)[0] || '').toUpperCase();
+
     if (ticker && name) {
-      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshots });
+      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshots, snapshotCountry });
     }
   }
 

@@ -22,7 +22,7 @@ import { RefreshCw, Plus, Trash2, Menu, X } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
-import { buildReturnMatrix, summariseMatrix, snapshotCategories, formatFxRate, MARKETS_PERIODS, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
+import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -1663,6 +1663,8 @@ const PortfolioBacktester = () => {
   // chart and the summary tiles focus on. Separate from the Portfolio tab's currency on
   // purpose, so switching one tab never quietly changes the other.
   const [marketsCurrency, setMarketsCurrency] = useState<MarketsCurrency>('USD');
+  // Markets "Country" page: which country (as its currency code) is shown. Poland by default.
+  const [marketsCountry, setMarketsCountry] = useState<Exclude<MarketsCurrency, 'Native'>>('PLN');
   // Which SnapshotCategory the table shows ("Assets", "Factor", ...). '' = the first one in the sheet.
   const [marketsCategory, setMarketsCategory] = useState<string>('');
   const [marketsPeriod, setMarketsPeriod] = useState<MarketsPeriod>('YTD');
@@ -4790,12 +4792,17 @@ const PortfolioBacktester = () => {
   // re-reads it, because every period's figure is already in there.
   // The Category buttons come straight from the sheet, so a new category needs no code change.
   // If the remembered choice disappears from the sheet (renamed or removed), fall back to the first.
-  const marketsCategories = useMemo(() => snapshotCategories(assetLookup), [assetLookup]);
+  // "Country" is always added at the end: it isn't a SnapshotCategory but a page built from the
+  // SnapshotCountry column (see buildCountryMatrix).
+  const marketsCategories = useMemo(() => [...snapshotCategories(assetLookup), MARKETS_COUNTRY], [assetLookup]);
   const activeMarketsCategory =
     marketsCategories.find(c => c.toLowerCase() === marketsCategory.toLowerCase()) ?? marketsCategories[0] ?? 'Assets';
+  const marketsIsCountry = activeMarketsCategory === MARKETS_COUNTRY;
   const marketsMatrix = useMemo(
-    () => buildReturnMatrix(assetData, assetLookup, marketsCurrency, activeMarketsCategory),
-    [assetData, assetLookup, marketsCurrency, activeMarketsCategory],
+    () => (marketsIsCountry
+      ? buildCountryMatrix(assetData, assetLookup, marketsCountry)
+      : buildReturnMatrix(assetData, assetLookup, marketsCurrency, activeMarketsCategory)),
+    [assetData, assetLookup, marketsCurrency, activeMarketsCategory, marketsIsCountry, marketsCountry],
   );
 
   // Calendar-year returns of the xxxPLN exchange rates, for the Return Map's currency buttons.
@@ -10154,6 +10161,14 @@ const PortfolioBacktester = () => {
             //  - rate rows are in basis points, so they get their own bar and colour scale.
             const isMacroKind = (r: MarketRow) => r.kind === 'rate' || r.kind === 'cpi';
             const isMacroTable = allRows.length > 0 && allRows.every(isMacroKind);
+            // The Country page mixes both kinds in one table, so the column layout is decided per
+            // SECTION: a section of rates/inflation gets Value / ATH / vs peak, any other section
+            // gets Price / Curr DD / Signal. (On the Assets and Macro pages every section agrees.)
+            const isMacroSection = (rs: MarketRow[]) => rs.length > 0 && rs.every(isMacroKind);
+            const hasMacroRows = allRows.some(isMacroKind);
+            const hasPriceRows = allRows.some(r => !isMacroKind(r));
+            // The currency the returns are in: the chosen country on the Country page.
+            const viewCurrency: MarketsCurrency = marketsIsCountry ? marketsCountry : marketsCurrency;
             const fmtBp = (v: number): string => {
               const r = Math.round(v);
               return r === 0 ? '0' : `${r > 0 ? '+' : ''}${r}`;
@@ -10164,16 +10179,18 @@ const PortfolioBacktester = () => {
             const fmtPct = (v: number) => `${v.toFixed(2)}%`;
 
             // Bar chart scale for the focused period: from the most negative to the most positive
-            // row, always including zero, so every bar starts from the same zero line. Rows in bp
-            // and rows in % each get their own scale (+85 bp would otherwise dwarf +3% inflation).
-            const barScale = (bp: boolean) => {
-              const vals = allRows.filter(r => (r.kind === 'rate') === bp)
+            // row, always including zero, so every bar starts from the same zero line. Prices, rates
+            // (bp) and inflation each get their own scale (+85 bp would otherwise dwarf +3%
+            // inflation, and a +20% equity would make inflation bars invisible).
+            const barGroup = (r: MarketRow) => (r.kind === 'rate' ? 'bp' : r.kind === 'cpi' ? 'cpi' : 'pct');
+            const barScale = (group: 'pct' | 'bp' | 'cpi') => {
+              const vals = allRows.filter(r => barGroup(r) === group)
                 .map(r => r.returns[marketsPeriod]).filter((v): v is number => v !== null);
               const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
               const span = (hi - lo) || 1;
               return { span, zeroPct: (-lo / span) * 100 };
             };
-            const barScales = { pct: barScale(false), bp: barScale(true) };
+            const barScales = { pct: barScale('pct'), bp: barScale('bp'), cpi: barScale('cpi') };
             // Medium shades of the same green/red the cells use, so bars and cells read as one palette.
             const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
 
@@ -10200,7 +10217,15 @@ const PortfolioBacktester = () => {
             // "Oct 2026", flagged as month-to-date when the latest row is the current calendar month.
             const monthLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleString('en-GB', { month: 'short', year: 'numeric' });
             const isMtd = !!m && m.endDate.slice(0, 7) === new Date().toISOString().slice(0, 7);
-            const summary = m ? summariseMatrix(m, marketsPeriod) : null;
+            // KPI tiles. On the Country page Leader/Laggard/Positive/Trend look at the ASSETS only
+            // (an FX cross or a rate isn't an investment to rank), and the Currency tile replaces
+            // Dispersion: the country's currency against an equal-weighted basket of the others.
+            const summary = m
+              ? summariseMatrix(marketsIsCountry
+                  ? { ...m, sections: m.sections.map(s => ({ ...s, rows: s.rows.filter(r => r.kind === 'asset') })) }
+                  : m, marketsPeriod)
+              : null;
+            const basket = m && marketsIsCountry ? currencyBasketMove(m, marketsPeriod) : null;
             // A row's level: exchange rates to 4 decimals, share prices through the app-wide formatPrice.
             const fmtLevel = (isFx: boolean, v: number) => (isFx ? formatFxRate(v) : formatPrice(v));
             // Hover text for a return cell: which prices, FX rates and dates produced the number.
@@ -10241,7 +10266,7 @@ const PortfolioBacktester = () => {
                   + `End ${dayLabel(w.endDate)} (last CPI print): CPI ${w.end.result.toFixed(2)}\n`
                   + `Inflation = end ÷ start − 1 = ${fmtRet((w.end.result / w.start.result - 1) * 100)}%`;
               }
-              const ccy = marketsCurrency === 'Native' ? `${r.priceCurrency} (own currency)` : marketsCurrency;
+              const ccy = viewCurrency === 'Native' ? `${r.priceCurrency} (own currency)` : viewCurrency;
               const head = `${r.name} · ${p} return${r.isFx ? '' : ` in ${ccy}`}: ${fmtRet(v)}%`;
               if (!w) return head;
               const mtd = isMtd && w.endDate.slice(0, 7) === m?.endDate.slice(0, 7) ? ' (month to date)' : '';
@@ -10274,7 +10299,9 @@ const PortfolioBacktester = () => {
               setSelectedAssetSubcategories(prev => add(prev, a.assetSubcategory));
               setMonthlySelectedTicker(ticker);
               setMonthlyDisplayCurrency(
-                r.kind === 'asset' && marketsCurrency !== 'Native' ? marketsCurrency : getAssetCurrency(ticker),
+                // (Monthly offers PLN/USD/EUR/CHF/SGD; a GBP or JPY country page opens natively.)
+                r.kind === 'asset' && viewCurrency !== 'Native' && ['PLN', 'USD', 'EUR', 'CHF', 'SGD'].includes(viewCurrency)
+                  ? viewCurrency : getAssetCurrency(ticker),
               );
               setActiveView('monthlyPrices');
               // The Monthly tab is heavy; look for the panel a few times rather than guessing a delay.
@@ -10298,15 +10325,28 @@ const PortfolioBacktester = () => {
                 <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
-                    {(['Native', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
-                      <button
-                        key={c}
-                        onClick={() => setMarketsCurrency(c)}
-                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                          marketsCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
-                      >{c}</button>
-                    ))}
+                    {marketsIsCountry
+                      // Country page: the currency IS the country (PLN = Poland...), so no "Native",
+                      // and GBP / JPY are offered too. Separate from the other pages' currency choice.
+                      ? COUNTRY_CURRENCIES.map(c => (
+                          <button
+                            key={c}
+                            onClick={() => setMarketsCountry(c)}
+                            title={COUNTRY_NAMES[c]}
+                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                              marketsCountry === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >{c}</button>
+                        ))
+                      : (['Native', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
+                          <button
+                            key={c}
+                            onClick={() => setMarketsCurrency(c)}
+                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                              marketsCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >{c}</button>
+                        ))}
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Period:</span>
@@ -10332,9 +10372,11 @@ const PortfolioBacktester = () => {
                     <div>
                       <h3 className="text-md font-semibold text-gray-800 inline">Return matrix</h3>
                       <span className="text-xs text-gray-500 ml-2 uppercase tracking-wide">
-                        {activeMarketsCategory} · {isMacroTable
-                          ? 'rates: change in bp · inflation: cumulative %'
-                          : `total return in ${marketsCurrency === 'Native' ? "each asset's own currency" : marketsCurrency}`}
+                        {marketsIsCountry
+                          ? `${COUNTRY_NAMES[marketsCountry] ?? marketsCountry} · returns in ${marketsCountry} · rates in bp`
+                          : <>{activeMarketsCategory} · {isMacroTable
+                            ? 'rates: change in bp · inflation: cumulative %'
+                            : `total return in ${marketsCurrency === 'Native' ? "each asset's own currency" : marketsCurrency}`}</>}
                       </span>
                     </div>
                     {m && (
@@ -10346,7 +10388,9 @@ const PortfolioBacktester = () => {
 
                   {!m || allRows.length === 0 ? (
                     <p className="text-sm text-gray-500 py-6 text-center">
-                      No rows have SnapshotCategory = &quot;{activeMarketsCategory}&quot; in the Lookup tab yet.
+                      {marketsIsCountry
+                        ? <>No rows have SnapshotCountry = &quot;{marketsCountry}&quot; in the Lookup tab yet.</>
+                        : <>No rows have SnapshotCategory = &quot;{activeMarketsCategory}&quot; in the Lookup tab yet.</>}
                     </p>
                   ) : (
                     <>
@@ -10360,11 +10404,29 @@ const PortfolioBacktester = () => {
                         {[
                           { label: `Leader · ${marketsPeriod}`, value: summary?.leader ? fmtRet(summary.leader.value) : '–', name: summary?.leader?.name ?? '', sub: '', cls: 'text-green-700' },
                           { label: `Laggard · ${marketsPeriod}`, value: summary?.laggard ? fmtRet(summary.laggard.value) : '–', name: summary?.laggard?.name ?? '', sub: '', cls: 'text-red-700' },
-                          { label: `Dispersion · ${marketsPeriod}`, value: summary?.dispersion != null ? `${summary.dispersion.toFixed(1)} pp` : '–', name: '', sub: 'best − worst', cls: 'text-gray-800' },
+                          marketsIsCountry
+                            // Country page: the currency against an equal-weighted basket of the others.
+                            ? {
+                                label: `${marketsCountry} vs basket · ${marketsPeriod}`,
+                                value: basket ? `${fmtRet(basket.value)}%` : '–',
+                                name: '',
+                                sub: !basket ? '' : basket.value > 0 ? 'appreciated' : basket.value < 0 ? 'depreciated' : 'unchanged',
+                                cls: !basket || basket.value === 0 ? 'text-gray-800' : basket.value > 0 ? 'text-green-700' : 'text-red-700',
+                                title: basket
+                                  ? `${marketsCountry} against an equal-weighted basket of ${basket.parts.length} currencies, ${marketsPeriod}:\n`
+                                    + basket.parts.map(p => `  ${p.name}  ${fmtRet(p.value)}%`).join('\n')
+                                    + `\nBasket = geometric average of these moves; + = ${marketsCountry} appreciated.`
+                                  : '',
+                              }
+                            : { label: `Dispersion · ${marketsPeriod}`, value: summary?.dispersion != null ? `${summary.dispersion.toFixed(1)} pp` : '–', name: '', sub: 'best − worst', cls: 'text-gray-800' },
                           { label: `Positive · ${marketsPeriod}`, value: summary ? `${summary.positive}/${summary.total}` : '–', name: '', sub: 'assets above 0', cls: 'text-gray-800' },
                           { label: 'Trend · 10M SMA', value: summary ? `${summary.buy}/${summary.signalTotal}` : '–', name: '', sub: 'on BUY signal', cls: 'text-gray-800' },
                         ].map(t => (
-                          <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0">
+                          <div
+                            key={t.label}
+                            title={(t as { title?: string }).title || undefined}
+                            className={`rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0 ${(t as { title?: string }).title ? 'cursor-help' : ''}`}
+                          >
                             {t.name ? (
                               <>
                                 {/* Figure sits up on the label line so the name gets a whole line to */}
@@ -10402,7 +10464,7 @@ const PortfolioBacktester = () => {
                                   {/* The fixed-width div is what holds this column open: a table ignores min-width */}
                                   {/* on cells, and the bars inside are absolutely positioned so they claim no width. */}
                                   <th className="text-left font-medium px-3 py-2">
-                                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod} {isMacroTable ? 'change' : 'return'}</span></div>
+                                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod} {isMacroSection(s.rows) ? 'change' : 'return'}</span></div>
                                   </th>
                                   {m.columns.map(p => (
                                     <th
@@ -10415,7 +10477,7 @@ const PortfolioBacktester = () => {
                                     </th>
                                   ))}
                                   <th className="text-left font-medium px-2 py-2 whitespace-nowrap">{marketsTrendPeriod} trend</th>
-                                  {isMacroTable ? (
+                                  {isMacroSection(s.rows) ? (
                                     <>
                                       <th className="text-right font-medium px-2 py-2 cursor-help" title="Latest rate, or latest year-on-year inflation">Value</th>
                                       <th className="text-right font-medium px-2 py-2 cursor-help" title="Highest value ever recorded (rate, or YoY inflation)">ATH</th>
@@ -10432,7 +10494,7 @@ const PortfolioBacktester = () => {
                                 {s.rows.map(r => {
                                   const fv = r.returns[marketsPeriod];
                                   const macro = isMacroKind(r);
-                                  const { span: barSpan, zeroPct } = r.kind === 'rate' ? barScales.bp : barScales.pct;
+                                  const { span: barSpan, zeroPct } = barScales[barGroup(r)];
                                   const w = fv === null ? 0 : (Math.abs(fv) / barSpan) * 100;
                                   // Bar colour: green = up for prices; reversed for rates/inflation.
                                   const barColour = fv !== null && (fv >= 0) !== macro ? BAR_UP : BAR_DOWN;
@@ -10470,7 +10532,7 @@ const PortfolioBacktester = () => {
                                         const v = r.returns[p];
                                         if (v === null) return <td key={p} className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
                                         // Rate rows use the bp scale; Macro rows flip the colour (up = red).
-                                        const cap = r.kind === 'rate' ? m.colourCapsBp[p] : m.colourCaps[p];
+                                        const cap = r.kind === 'rate' ? m.colourCapsBp[p] : r.kind === 'cpi' ? m.colourCapsCpi[p] : m.colourCaps[p];
                                         const bg = returnHeatColor(Math.max(-1, Math.min(1, v / cap)) * 40 * (macro ? -1 : 1));
                                         return (
                                           <td key={p} className="px-px py-0.5" title={returnTooltip(r, p, v)}>
@@ -10483,7 +10545,7 @@ const PortfolioBacktester = () => {
 
                                       <td className="px-2 py-1">{sparkline(r.spark.slice(-trendPoints), macro)}</td>
 
-                                      {isMacroTable ? (
+                                      {isMacroSection(s.rows) ? (
                                         <>
                                           {/* Value: latest rate / YoY inflation — red if it rose vs the month before */}
                                           <td className="px-2 py-1 text-right text-xs whitespace-nowrap tabular-nums">
@@ -10560,24 +10622,33 @@ const PortfolioBacktester = () => {
                         </table>
                       </div>
 
-                      {isMacroTable ? (
+                      {/* Footnotes: the price notes and/or the rates & inflation notes — the Country page has both */}
+                      {marketsIsCountry && (
                       <p className="text-[11px] text-gray-500 mt-3">
-                        Rates and 10Y yields: period columns are the change in basis points (hover for the % growth) ·
-                        inflation: cumulative change in the CPI index over the period (1Y = year-on-year), measured from the
-                        last month the index actually changed (later months repeat it until the next print) ·
-                        Value = latest rate / YoY inflation, red if it rose vs the month before · ATH = highest ever recorded ·
-                        vs peak = ATH − Value in pp · colours reversed: rising = red · the currency button does not apply · – = not enough history
+                        Country page: every Lookup row whose SnapshotCountry is {marketsCountry}, seen by a local investor, in {marketsCountry} ·
+                        Leader / Laggard / Positive / Trend count the assets only · {marketsCountry} vs basket = geometric average of its moves
+                        against the {basket?.parts.length ?? 'other'} currencies in the FX section (equal weights; + = {marketsCountry} appreciated)
                       </p>
-                      ) : (
+                      )}
+                      {hasPriceRows && (
                       <p className="text-[11px] text-gray-500 mt-3">
-                        {marketsCurrency === 'Native'
+                        {viewCurrency === 'Native'
                           ? <>Total return (adjusted-close prices) in each asset&apos;s own currency, no FX conversion · </>
-                          : <>Total return (adjusted-close prices) in {marketsCurrency}, converted at each month-end&apos;s exchange rate · </>}
+                          : <>Total return (adjusted-close prices) in {viewCurrency}, converted at each month-end&apos;s exchange rate · </>}
                         every period ends at the latest price · 3Y/5Y/10Y are cumulative (c), not annualised ·
                         colour scaled within each column · price in the asset&apos;s own currency, red if below last month-end ·
                         Curr DD and Signal use the asset&apos;s own currency, like the Annual and Monthly tabs ·
                         FX rows read BASE/OTHER (units of the other currency per 1 base, cross rates via PLN), so + = the base
                         currency strengthened; their price, Curr DD and Signal are on that rate · – = not enough history
+                      </p>
+                      )}
+                      {hasMacroRows && (
+                      <p className="text-[11px] text-gray-500 mt-3">
+                        Rates and 10Y yields: period columns are the change in basis points (hover for the % growth) ·
+                        inflation: cumulative change in the CPI index over the period (1Y = year-on-year), measured from the
+                        last month the index actually changed (later months repeat it until the next print) ·
+                        Value = latest rate / YoY inflation, red if it rose vs the month before · ATH = highest ever recorded ·
+                        vs peak = ATH − Value in pp · colours reversed: rising = red{marketsIsCountry ? '' : ' · the currency button does not apply'} · – = not enough history
                       </p>
                       )}
                     </>

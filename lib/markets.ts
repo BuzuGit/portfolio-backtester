@@ -28,7 +28,9 @@ import type { AssetRow, AssetLookup } from './fetchData';
 
 // 'Native' = no conversion: each asset's returns stay in its own currency (S&P 500 in USD,
 // WIG20 in PLN...), i.e. what a local investor in that asset experienced.
-export type MarketsCurrency = 'Native' | 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD';
+// GBP and JPY are only offered as Country pages (the Currency buttons elsewhere stay at five),
+// but the conversion works for any currency with an xxxPLN column in the sheet.
+export type MarketsCurrency = 'Native' | 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD' | 'GBP' | 'JPY';
 export type MarketsPeriod = 'YTD' | '1M' | '3M' | '6M' | '1Y' | '3Y' | '5Y' | '10Y';
 
 // The period buttons, in the order the user asked for them.
@@ -106,6 +108,7 @@ export interface ReturnMatrix {
   columns: MarketsPeriod[];                  // table column order, with YTD slotted in by date
   colourCaps: Record<MarketsPeriod, number>; // per-column scale for the red/green cell colour
   colourCapsBp: Record<MarketsPeriod, number>; // the same for 'rate' rows, whose cells are in bp
+  colourCapsCpi: Record<MarketsPeriod, number>; // and for inflation rows (colourCaps covers prices + FX)
   endDate: string;                           // the latest date in the price sheet
 }
 
@@ -277,6 +280,209 @@ const colourCap = (values: number[]): number => {
   return cap > 0 ? cap : 1;
 };
 
+// The price sheet, sorted by date, with a month -> row index so "N months earlier" is a
+// lookup, not a search. Shared by every table builder below.
+const prepareRows = (data: AssetRow[]) => {
+  const rows = [...data].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const indexByMonth = new Map<number, number>();
+  rows.forEach((r, i) => indexByMonth.set(monthKey(String(r.date)), i));
+  return { rows, indexByMonth, endDate: String(rows[rows.length - 1].date) };
+};
+
+/**
+ * One asset or FX row, measured in `currency`. Returns null for an FX row that has nothing to
+ * add (its currency IS the base, or another row already shows that currency — `shownFx`
+ * remembers which currencies this table already has).
+ */
+const buildPriceRow = (
+  a: AssetLookup,
+  currency: MarketsCurrency,
+  rows: AssetRow[],
+  indexByMonth: Map<number, number>,
+  shownFx: Set<string>,
+): MarketRow | null => {
+  const nativeCcy = a.currency || 'PLN';
+
+  // Two ways to read a value off a month's row:
+  //   conv — what the RETURNS, bars and trend line are measured on;
+  //   nat  — what Price, Curr DD and Signal are measured on.
+  // For an ordinary asset that is the converted price and the native price respectively.
+  const positive = (r: AssetRow, col: string): number | null => { const v = Number(r[col]); return v > 0 ? v : null; };
+  let conv = (r: AssetRow) => convertedPrice(r, a.ticker, nativeCcy, currency);
+  let nat = (r: AssetRow) => positive(r, a.ticker);
+  // The same value as conv(), but showing its working (for the return-cell tooltips).
+  const rateOf = (r: AssetRow, c: string) => Number(r[`${c}PLN`]);
+  let explain = (r: AssetRow): ValueWorking | null => {
+    const p = positive(r, a.ticker), v = conv(r);
+    if (p === null || v === null) return null;
+    const ops: ValueWorking['ops'] = [];
+    if (currency !== 'Native' && nativeCcy !== currency) {
+      if (nativeCcy !== 'PLN') ops.push({ op: '×', value: rateOf(r, nativeCcy), label: `${nativeCcy}PLN` });
+      if (currency !== 'PLN') ops.push({ op: '÷', value: rateOf(r, currency), label: `${currency}PLN` });
+    }
+    return { first: p, firstLabel: nativeCcy, ops, result: v, resultUnit: currency === 'Native' ? nativeCcy : currency };
+  };
+  let name = a.name;
+  let priceCurrency = nativeCcy;
+  const isFx = isFxPair(a);
+
+  // FX rows are different: a cross rate has no "own currency" to convert, so both readers
+  // become the rate itself, shown picture-style as BASE/OTHER (units of OTHER per 1 BASE,
+  // so + = the base currency strengthened). In a base currency, each of the sheet's pairs
+  // stands for its non-base currency — USDPLN stands for USD, unless USD IS the base, in
+  // which case it stands for PLN. That way the four sheet rows always show the four
+  // currencies other than the base, with cross rates rebuilt through the PLN hub
+  // (USD/EUR = USDPLN / EURPLN). 'Native' shows the sheet's pairs exactly as written.
+  if (isFx) {
+    const pairBase = a.ticker.slice(0, 3), pairQuote = a.ticker.slice(3);
+    let base: string, other: string;
+    if (currency === 'Native') {
+      base = pairBase; other = pairQuote;
+      conv = nat = r => positive(r, a.ticker);
+      explain = r => {
+        const v = positive(r, a.ticker);
+        return v === null ? null : { first: v, firstLabel: a.ticker, ops: [], result: v, resultUnit: pairQuote };
+      };
+    } else {
+      base = currency;
+      other = pairBase !== currency ? pairBase : pairQuote;
+      if (other === base || shownFx.has(other)) return null; // nothing to show, or already shown
+      shownFx.add(other);
+      const toPln = (r: AssetRow, c: string) => (c === 'PLN' ? 1 : positive(r, `${c}PLN`));
+      conv = nat = r => {
+        const b = toPln(r, base), o = toPln(r, other);
+        return b !== null && o !== null ? b / o : null;
+      };
+      // e.g. USD/EUR = USDPLN ÷ EURPLN;  USD/PLN = USDPLN;  PLN/USD = 1 ÷ USDPLN
+      explain = r => {
+        const b = toPln(r, base), o = toPln(r, other);
+        if (b === null || o === null) return null;
+        return {
+          first: b, firstLabel: base === 'PLN' ? '' : `${base}PLN`,
+          ops: other === 'PLN' ? [] : [{ op: '÷', value: o, label: `${other}PLN` }],
+          result: b / o, resultUnit: other,
+        };
+      };
+    }
+    name = `${base}/${other}`;
+    priceCurrency = other;
+  }
+
+  // The asset's latest month with a price. Normally the live month; if the sheet hasn't
+  // filled this asset in yet, its own last price is used and priceDate says which month.
+  let endIdx = rows.length - 1;
+  while (endIdx >= 0 && nat(rows[endIdx]) === null) endIdx--;
+
+  const returns = {} as Record<MarketsPeriod, number | null>;
+  const working = {} as Record<MarketsPeriod, PeriodWorking | null>;
+  MARKETS_PERIODS.forEach(p => { returns[p] = null; working[p] = null; });
+  let spark: number[] = [];
+  let price: number | null = null;
+  let priceUp: boolean | null = null;
+  let priceDate = '';
+  let drawdown: number | null = null;
+  let isAtAth = false;
+  let athPrice: number | null = null;
+  let athDate = '';
+  let sma10: number | null = null;
+  let signal: 'BUY' | 'SELL' | null = null;
+
+  if (endIdx >= 0) {
+    const endRow = rows[endIdx];
+    const endKey = monthKey(String(endRow.date));
+    const endValue = conv(endRow);
+    const endWorking = explain(endRow);
+
+    MARKETS_PERIODS.forEach(p => {
+      // YTD starts at last December; everything else N months before the end.
+      const startKey = p === 'YTD'
+        ? (Math.floor(endKey / 12) - 1) * 12 + 11
+        : endKey - PERIOD_MONTHS[p];
+      const startIdx = indexByMonth.get(startKey);
+      if (startIdx === undefined || endValue === null) return;
+      const startValue = conv(rows[startIdx]);
+      if (startValue === null) return;
+      returns[p] = (endValue / startValue - 1) * 100;
+      const startWorking = explain(rows[startIdx]);
+      if (startWorking && endWorking) {
+        working[p] = { startDate: String(rows[startIdx].date), start: startWorking, endDate: String(endRow.date), end: endWorking };
+      }
+    });
+
+    // Trend line (up to 10 years) in the selected currency. Months with no price are simply skipped.
+    spark = rows.slice(Math.max(0, endIdx - SPARK_POINTS + 1), endIdx + 1)
+      .map(conv)
+      .filter((v): v is number => v !== null);
+
+    // Price column: native currency (the shown rate, for FX), coloured by the move since
+    // the previous month-end.
+    price = nat(endRow) as number; // endIdx was chosen as a row where nat() has a value
+    priceDate = String(endRow.date);
+    const prev = endIdx > 0 ? nat(rows[endIdx - 1]) : null;
+    priceUp = prev !== null ? price >= prev : null;
+
+    // All-time high over the whole history up to the latest price (native currency).
+    for (let i = 0; i <= endIdx; i++) {
+      const p = nat(rows[i]);
+      if (p !== null && (athPrice === null || p > athPrice)) { athPrice = p; athDate = String(rows[i].date); }
+    }
+    if (athPrice !== null) {
+      drawdown = (price / athPrice - 1) * 100;
+      isAtAth = Math.abs(drawdown) < 0.01;
+    }
+
+    // 10-month SMA: needs a price in each of the last 10 months, like the Monthly tab.
+    const last10 = rows.slice(Math.max(0, endIdx - 9), endIdx + 1)
+      .map(nat).filter((p): p is number => p !== null);
+    if (last10.length === 10) {
+      sma10 = last10.reduce((s, p) => s + p, 0) / 10;
+      signal = price > sma10 ? 'BUY' : 'SELL';
+    }
+  }
+  return {
+    ticker: a.ticker, name, kind: isFx ? 'fx' : 'asset', isFx, returns, working, spark, price, priceCurrency, priceUp, priceDate,
+    drawdown, isAtAth, athPrice, athDate, sma10, signal,
+  };
+};
+
+// A finished row plus where it goes: its section, its order number, and its position in the
+// sheet (the tie-breaker).
+interface PlacedRow { section: string; row: MarketRow; order: number; sheetIndex: number }
+
+/**
+ * Groups placed rows into sections and works out the colour scales. Sections come out in the
+ * order they are first met; rows inside a section by order number (none = last), ties in
+ * sheet order.
+ */
+const finishMatrix = (placed: PlacedRow[], endDate: string): ReturnMatrix => {
+  const sectionsMap = new Map<string, PlacedRow[]>();
+  placed.forEach(p => {
+    if (!sectionsMap.has(p.section)) sectionsMap.set(p.section, []);
+    sectionsMap.get(p.section)!.push(p);
+  });
+  const sections: MarketSection[] = Array.from(sectionsMap.entries()).map(([name, items]) => ({
+    name,
+    rows: items.sort((x, y) => (x.order - y.order) || (x.sheetIndex - y.sheetIndex)).map(i => i.row),
+  }));
+
+  // Each column gets its own colour scale (the picture's rule): +2% is vivid in 1M but pale in
+  // 10Y. Prices, inflation and rates each get a scale of their own: +85 bp, +3% inflation and
+  // +20% on an equity can't share one without one of them washing out.
+  const allRows = sections.flatMap(s => s.rows);
+  const colourCaps = {} as Record<MarketsPeriod, number>;
+  const colourCapsBp = {} as Record<MarketsPeriod, number>;
+  const colourCapsCpi = {} as Record<MarketsPeriod, number>;
+  const capFor = (rs: MarketRow[], p: MarketsPeriod) =>
+    colourCap(rs.map(r => r.returns[p]).filter((v): v is number => v !== null));
+  MARKETS_PERIODS.forEach(p => {
+    colourCaps[p] = capFor(allRows.filter(r => r.kind === 'asset' || r.kind === 'fx'), p);
+    colourCapsBp[p] = capFor(allRows.filter(r => r.kind === 'rate'), p);
+    colourCapsCpi[p] = capFor(allRows.filter(r => r.kind === 'cpi'), p);
+  });
+
+  return { sections, columns: orderedColumns(endDate), colourCaps, colourCapsBp, colourCapsCpi, endDate };
+};
+
 /** Builds the whole Return matrix for one display currency. */
 export const buildReturnMatrix = (
   data: AssetRow[] | null,
@@ -285,197 +491,108 @@ export const buildReturnMatrix = (
   category = 'Assets', // which SnapshotCategory this table shows
 ): ReturnMatrix | null => {
   if (!data || data.length === 0) return null;
-
-  // Rows sorted by date, plus a month -> row index so "N months earlier" is a lookup, not a search.
-  const rows = [...data].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  const indexByMonth = new Map<number, number>();
-  rows.forEach((r, i) => indexByMonth.set(monthKey(String(r.date)), i));
-  const endDate = String(rows[rows.length - 1].date);
+  const { rows, indexByMonth, endDate } = prepareRows(data);
 
   // Only rows placed in this category. A row can sit in several categories (e.g. IWDA in both
   // "Assets" and "Factor"), each with its own subcategory and order — pick THIS category's one.
   const wanted = category.toLowerCase();
-  const sectionsMap = new Map<string, { row: MarketRow; order: number; sheetIndex: number }[]>();
+  const placed: PlacedRow[] = [];
   const shownFx = new Set<string>(); // currencies already given an FX row in this table
   lookup.forEach((a, sheetIndex) => {
     const placement = (a.snapshots || []).find(s => s.category.toLowerCase() === wanted);
     if (!placement) return;
-
-    // Files the finished row under its subcategory. No order number = after the numbered
-    // rows; ties keep the sheet's own order.
-    const addRow = (row: MarketRow) => {
-      const section = placement.subcategory || 'Other';
-      if (!sectionsMap.has(section)) sectionsMap.set(section, []);
-      sectionsMap.get(section)!.push({ row, order: placement.order ?? Infinity, sheetIndex });
-    };
-
     // Rates and inflation have their own rules (see buildMacroRow) and ignore the currency.
-    if (isMacroRow(a)) { addRow(buildMacroRow(a, rows, indexByMonth)); return; }
-
-    const nativeCcy = a.currency || 'PLN';
-
-    // Two ways to read a value off a month's row:
-    //   conv — what the RETURNS, bars and trend line are measured on;
-    //   nat  — what Price, Curr DD and Signal are measured on.
-    // For an ordinary asset that is the converted price and the native price respectively.
-    const positive = (r: AssetRow, col: string): number | null => { const v = Number(r[col]); return v > 0 ? v : null; };
-    let conv = (r: AssetRow) => convertedPrice(r, a.ticker, nativeCcy, currency);
-    let nat = (r: AssetRow) => positive(r, a.ticker);
-    // The same value as conv(), but showing its working (for the return-cell tooltips).
-    const rateOf = (r: AssetRow, c: string) => Number(r[`${c}PLN`]);
-    let explain = (r: AssetRow): ValueWorking | null => {
-      const p = positive(r, a.ticker), v = conv(r);
-      if (p === null || v === null) return null;
-      const ops: ValueWorking['ops'] = [];
-      if (currency !== 'Native' && nativeCcy !== currency) {
-        if (nativeCcy !== 'PLN') ops.push({ op: '×', value: rateOf(r, nativeCcy), label: `${nativeCcy}PLN` });
-        if (currency !== 'PLN') ops.push({ op: '÷', value: rateOf(r, currency), label: `${currency}PLN` });
-      }
-      return { first: p, firstLabel: nativeCcy, ops, result: v, resultUnit: currency === 'Native' ? nativeCcy : currency };
-    };
-    let name = a.name;
-    let priceCurrency = nativeCcy;
-    const isFx = isFxPair(a);
-
-    // FX rows are different: a cross rate has no "own currency" to convert, so both readers
-    // become the rate itself, shown picture-style as BASE/OTHER (units of OTHER per 1 BASE,
-    // so + = the base currency strengthened). In a base currency, each of the sheet's pairs
-    // stands for its non-base currency — USDPLN stands for USD, unless USD IS the base, in
-    // which case it stands for PLN. That way the four sheet rows always show the four
-    // currencies other than the base, with cross rates rebuilt through the PLN hub
-    // (USD/EUR = USDPLN / EURPLN). 'Native' shows the sheet's pairs exactly as written.
-    if (isFx) {
-      const pairBase = a.ticker.slice(0, 3), pairQuote = a.ticker.slice(3);
-      let base: string, other: string;
-      if (currency === 'Native') {
-        base = pairBase; other = pairQuote;
-        conv = nat = r => positive(r, a.ticker);
-        explain = r => {
-          const v = positive(r, a.ticker);
-          return v === null ? null : { first: v, firstLabel: a.ticker, ops: [], result: v, resultUnit: pairQuote };
-        };
-      } else {
-        base = currency;
-        other = pairBase !== currency ? pairBase : pairQuote;
-        if (other === base || shownFx.has(other)) return; // nothing to show, or already shown
-        shownFx.add(other);
-        const toPln = (r: AssetRow, c: string) => (c === 'PLN' ? 1 : positive(r, `${c}PLN`));
-        conv = nat = r => {
-          const b = toPln(r, base), o = toPln(r, other);
-          return b !== null && o !== null ? b / o : null;
-        };
-        // e.g. USD/EUR = USDPLN ÷ EURPLN;  USD/PLN = USDPLN;  PLN/USD = 1 ÷ USDPLN
-        explain = r => {
-          const b = toPln(r, base), o = toPln(r, other);
-          if (b === null || o === null) return null;
-          return {
-            first: b, firstLabel: base === 'PLN' ? '' : `${base}PLN`,
-            ops: other === 'PLN' ? [] : [{ op: '÷', value: o, label: `${other}PLN` }],
-            result: b / o, resultUnit: other,
-          };
-        };
-      }
-      name = `${base}/${other}`;
-      priceCurrency = other;
-    }
-
-    // The asset's latest month with a price. Normally the live month; if the sheet hasn't
-    // filled this asset in yet, its own last price is used and priceDate says which month.
-    let endIdx = rows.length - 1;
-    while (endIdx >= 0 && nat(rows[endIdx]) === null) endIdx--;
-
-    const returns = {} as Record<MarketsPeriod, number | null>;
-    const working = {} as Record<MarketsPeriod, PeriodWorking | null>;
-    MARKETS_PERIODS.forEach(p => { returns[p] = null; working[p] = null; });
-    let spark: number[] = [];
-    let price: number | null = null;
-    let priceUp: boolean | null = null;
-    let priceDate = '';
-    let drawdown: number | null = null;
-    let isAtAth = false;
-    let athPrice: number | null = null;
-    let athDate = '';
-    let sma10: number | null = null;
-    let signal: 'BUY' | 'SELL' | null = null;
-
-    if (endIdx >= 0) {
-      const endRow = rows[endIdx];
-      const endKey = monthKey(String(endRow.date));
-      const endValue = conv(endRow);
-      const endWorking = explain(endRow);
-
-      MARKETS_PERIODS.forEach(p => {
-        // YTD starts at last December; everything else N months before the end.
-        const startKey = p === 'YTD'
-          ? (Math.floor(endKey / 12) - 1) * 12 + 11
-          : endKey - PERIOD_MONTHS[p];
-        const startIdx = indexByMonth.get(startKey);
-        if (startIdx === undefined || endValue === null) return;
-        const startValue = conv(rows[startIdx]);
-        if (startValue === null) return;
-        returns[p] = (endValue / startValue - 1) * 100;
-        const startWorking = explain(rows[startIdx]);
-        if (startWorking && endWorking) {
-          working[p] = { startDate: String(rows[startIdx].date), start: startWorking, endDate: String(endRow.date), end: endWorking };
-        }
-      });
-
-      // Trend line (up to 10 years) in the selected currency. Months with no price are simply skipped.
-      spark = rows.slice(Math.max(0, endIdx - SPARK_POINTS + 1), endIdx + 1)
-        .map(conv)
-        .filter((v): v is number => v !== null);
-
-      // Price column: native currency (the shown rate, for FX), coloured by the move since
-      // the previous month-end.
-      price = nat(endRow) as number; // endIdx was chosen as a row where nat() has a value
-      priceDate = String(endRow.date);
-      const prev = endIdx > 0 ? nat(rows[endIdx - 1]) : null;
-      priceUp = prev !== null ? price >= prev : null;
-
-      // All-time high over the whole history up to the latest price (native currency).
-      for (let i = 0; i <= endIdx; i++) {
-        const p = nat(rows[i]);
-        if (p !== null && (athPrice === null || p > athPrice)) { athPrice = p; athDate = String(rows[i].date); }
-      }
-      if (athPrice !== null) {
-        drawdown = (price / athPrice - 1) * 100;
-        isAtAth = Math.abs(drawdown) < 0.01;
-      }
-
-      // 10-month SMA: needs a price in each of the last 10 months, like the Monthly tab.
-      const last10 = rows.slice(Math.max(0, endIdx - 9), endIdx + 1)
-        .map(nat).filter((p): p is number => p !== null);
-      if (last10.length === 10) {
-        sma10 = last10.reduce((s, p) => s + p, 0) / 10;
-        signal = price > sma10 ? 'BUY' : 'SELL';
-      }
-    }
-
-    addRow({
-      ticker: a.ticker, name, kind: isFx ? 'fx' : 'asset', isFx, returns, working, spark, price, priceCurrency, priceUp, priceDate,
-      drawdown, isAtAth, athPrice, athDate, sma10, signal,
-    });
+    const row = isMacroRow(a)
+      ? buildMacroRow(a, rows, indexByMonth)
+      : buildPriceRow(a, currency, rows, indexByMonth, shownFx);
+    if (row) placed.push({ section: placement.subcategory || 'Other', row, order: placement.order ?? Infinity, sheetIndex });
   });
 
-  // Map keeps insertion order, so sections come out in the order they first appear in the sheet.
-  const sections: MarketSection[] = Array.from(sectionsMap.entries()).map(([name, items]) => ({
-    name,
-    rows: items.sort((x, y) => (x.order - y.order) || (x.sheetIndex - y.sheetIndex)).map(i => i.row),
-  }));
+  return finishMatrix(placed, endDate);
+};
 
-  // Each column gets its own colour scale (the picture's rule): +2% is vivid in 1M but pale in 10Y.
-  // Rate rows (bp) get a scale of their own: +85 bp and +3.2% inflation can't share one.
-  const allRows = sections.flatMap(s => s.rows);
-  const colourCaps = {} as Record<MarketsPeriod, number>;
-  const colourCapsBp = {} as Record<MarketsPeriod, number>;
-  const capFor = (rs: MarketRow[], p: MarketsPeriod) =>
-    colourCap(rs.map(r => r.returns[p]).filter((v): v is number => v !== null));
-  MARKETS_PERIODS.forEach(p => {
-    colourCaps[p] = capFor(allRows.filter(r => r.kind !== 'rate'), p);
-    colourCapsBp[p] = capFor(allRows.filter(r => r.kind === 'rate'), p);
+// The Markets section name for the Country page (listed last in the left panel), and the
+// countries it can show — every currency the sheet has an xxxPLN rate for, plus PLN itself.
+export const MARKETS_COUNTRY = 'Country';
+export const COUNTRY_CURRENCIES = ['PLN', 'USD', 'EUR', 'CHF', 'SGD', 'GBP', 'JPY'] as const;
+
+// Display names for the Country view. The sheet's SnapshotCountry column holds a currency code.
+export const COUNTRY_NAMES: Record<string, string> = {
+  PLN: 'Poland', USD: 'United States', EUR: 'Euro area', CHF: 'Switzerland', SGD: 'Singapore',
+  GBP: 'United Kingdom', JPY: 'Japan',
+};
+
+/**
+ * The Country view: everything about one country on one page, seen by a local investor.
+ *
+ *   - its ASSETS: every Lookup row whose SnapshotCountry is this country's currency, in that
+ *     currency, grouped by the row's Markets subcategory (Equities, Fixed Income, ...). A row
+ *     with a country but no Markets placement falls back to its Asset Class for the group;
+ *   - its CURRENCY: the sheet's FX pairs rebuilt with this currency as the base (PLN/USD,
+ *     PLN/EUR, ...), exactly as the Assets view shows them in this currency;
+ *   - its MACRO: the inflation, reference-rate and 10Y-yield rows tagged with this country,
+ *     grouped by their Macro subcategory.
+ */
+export const buildCountryMatrix = (
+  data: AssetRow[] | null,
+  lookup: AssetLookup[],
+  country: Exclude<MarketsCurrency, 'Native'>,
+): ReturnMatrix | null => {
+  if (!data || data.length === 0) return null;
+  const { rows, indexByMonth, endDate } = prepareRows(data);
+  const isThisCountry = (a: AssetLookup) => (a.snapshotCountry || '').toUpperCase() === country;
+  // A row's group: its placement in `preferred` (Assets for prices, Macro for macro rows),
+  // else its first placement anywhere, else its Asset Class.
+  const groupOf = (a: AssetLookup, preferred: string) => {
+    const p = (a.snapshots || []).find(s => s.category.toLowerCase() === preferred.toLowerCase())
+      ?? (a.snapshots || [])[0];
+    return { section: p?.subcategory || a.assetClass || 'Other', order: p?.order ?? Infinity };
+  };
+
+  const assets: PlacedRow[] = [];
+  const fx: PlacedRow[] = [];
+  const macro: PlacedRow[] = [];
+  const shownFx = new Set<string>();
+  lookup.forEach((a, sheetIndex) => {
+    if (isFxPair(a)) {
+      // Only the FX pairs you placed in Markets — the same set the Assets view shows.
+      if (!(a.snapshots || []).length) return;
+      const row = buildPriceRow(a, country, rows, indexByMonth, shownFx);
+      if (row) fx.push({ section: 'FX', row, order: groupOf(a, 'Assets').order, sheetIndex });
+      return;
+    }
+    if (!isThisCountry(a)) return;
+    if (isMacroRow(a)) {
+      const g = groupOf(a, 'Macro');
+      macro.push({ section: g.section, row: buildMacroRow(a, rows, indexByMonth), order: g.order, sheetIndex });
+    } else {
+      const g = groupOf(a, 'Assets');
+      const row = buildPriceRow(a, country, rows, indexByMonth, shownFx);
+      if (row) assets.push({ section: g.section, row, order: g.order, sheetIndex });
+    }
   });
 
-  return { sections, columns: orderedColumns(endDate), colourCaps, colourCapsBp, endDate };
+  // Assets first, then the currency, then macro.
+  return finishMatrix([...assets, ...fx, ...macro], endDate);
+};
+
+/**
+ * The Country view's currency tile: how this country's currency moved against an EQUAL-WEIGHTED
+ * basket of the others over a period. Each FX row already reads BASE/OTHER (+ = the base
+ * strengthened), so the basket move is the geometric average of those rows:
+ *   ((1 + r1) × (1 + r2) × ... × (1 + rn)) ^ (1/n) − 1
+ * A geometric average, because FX moves compound: +10% then −10% is not "flat".
+ */
+export const currencyBasketMove = (
+  matrix: ReturnMatrix,
+  period: MarketsPeriod,
+): { value: number; parts: { name: string; value: number }[] } | null => {
+  const parts = matrix.sections.flatMap(s => s.rows)
+    .filter(r => r.kind === 'fx' && r.returns[period] !== null)
+    .map(r => ({ name: r.name, value: r.returns[period] as number }));
+  if (!parts.length) return null;
+  const growth = parts.reduce((g, p) => g * (1 + p.value / 100), 1);
+  return { value: (Math.pow(growth, 1 / parts.length) - 1) * 100, parts };
 };
 
 /**
