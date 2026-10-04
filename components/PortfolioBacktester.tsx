@@ -10233,9 +10233,13 @@ const PortfolioBacktester = () => {
             // Clicking an asset name opens it in the Monthly tab's detail panel. That panel closes
             // itself if the asset is hidden by the Monthly filters (Assets / Class / Currency /
             // Subcategory), so first make sure each filter lets this asset through — only ever ADDING
-            // it, never removing anything else you had selected. Then select it in its own currency
-            // (as clicking its row in Monthly does), switch tab, and scroll to the panel once drawn.
-            const openInMonthly = (ticker: string) => {
+            // it, never removing anything else you had selected. Then select it, switch tab, and
+            // scroll to the panel once drawn.
+            // Currency: an ordinary asset opens in the currency chosen here (MWIG40 viewed in USD
+            // stays in USD), or in its own currency when this tab is on "Original". FX and Macro
+            // rows open in their own currency, because this tab never converts those either.
+            const openInMonthly = (r: MarketRow) => {
+              const ticker = r.ticker;
               const a = assetLookup.find(x => x.ticker === ticker);
               if (!a) return;
               const add = (list: string[], v: string) => (v && !list.includes(v) ? [...list, v] : list);
@@ -10244,7 +10248,9 @@ const PortfolioBacktester = () => {
               setSelectedCurrencies(prev => add(prev, a.currency));
               setSelectedAssetSubcategories(prev => add(prev, a.assetSubcategory));
               setMonthlySelectedTicker(ticker);
-              setMonthlyDisplayCurrency(getAssetCurrency(ticker));
+              setMonthlyDisplayCurrency(
+                r.kind === 'asset' && marketsCurrency !== 'Original' ? marketsCurrency : getAssetCurrency(ticker),
+              );
               setActiveView('monthlyPrices');
               // The Monthly tab is heavy; look for the panel a few times rather than guessing a delay.
               let tries = 0;
@@ -10414,7 +10420,7 @@ const PortfolioBacktester = () => {
                                       <td className="px-3 py-1 whitespace-nowrap">
                                         <button
                                           type="button"
-                                          onClick={() => openInMonthly(r.ticker)}
+                                          onClick={() => openInMonthly(r)}
                                           className="text-gray-800 hover:text-slate-900 hover:underline underline-offset-2 text-left"
                                           title={`${r.ticker} — open full details in the Monthly tab${r.isFx ? ` (shows the sheet's ${r.ticker} series)` : ''}`}
                                         >{r.name}</button>
