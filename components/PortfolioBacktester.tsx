@@ -10217,36 +10217,32 @@ const PortfolioBacktester = () => {
 
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm border-collapse">
-                          <thead>
-                            <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
-                              <th className="text-left font-medium px-3 py-2">Asset</th>
-                              <th className="text-left font-medium px-3 py-2 min-w-[16rem]">
-                                <span className="text-gray-800 font-semibold">{marketsPeriod} return</span>
-                              </th>
-                              {m.columns.map(p => (
-                                <th
-                                  key={p}
-                                  className={`text-center px-1 py-2 w-16 ${p === marketsPeriod ? 'text-gray-900 font-bold' : 'font-medium'}`}
-                                >
-                                  <span className={p === marketsPeriod ? 'border-b-2 border-slate-800 pb-0.5' : ''}>
-                                    {p}{['3Y', '5Y', '10Y'].includes(p) && <sup className="text-[8px] ml-px">c</sup>}
-                                  </span>
-                                </th>
-                              ))}
-                              <th className="text-left font-medium px-3 py-2">5Y trend</th>
-                              <th className="text-right font-medium px-3 py-2">Price</th>
-                              <th className="text-right font-medium px-3 py-2 whitespace-nowrap">Current DD</th>
-                              <th className="text-center font-medium px-3 py-2 whitespace-nowrap">10SMA signal</th>
-                            </tr>
-                          </thead>
                           <tbody>
-                            {m.sections.map(s => (
+                            {m.sections.map((s, si) => (
                               <React.Fragment key={s.name}>
-                                {/* Section header row, e.g. "EQUITIES · 4" */}
-                                <tr>
-                                  <td colSpan={colCount} className="px-3 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500 border-b border-gray-200">
-                                    {s.name} · {s.rows.length}
-                                  </td>
+                                {/* A little air between one category's last row and the next category's header */}
+                                {si > 0 && <tr><td colSpan={colCount} className="h-4" /></tr>}
+                                {/* Each category carries its own copy of the column headers, with the */}
+                                {/* category name (e.g. "EQUITIES · 4") in the first cell instead of "Asset". */}
+                                <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
+                                  <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name} · {s.rows.length}</th>
+                                  <th className="text-left font-medium px-3 py-2 min-w-[16rem]">
+                                    <span className="text-gray-800 font-semibold">{marketsPeriod} return</span>
+                                  </th>
+                                  {m.columns.map(p => (
+                                    <th
+                                      key={p}
+                                      className={`text-center px-1 py-2 w-16 ${p === marketsPeriod ? 'text-gray-900 font-bold' : 'font-medium'}`}
+                                    >
+                                      <span className={p === marketsPeriod ? 'border-b-2 border-slate-800 pb-0.5' : ''}>
+                                        {p}{['3Y', '5Y', '10Y'].includes(p) && <sup className="text-[8px] ml-px">c</sup>}
+                                      </span>
+                                    </th>
+                                  ))}
+                                  <th className="text-left font-medium px-3 py-2">5Y trend</th>
+                                  <th className="text-right font-medium px-3 py-2">Price</th>
+                                  <th className="text-right font-medium px-3 py-2 whitespace-nowrap">Current DD</th>
+                                  <th className="text-center font-medium px-3 py-2 whitespace-nowrap">10SMA signal</th>
                                 </tr>
                                 {s.rows.map(r => {
                                   const fv = r.returns[marketsPeriod];
