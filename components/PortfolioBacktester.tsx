@@ -22,7 +22,7 @@ import { RefreshCw, Plus, Trash2, Menu, X } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
-import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
+import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -1670,7 +1670,10 @@ const PortfolioBacktester = () => {
   const [marketsPeriod, setMarketsPeriod] = useState<MarketsPeriod>('YTD');
   // How many years the trend sparkline covers. Follows the period button for 1Y/3Y/5Y/10Y; the
   // shorter periods (YTD/1M/3M/6M) are too short for a trend, so they leave it where it was.
-  const [marketsTrendPeriod, setMarketsTrendPeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y'>('5Y');
+  const [marketsTrendPeriod, setMarketsTrendPeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y' | 'Max'>('5Y');
+  // Markets "Returns" (period returns, the default) or "Stats" (CAGR, Vol, Sharpe, drawdowns and
+  // stress-year returns for the selected period) for the asset sections.
+  const [marketsView, setMarketsView] = useState<'returns' | 'stats'>('returns');
   // Which year the "Profit Breakdown by Asset" table shows.
   // null = default to the latest available year in yearsData (computed at render time).
   const [breakdownYear, setBreakdownYear] = useState<number | null>(null);
@@ -10153,7 +10156,9 @@ const PortfolioBacktester = () => {
             // "+12.3" / "-4.5" / "0.0" — rounded first, so a -0.04 never prints as "-0.0".
             const fmtRet = (v: number): string => {
               const r = Math.round(v * 10) / 10;
-              return r === 0 ? '0.0' : `${r > 0 ? '+' : ''}${r.toFixed(1)}`;
+              if (r === 0) return '0.0';
+              // From 1,000% up (long "Max" histories) the decimal is noise and would widen the cell.
+              return `${r > 0 ? '+' : ''}${Math.abs(r) >= 1000 ? r.toFixed(0) : r.toFixed(1)}`;
             };
 
             // Macro rows (rates in bp, inflation in %) follow different rules from prices:
@@ -10206,7 +10211,7 @@ const PortfolioBacktester = () => {
 
             // The sparkline shows the last N years of each row's (up to 10-year) history: N years of
             // monthly steps = 12N + 1 month-end points.
-            const trendPoints = { '1Y': 13, '3Y': 37, '5Y': 61, '10Y': 121 }[marketsTrendPeriod];
+            const trendPoints = { '1Y': 13, '3Y': 37, '5Y': 61, '10Y': 121, 'Max': Infinity }[marketsTrendPeriod]; // Max = whole history
 
             // Trend line drawn as a tiny SVG: green if it ends above where it started, red if
             // below (the other way round for Macro rows, where "up" is rising rates or inflation).
@@ -10269,7 +10274,7 @@ const PortfolioBacktester = () => {
               }
               // Inflation 1Y rate: the YoY rate back then vs today, and which way it has moved since.
               if (r.kind === 'cpiyoy') {
-                const when = p === 'YTD' ? 'at last December' : `${p} before the latest print`;
+                const when = p === 'YTD' ? 'at last December' : p === 'Max' ? 'at the start of the data' : `${p} before the latest print`;
                 const head = `${r.name} · 1Y inflation rate ${when}: ${v.toFixed(2)}%`;
                 if (!w) return head;
                 const diff = w.end.result - w.start.result;
@@ -10340,6 +10345,89 @@ const PortfolioBacktester = () => {
             // name + bar + periods + trend + price + (DD + signal | ATH + vs peak) — four after the periods either way
             const colCount = 2 + (m ? m.columns.length : 0) + 4;
 
+            // ---- STATS VIEW ----
+            // A section switches to Stats when the Stats button is on and every row in it is an asset
+            // (FX and macro sections keep their Returns columns). Columns, for the selected period:
+            // a Max DD bar, CAGR, 2x time, Vol, Sharpe, Max DD, Longest DD, Curr DD, the trend line,
+            // then the calendar-year returns for the stress years (STATS_YEARS: 2018, 2020, 2022).
+            const isStatsSection = (s: { rows: MarketRow[] }) =>
+              marketsView === 'stats' && s.rows.length > 0 && s.rows.every(r => r.kind === 'asset');
+            const statsRows = m ? m.sections.filter(isStatsSection).flatMap(s => s.rows) : [];
+            const maxAbs = (vals: (number | null | undefined)[]) =>
+              Math.max(1e-9, ...vals.filter((v): v is number => v !== null && v !== undefined).map(Math.abs));
+            const ddLo = Math.min(0, ...statsRows.map(r => r.stats[marketsPeriod]?.maxDD ?? 0)) || -1;
+            const cagrCap = maxAbs(statsRows.map(r => r.stats[marketsPeriod]?.cagr));
+            const yearCaps = Object.fromEntries(STATS_YEARS.map(y => [y, maxAbs(statsRows.map(r => r.yearReturns[y]))]));
+            const heatCell = (v: number | null, cap: number, text: string, title: string) => {
+              if (v === null) return <td className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
+              const bg = returnHeatColor(Math.max(-1, Math.min(1, v / cap)) * 40);
+              return (
+                <td className="px-px py-0.5" title={title}>
+                  <div className="rounded px-1 py-1 cursor-help text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>{text}</div>
+                </td>
+              );
+            };
+            const plainCell = (text: string | null, title: string, cls = 'text-gray-800') =>
+              text === null
+                ? <td className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>
+                : <td className={`px-1 py-0.5 text-center text-xs tabular-nums cursor-help ${cls}`} title={title}>{text}</td>;
+            const renderStatsSection = (s: { name: string; rows: MarketRow[] }) => (
+              <>
+                <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
+                  <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name}</th>
+                  <th className="text-left font-medium px-3 py-2">
+                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod} max drawdown</span></div>
+                  </th>
+                  {['CAGR', '2x time', 'Vol', 'Sharpe', 'Max DD', 'Longest DD', 'Curr DD'].map(h => (
+                    <th key={h} className="text-center font-medium px-0.5 py-2 w-14 leading-tight">{h}</th>
+                  ))}
+                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap">{marketsTrendPeriod} trend</th>
+                  {STATS_YEARS.map(y => <th key={y} className="text-center font-medium px-0.5 py-2 w-14">{y}</th>)}
+                </tr>
+                {s.rows.map(r => {
+                  const st = r.stats[marketsPeriod];
+                  const span = st ? `${monthLabel(st.startDate)} – ${monthLabel(st.endDate)} (${formatPeriod(st.months)})` : '';
+                  const w = st ? (Math.abs(st.maxDD) / Math.abs(ddLo)) * 100 : 0;
+                  return (
+                    <tr key={r.ticker} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="px-3 py-1 whitespace-nowrap">
+                        <button type="button" onClick={() => openInMonthly(r)}
+                          className="text-gray-800 hover:text-slate-900 hover:underline underline-offset-2 text-left"
+                          title={`${r.ticker} — open full details in the Monthly tab`}>{r.name}</button>
+                      </td>
+                      {/* Max drawdown bar: hangs left from zero at the right edge */}
+                      <td className="px-3 py-1" title={st ? `Worst peak-to-trough fall, ${span}` : ''}>
+                        {!st ? <span className="text-gray-300 text-xs">–</span> : (
+                          <div className="relative h-4 mx-10">
+                            <div className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: '100%' }} />
+                            <div className="absolute top-0.5 bottom-0.5 rounded-sm" style={{ left: `${100 - w}%`, width: `${w}%`, background: BAR_DOWN }} />
+                            <span className="absolute top-1/2 -translate-y-1/2 text-xs tabular-nums text-gray-700 whitespace-nowrap"
+                              style={{ right: `calc(${w}% + 4px)` }}>{st.maxDD.toFixed(1)}%</span>
+                          </div>
+                        )}
+                      </td>
+                      {heatCell(st?.cagr ?? null, cagrCap, st?.cagr != null ? `${fmtRet(st.cagr)}%` : '', `CAGR (compound annual growth), ${span}`)}
+                      {plainCell(st?.doublingYears != null ? (st.doublingYears > 99 ? '>99y' : formatPeriod(Math.round(st.doublingYears * 12))) : null,
+                        st?.cagr != null ? `Years to double the money at ${st.cagr.toFixed(2)}% a year (ln 2 ÷ ln(1 + CAGR))` : '')}
+                      {plainCell(st?.vol != null ? `${st.vol.toFixed(1)}%` : null, `Annualised volatility: std. dev. of monthly returns × √12, ${span}`)}
+                      {plainCell(st?.sharpe != null ? st.sharpe.toFixed(2) : null, `Sharpe = CAGR ÷ Vol (0% risk-free rate, as elsewhere in the app), ${span}`)}
+                      {plainCell(st ? `${st.maxDD.toFixed(1)}%` : null, `Max drawdown, ${span}`, 'text-red-700')}
+                      {plainCell(st ? (st.longestDDMonths === 0 ? '0m' : formatPeriod(st.longestDDMonths)) : null, `Longest stretch below a previous peak, ${span}`)}
+                      {plainCell(st ? (st.currDD > -0.01 ? 'ATH' : `${st.currDD.toFixed(1)}%`) : null,
+                        `Current drawdown from the highest value in the window, ${span}`, st && st.currDD > -0.01 ? 'text-green-700 font-semibold' : 'text-orange-700')}
+                      <td className="px-2 py-1">{sparkline(r.spark.slice(-trendPoints))}</td>
+                      {STATS_YEARS.map(y => (
+                        <React.Fragment key={y}>
+                          {heatCell(r.yearReturns[y] ?? null, yearCaps[y], r.yearReturns[y] != null ? fmtRet(r.yearReturns[y] as number) : '',
+                            `${y} calendar-year return in ${viewCurrency === 'Native' ? r.priceCurrency : viewCurrency} (Dec ${y - 1} → Dec ${y})`)}
+                        </React.Fragment>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </>
+            );
+
             return (
               <div className="mt-2">
                 {/* Page-level filters: currency for every return figure, period for the bars and tiles. */}
@@ -10377,7 +10465,7 @@ const PortfolioBacktester = () => {
                         key={p}
                         onClick={() => {
                           setMarketsPeriod(p);
-                          if (p === '1Y' || p === '3Y' || p === '5Y' || p === '10Y') setMarketsTrendPeriod(p);
+                          if (p === '1Y' || p === '3Y' || p === '5Y' || p === '10Y' || p === 'Max') setMarketsTrendPeriod(p);
                         }}
                         className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                           marketsPeriod === p ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -10385,6 +10473,21 @@ const PortfolioBacktester = () => {
                       >{p}</button>
                     ))}
                   </div>
+                  {/* Returns (default) or Stats for the asset sections; not offered where there are no assets */}
+                  {!isMacroTable && (
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs text-gray-500 mr-1">View:</span>
+                      {([['returns', 'Returns'], ['stats', 'Stats']] as const).map(([v, label]) => (
+                        <button
+                          key={v}
+                          onClick={() => setMarketsView(v)}
+                          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                            marketsView === v ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >{label}</button>
+                      ))}
+                    </div>
+                  )}
                   {/* (The Category choice lives in the left panel, under "Markets".) */}
                 </div>
 
@@ -10474,13 +10577,21 @@ const PortfolioBacktester = () => {
                         ))}
                       </div>}
 
-                      <div className="overflow-x-auto">
+                      {/* In Stats view the Stats sections and the sections that keep their Returns columns */}
+                      {/* (FX, macro) go in two separate tables: one table has ONE set of column widths, and */}
+                      {/* the two layouts don't line up column for column, so sharing would stretch both. */}
+                      {(marketsView === 'stats'
+                        ? [m.sections.filter(isStatsSection), m.sections.filter(s => !isStatsSection(s))]
+                        : [m.sections]
+                      ).filter(g => g.length > 0).map((group, gi) => (
+                      <div key={gi} className={`overflow-x-auto ${gi > 0 ? 'mt-4' : ''}`}>
                         <table className="w-full text-sm border-collapse">
                           <tbody>
-                            {m.sections.map((s, si) => (
+                            {group.map((s, si) => (
                               <React.Fragment key={s.name}>
                                 {/* A little air between one category's last row and the next category's header */}
                                 {si > 0 && <tr><td colSpan={colCount} className="h-4" /></tr>}
+                                {isStatsSection(s) ? renderStatsSection(s) : (<>
                                 {/* Each category carries its own copy of the column headers, with the */}
                                 {/* category name (e.g. "EQUITIES") in the first cell instead of "Asset". */}
                                 <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
@@ -10490,7 +10601,7 @@ const PortfolioBacktester = () => {
                                   <th className="text-left font-medium px-3 py-2">
                                     <div className="w-[200px]"><span className="text-gray-800 font-semibold">{
                                       s.rows.every(r => r.kind === 'cpiyoy')
-                                        ? (marketsPeriod === 'YTD' ? 'Now vs Dec' : `Now vs ${marketsPeriod} ago`)
+                                        ? (marketsPeriod === 'YTD' ? 'Now vs Dec' : marketsPeriod === 'Max' ? 'Now vs start' : `Now vs ${marketsPeriod} ago`)
                                         : `${marketsPeriod} ${isMacroSection(s.rows) ? 'change' : 'return'}`
                                     }</span></div>
                                   </th>
@@ -10500,7 +10611,7 @@ const PortfolioBacktester = () => {
                                       className={`text-center px-0.5 py-2 w-14 ${p === marketsPeriod ? 'text-gray-900 font-bold' : 'font-medium'}`}
                                     >
                                       <span className={p === marketsPeriod ? 'border-b-2 border-slate-800 pb-0.5' : ''}>
-                                        {p}{['3Y', '5Y', '10Y'].includes(p) && <sup className="text-[8px] ml-px">c</sup>}
+                                        {p}{['3Y', '5Y', '10Y', 'Max'].includes(p) && <sup className="text-[8px] ml-px">c</sup>}
                                       </span>
                                     </th>
                                   ))}
@@ -10672,11 +10783,13 @@ const PortfolioBacktester = () => {
                                     </tr>
                                   );
                                 })}
+                                </>)}
                               </React.Fragment>
                             ))}
                           </tbody>
                         </table>
                       </div>
+                      ))}
 
                       {/* Footnotes: the price notes and/or the rates & inflation notes — the Country page has both */}
                       {marketsIsCountry && (
