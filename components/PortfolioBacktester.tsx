@@ -22,7 +22,7 @@ import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
-import { buildReturnMatrix, summariseMatrix, snapshotCategories, MARKETS_PERIODS, MarketsCurrency, MarketsPeriod } from '@/lib/markets';
+import { buildReturnMatrix, summariseMatrix, snapshotCategories, formatFxRate, MARKETS_PERIODS, MarketsCurrency, MarketsPeriod } from '@/lib/markets';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -1660,7 +1660,7 @@ const PortfolioBacktester = () => {
   // Markets tab state: which currency the returns are shown in, and which period the bar
   // chart and the summary tiles focus on. Separate from the Portfolio tab's currency on
   // purpose, so switching one tab never quietly changes the other.
-  const [marketsCurrency, setMarketsCurrency] = useState<MarketsCurrency>('Original');
+  const [marketsCurrency, setMarketsCurrency] = useState<MarketsCurrency>('USD');
   // Which SnapshotCategory the table shows ("Assets", "Factor", ...). '' = the first one in the sheet.
   const [marketsCategory, setMarketsCategory] = useState<string>('');
   const [marketsPeriod, setMarketsPeriod] = useState<MarketsPeriod>('YTD');
@@ -10150,6 +10150,8 @@ const PortfolioBacktester = () => {
             const monthLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleString('en-GB', { month: 'short', year: 'numeric' });
             const isMtd = !!m && m.endDate.slice(0, 7) === new Date().toISOString().slice(0, 7);
             const summary = m ? summariseMatrix(m, marketsPeriod) : null;
+            // A row's level: exchange rates to 4 decimals, share prices through the app-wide formatPrice.
+            const fmtLevel = (isFx: boolean, v: number) => (isFx ? formatFxRate(v) : formatPrice(v));
             // Hover text explaining the Signal column (header and every BUY/SELL cell).
             const SIGNAL_RULE = '10-month SMA trend signal (same rule as the Monthly tab):\n'
               + '• SMA = average of the last 10 month-end prices, current month included, in the asset\'s own currency.\n'
@@ -10316,7 +10318,7 @@ const PortfolioBacktester = () => {
                                       <td className="px-2 py-1 text-right text-xs whitespace-nowrap tabular-nums">
                                         {r.price === null ? <span className="text-gray-300">–</span> : (
                                           <>
-                                            <span className={r.priceUp === false ? 'text-red-600' : 'text-gray-900'}>{formatPrice(r.price)}</span>
+                                            <span className={r.priceUp === false ? 'text-red-600' : 'text-gray-900'}>{fmtLevel(r.isFx, r.price)}</span>
                                             <span className="text-[9px] text-gray-400 ml-0.5">{r.priceCurrency}</span>
                                             {stale && <span className="text-[10px] text-amber-600 ml-1" title={`Latest price is from ${r.priceDate}`}>({monthLabel(r.priceDate)})</span>}
                                           </>
@@ -10327,13 +10329,13 @@ const PortfolioBacktester = () => {
                                       {r.drawdown === null ? (
                                         <td className="px-2 py-1 text-right text-xs text-gray-300">–</td>
                                       ) : r.isAtAth ? (
-                                        <td className="px-2 py-1 text-right text-xs font-semibold bg-green-100 text-green-700 cursor-help" title={`At all-time high: ${formatPrice(r.price ?? 0)} ${r.priceCurrency}`}>
+                                        <td className="px-2 py-1 text-right text-xs font-semibold bg-green-100 text-green-700 cursor-help" title={`At all-time high: ${fmtLevel(r.isFx, r.price ?? 0)} ${r.priceCurrency}`}>
                                           ATH
                                         </td>
                                       ) : (
                                         <td
                                           className="px-2 py-1 text-right text-xs tabular-nums bg-orange-50 text-orange-700 cursor-help"
-                                          title={`ATH ${formatPrice(r.athPrice ?? 0)} ${r.priceCurrency} (${monthLabel(r.athDate)})`}
+                                          title={`ATH ${fmtLevel(r.isFx, r.athPrice ?? 0)} ${r.priceCurrency} (${monthLabel(r.athDate)})`}
                                         >
                                           {r.drawdown.toFixed(1)}%
                                         </td>
@@ -10347,7 +10349,7 @@ const PortfolioBacktester = () => {
                                             : 'text-gray-300'
                                         }`}
                                         title={r.sma10 !== null && r.price !== null
-                                          ? `${r.signal}: price ${formatPrice(r.price)} ${r.priceCurrency} is ${r.signal === 'BUY' ? 'above' : 'at or below'} its 10-month SMA ${formatPrice(r.sma10)} ${r.priceCurrency} (${fmtRet((r.price / r.sma10 - 1) * 100)}%).\n\n${SIGNAL_RULE}`
+                                          ? `${r.signal}: price ${fmtLevel(r.isFx, r.price)} ${r.priceCurrency} is ${r.signal === 'BUY' ? 'above' : 'at or below'} its 10-month SMA ${fmtLevel(r.isFx, r.sma10)} ${r.priceCurrency} (${fmtRet((r.price / r.sma10 - 1) * 100)}%).\n\n${SIGNAL_RULE}`
                                           : `Not enough history: needs 10 months of prices.\n\n${SIGNAL_RULE}`}
                                       >
                                         {r.signal ?? '–'}
@@ -10367,7 +10369,9 @@ const PortfolioBacktester = () => {
                           : <>Total return (adjusted-close prices) in {marketsCurrency}, converted at each month-end&apos;s exchange rate · </>}
                         every period ends at the latest price · 3Y/5Y/10Y are cumulative (c), not annualised ·
                         colour scaled within each column · price in the asset&apos;s own currency, red if below last month-end ·
-                        Curr DD and Signal use the asset&apos;s own currency, like the Annual and Monthly tabs · – = not enough history
+                        Curr DD and Signal use the asset&apos;s own currency, like the Annual and Monthly tabs ·
+                        FX rows read BASE/OTHER (units of the other currency per 1 base, cross rates via PLN), so + = the base
+                        currency strengthened; their price, Curr DD and Signal are on that rate · – = not enough history
                       </p>
                     </>
                   )}
