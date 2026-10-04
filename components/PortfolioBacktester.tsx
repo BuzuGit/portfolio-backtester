@@ -593,6 +593,12 @@ type RechartsCustomizedProps = {
   height?: number;
 };
 
+/** Right-edge bubbles as a component, for `<Customized component={<EdgeBubbles defs={...} />} />`.
+ *  Recharts clones the element and passes in the chart geometry. Defined at module scope so it
+ *  keeps one identity across renders (see DivergingBar below for why that matters). */
+const EdgeBubbles = (props: Partial<RechartsCustomizedProps> & { defs: BubbleDef[] }) =>
+  renderEdgeBubbles(props as RechartsCustomizedProps, props.defs);
+
 /** Definition for a single right-edge bubble (colored label at chart's right edge). */
 interface BubbleDef {
   value: number;   // numeric value (used for Y positioning via yAxis.scale)
@@ -1681,6 +1687,8 @@ const PortfolioBacktester = () => {
   // Markets "Returns" (period returns, the default) or "Stats" (CAGR, Vol, Sharpe, drawdowns and
   // stress-year returns for the selected period) for the asset sections.
   const [marketsView, setMarketsView] = useState<'returns' | 'stats'>('returns');
+  // How much history the Macro / Country rate & inflation charts show (shared by all of them).
+  const [marketsChartRange, setMarketsChartRange] = useState<'1Y' | '3Y' | '5Y' | '10Y' | 'Max'>('Max');
   // Each view remembers its own period: Stats opens on 5Y (a year or more is what its CAGR / Vol /
   // Sharpe need), Returns keeps whatever was last chosen there. Switching view swaps them over.
   const marketsSavedPeriod = useRef<Record<'returns' | 'stats', MarketsPeriod>>({ returns: 'YTD', stats: '5Y' });
@@ -10470,6 +10478,114 @@ const PortfolioBacktester = () => {
               </>
             );
 
+            // ---- MACRO CHARTS ----
+            // Under the "Inflation 1Y rate", "Reference Rates" and "10Y Rates" sections:
+            //  - Macro page: one line per country, each ending in a bubble with today's value
+            //    (the app's shared right-edge bubbles, which push apart so they never overlap);
+            //  - Country page: a monthly bar chart of that country's series, black above zero,
+            //    red below (like the rolling-return bars elsewhere in the app).
+            // History comes from the row (inflation ends at the last real CPI print); the range
+            // buttons (1Y … Max, default Max) are shared by every chart.
+            const ymKey = (d: string) => Number(d.slice(0, 4)) * 12 + Number(d.slice(5, 7)) - 1;
+            const shortMonth = (d: string) => `${MONTHS[Number(d.slice(5, 7)) - 1]} ${d.slice(2, 4)}`;
+            const countryCode = (r: MarketRow) => r.name.trim().split(/\s+/).pop() || r.ticker; // "Rate PL" -> "PL"
+            const SERIES_COLOURS = Object.values(CHART_PALETTE);
+            const RANGE_MONTHS = { '1Y': 12, '3Y': 36, '5Y': 60, '10Y': 120, 'Max': Infinity } as const;
+            const macroChart = (s: { name: string; rows: MarketRow[] }) => {
+              const kind = s.rows.every(r => r.kind === 'cpiyoy') ? 'cpiyoy' : s.rows.every(r => r.kind === 'rate') ? 'rate' : null;
+              const rows = s.rows.filter(r => (r.history?.length ?? 0) > 1);
+              if (!kind || rows.length === 0) return null;
+              const latest = Math.max(...rows.map(r => ymKey(r.history![r.history!.length - 1].date)));
+              const cutoff = latest - RANGE_MONTHS[marketsChartRange];
+              const inRange = (d: string) => ymKey(d) >= cutoff;
+              const dp = kind === 'cpiyoy' ? 1 : 2;
+              const title = kind === 'cpiyoy' ? 'Inflation, 1Y rate' : s.name;
+              const header = (
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-semibold text-gray-700">{title} · history</span>
+                  <div className="flex gap-1">
+                    {(['1Y', '3Y', '5Y', '10Y', 'Max'] as const).map(rg => (
+                      <button key={rg} type="button" onClick={() => setMarketsChartRange(rg)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                          marketsChartRange === rg ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}>{rg}</button>
+                    ))}
+                  </div>
+                </div>
+              );
+              const axisProps = { fontSize: 11, fill: '#6b7280' };
+              const pctTick = (v: number) => `${v.toFixed(v !== 0 && Math.abs(v) < 1 ? 1 : 0)}%`;
+
+              // Country page: one bar chart per row (normally one), black >= 0, red < 0.
+              if (marketsIsCountry) {
+                return rows.map(r => {
+                  const data = r.history!.filter(h => inRange(h.date)).map(h => ({ date: h.date, v: h.v }));
+                  return (
+                    <tr key={`chart-${r.ticker}`}><td colSpan={colCount} className="pt-2 pb-4 px-1">
+                      {header}
+                      <ResponsiveContainer width="100%" height={200}>
+                        <BarChart data={data} margin={{ top: 8, right: 8, left: -8, bottom: 0 }} barCategoryGap={1}>
+                          <XAxis dataKey="date" tickFormatter={shortMonth} tick={axisProps} minTickGap={40} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
+                          <YAxis tickFormatter={pctTick} tick={axisProps} width={44} tickLine={false} axisLine={false} />
+                          <ReferenceLine y={0} stroke="#9ca3af" />
+                          <Tooltip
+                            formatter={(v: number) => [`${v.toFixed(dp)}%`, r.name]}
+                            labelFormatter={(d: string) => shortMonth(d)}
+                            cursor={{ fill: 'rgba(0,0,0,0.05)' }}
+                          />
+                          <Bar dataKey="v" isAnimationActive={false}>
+                            {data.map(d => <Cell key={d.date} fill={d.v < 0 ? '#dc2626' : '#111827'} />)}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </td></tr>
+                  );
+                });
+              }
+
+              // Macro page: all countries in one line chart, merged on date.
+              const byDate = new Map<string, Record<string, number | string>>();
+              rows.forEach(r => r.history!.forEach(h => {
+                if (!inRange(h.date)) return;
+                if (!byDate.has(h.date)) byDate.set(h.date, { date: h.date });
+                byDate.get(h.date)![r.ticker] = h.v;
+              }));
+              const data = Array.from(byDate.values()).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+              const colourOf = (i: number) => SERIES_COLOURS[i % SERIES_COLOURS.length];
+              const bubbles: BubbleDef[] = rows.map((r, i) => {
+                const last = r.history![r.history!.length - 1].v;
+                return { value: last, color: colourOf(i), label: `${countryCode(r)} ${last.toFixed(dp)}%` };
+              });
+              return (
+                <tr key={`chart-${s.name}`}><td colSpan={colCount} className="pt-2 pb-4 px-1">
+                  {header}
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={data} margin={{ top: 8, right: 70, left: -8, bottom: 0 }}>
+                      <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis dataKey="date" tickFormatter={shortMonth} tick={axisProps} minTickGap={40} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
+                      <YAxis tickFormatter={pctTick} tick={axisProps} width={44} tickLine={false} axisLine={false} />
+                      <ReferenceLine y={0} stroke="#9ca3af" />
+                      <Tooltip
+                        formatter={(v: number, key: string) => {
+                          const r = rows.find(x => x.ticker === key);
+                          return [`${v.toFixed(dp)}%`, r ? countryCode(r) : key];
+                        }}
+                        labelFormatter={(d: string) => shortMonth(d)}
+                        itemSorter={item => -(Number(item.value) || 0)}
+                      />
+                      <Legend verticalAlign="top" height={24} iconType="plainline" wrapperStyle={{ fontSize: 11 }}
+                        formatter={(key: string) => { const r = rows.find(x => x.ticker === key); return r ? countryCode(r) : key; }} />
+                      {rows.map((r, i) => (
+                        <Line key={r.ticker} dataKey={r.ticker} stroke={colourOf(i)} strokeWidth={1.5} dot={false}
+                          connectNulls isAnimationActive={false} />
+                      ))}
+                      <Customized component={<EdgeBubbles defs={bubbles} />} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </td></tr>
+              );
+            };
+
             return (
               <div className="mt-2">
                 {/* Page-level filters: currency for every return figure, period for the bars and tiles. */}
@@ -10880,6 +10996,8 @@ const PortfolioBacktester = () => {
                                     </tr>
                                   );
                                 })}
+                                {/* History chart under the Inflation 1Y rate / Reference Rates / 10Y Rates sections */}
+                                {macroChart(s)}
                                 </>)}
                               </React.Fragment>
                             ))}
