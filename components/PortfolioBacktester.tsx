@@ -10178,6 +10178,7 @@ const PortfolioBacktester = () => {
             // Macro rows keep a rate / YoY inflation in the row's price fields; it is a percentage,
             // not a share price, so it is printed as one ("4.00%") rather than through formatPrice.
             const fmtPct = (v: number) => `${v.toFixed(2)}%`;
+            const fmtPct1 = (v: number) => `${v.toFixed(1)}%`; // inflation: one decimal is enough
 
             // Bar chart scale for the focused period: from the most negative to the most positive
             // row, always including zero, so every bar starts from the same zero line. Prices, rates
@@ -10481,9 +10482,9 @@ const PortfolioBacktester = () => {
                                 {/* A little air between one category's last row and the next category's header */}
                                 {si > 0 && <tr><td colSpan={colCount} className="h-4" /></tr>}
                                 {/* Each category carries its own copy of the column headers, with the */}
-                                {/* category name (e.g. "EQUITIES · 4") in the first cell instead of "Asset". */}
+                                {/* category name (e.g. "EQUITIES") in the first cell instead of "Asset". */}
                                 <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
-                                  <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name} · {s.rows.length}</th>
+                                  <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name}</th>
                                   {/* The fixed-width div is what holds this column open: a table ignores min-width */}
                                   {/* on cells, and the bars inside are absolutely positioned so they claim no width. */}
                                   <th className="text-left font-medium px-3 py-2">
@@ -10534,7 +10535,11 @@ const PortfolioBacktester = () => {
                                           onClick={() => openInMonthly(r)}
                                           className="text-gray-800 hover:text-slate-900 hover:underline underline-offset-2 text-left"
                                           title={`${r.ticker} — open full details in the Monthly tab${r.isFx ? ` (shows the sheet's ${r.ticker} series)` : ''}`}
-                                        >{r.name}</button>
+                                        >
+                                          {/* Inflation 1Y rate rows carry today's rate in the name ("Inflation PL - 3.2%"), */}
+                                          {/* so the next column's "Accelerating +0.2 pp" reads against it directly. */}
+                                          {r.kind === 'cpiyoy' && r.price !== null ? `${r.name} - ${fmtPct1(r.price)}` : r.name}
+                                        </button>
                                       </td>
 
                                       {/* Horizontal bar for the focused period; label sits just past the bar's end. */}
@@ -10553,7 +10558,7 @@ const PortfolioBacktester = () => {
                                               className={`text-xs font-semibold whitespace-nowrap cursor-help ${cls}`}
                                               title={`Now ${wk.end.result.toFixed(2)}% (${monthLabel(wk.endDate)}) vs ${wk.start.result.toFixed(2)}% (${monthLabel(wk.startDate)})`}
                                             >
-                                              {verdict}{!flat && <span className="tabular-nums ml-1.5">{diff > 0 ? '+' : '−'}{Math.abs(diff).toFixed(1)} pp</span>}
+                                              {verdict}{!flat && <>{' '}<span className="tabular-nums ml-1">{diff > 0 ? '+' : '−'}{Math.abs(diff).toFixed(1)} pp</span></>}
                                             </div>
                                           );
                                         })() : fv === null ? <span className="text-gray-300 text-xs">–</span> : (
@@ -10596,8 +10601,11 @@ const PortfolioBacktester = () => {
                                           <td className="px-2 py-1 text-right text-xs whitespace-nowrap tabular-nums">
                                             {r.price === null ? <span className="text-gray-300">–</span> : (
                                               <>
-                                                <span className={r.priceUp === true ? 'text-red-600' : 'text-gray-900'}>{fmtPct(r.price)}</span>
-                                                {stale && <span className="text-[10px] text-amber-600 ml-1" title={`Latest value is from ${r.priceDate}${r.kind === 'cpi' ? ' (last CPI print)' : ''}`}>({monthLabel(r.priceDate)})</span>}
+                                                {/* Inflation to one decimal (3.2%); rates keep two (3.75%), where 0.05 matters */}
+                                                <span className={r.priceUp === true ? 'text-red-600' : 'text-gray-900'}>
+                                                  {r.kind === 'cpi' || r.kind === 'cpiyoy' ? fmtPct1(r.price) : fmtPct(r.price)}
+                                                </span>
+                                                {stale && <span className="text-[10px] text-gray-900 ml-1" title={`Latest value is from ${r.priceDate}${r.kind === 'cpi' || r.kind === 'cpiyoy' ? ' (last CPI print)' : ''}`}>({monthLabel(r.priceDate)})</span>}
                                               </>
                                             )}
                                           </td>
