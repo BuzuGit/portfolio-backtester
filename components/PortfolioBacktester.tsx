@@ -647,6 +647,38 @@ function collapseTradePrices(prices: number[]): number[] {
 
 // Shared constants for all right-edge bubbles across charts
 const BUBBLE_W = 62;   // width of the bubble rectangle in pixels
+/**
+ * A horizontal bar for a diverging (gain/loss) chart: rounded 4px at the DATA end, square
+ * where it meets the zero baseline, so the zero line stays one clean edge.
+ *
+ * READ THIS BEFORE TOUCHING ANY DIVERGING BAR CODE. For a bar below zero, Recharts anchors
+ * `x` at the ZERO line and hands over a NEGATIVE `width` — `x` is the bar's right-hand edge,
+ * not its left. Assuming otherwise cost two separate bugs in one sitting: first the corner
+ * radius collapsed and every loss rounded the wrong end, then every loss amount was printed
+ * back at zero, on top of its own red bar. Hence `left`/`right` are derived rather than
+ * assumed, and the sign comes from the datum (`payload.profit`) rather than from the props.
+ *
+ * Lives at module scope on purpose: defining a component inside a render gives it a fresh
+ * identity every time, which makes React throw away and rebuild every bar on each repaint.
+ */
+const DivergingBar = (props: {
+  x?: number; y?: number; width?: number; height?: number; fill?: string; payload?: { profit?: number };
+}) => {
+  const x = Number(props.x ?? 0), y = Number(props.y ?? 0);
+  const rawW = Number(props.width ?? 0);
+  const w = Math.abs(rawW), h = Math.abs(Number(props.height ?? 0));
+  if (!isFinite(x) || !isFinite(y) || !w || !h) return <path d="" />;
+  const left = Math.min(x, x + rawW);
+  const right = left + w;
+  const r = Math.max(0, Math.min(4, h / 2, w));
+  const d = Number(props.payload?.profit ?? 0) >= 0
+    // Gain: grows rightwards, so the rounded end is the right one.
+    ? `M${left},${y} H${right - r} Q${right},${y} ${right},${y + r} V${y + h - r} Q${right},${y + h} ${right - r},${y + h} H${left} Z`
+    // Loss: grows leftwards, so the rounded end is the left one.
+    : `M${right},${y} H${left + r} Q${left},${y} ${left},${y + r} V${y + h - r} Q${left},${y + h} ${left + r},${y + h} H${right} Z`;
+  return <path d={d} fill={props.fill} />;
+};
+
 const BUBBLE_H = 20;   // height of the bubble rectangle
 const BUBBLE_GAP = 2;  // minimum pixel gap between adjacent bubbles
 const BUBBLE_RX = 4;   // border-radius of rounded corners
@@ -14419,30 +14451,8 @@ const PortfolioBacktester = () => {
                           // bars are never allowed to fill their slot.
                           const chartHeight = Math.max(180, barRows.length * 28 + 40);
 
-                          // A bar is rounded at the DATA end and square where it meets zero, so the
-                          // zero line stays a clean straight edge and the eye reads length from a
-                          // single baseline. Recharts always hands over x as the LEFT edge with a
-                          // positive width, so which pair of corners to round depends on the sign.
-                          // The sign comes from the row itself, NOT from props.value: Recharts does
-                          // not hand a plain signed number to a custom shape, so testing it sent
-                          // every loss down the positive branch and collapsed its corner radius to
-                          // zero. `payload` is the datum we supplied, so `profit` is unambiguous.
-                          // Width is read through Math.abs for the same reason — defensive, since a
-                          // negative width would silently produce r = 0 and square off the end.
-                          const DivergingBar = (props: { x?: number; y?: number; width?: number; height?: number; fill?: string; payload?: { profit?: number } }) => {
-                            const x = Number(props.x ?? 0), y = Number(props.y ?? 0);
-                            const w = Math.abs(Number(props.width ?? 0)), h = Math.abs(Number(props.height ?? 0));
-                            if (!isFinite(x) || !isFinite(y) || !w || !h) return <path d="" />;
-                            const left = Math.min(x, x + Number(props.width ?? 0));
-                            const right = left + w;
-                            const r = Math.max(0, Math.min(4, h / 2, w));
-                            const d = Number(props.payload?.profit ?? 0) >= 0
-                              // Gain: grows rightwards, so the rounded end is the right one.
-                              ? `M${left},${y} H${right - r} Q${right},${y} ${right},${y + r} V${y + h - r} Q${right},${y + h} ${right - r},${y + h} H${left} Z`
-                              // Loss: grows leftwards, so the rounded end is the left one.
-                              : `M${right},${y} H${left + r} Q${left},${y} ${left},${y + r} V${y + h - r} Q${left},${y + h} ${left + r},${y + h} H${right} Z`;
-                            return <path d={d} fill={props.fill} />;
-                          };
+                          // The bar shape itself is DivergingBar, at module scope — see the note
+                          // there about Recharts' negative widths before changing anything.
 
                           return (
                             <div className="mb-4">
