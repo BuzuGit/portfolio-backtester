@@ -5,9 +5,11 @@
   its arithmetic and none of its drawing, so it can be tested on its own against the real
   spreadsheet (the drawing lives in components/PortfolioBacktester.tsx).
 
-  WHAT GOES IN: the Lookup tab decides. Only rows whose SnapshotCategory is "Assets" appear,
-  grouped into sections by SnapshotSubCategory (in the order the groups first appear in the
-  sheet) and ordered inside each group by SnapshotSubCategoryOrder.
+  WHAT GOES IN: the Lookup tab decides. A table shows the rows placed in its SnapshotCategory
+  (e.g. "Assets"), grouped into sections by SnapshotSubCategory (in the order the groups first
+  appear in the sheet) and ordered inside each group by SnapshotSubCategoryOrder. One row can be
+  placed in several categories — the three cells hold comma-separated lists paired by position
+  ("Assets, Factor" / "Equities, World" / "4, 1") — see SnapshotPlacement in fetchData.ts.
 
   HOW A RETURN IS MEASURED: every period ends at the asset's latest monthly price (the live,
   month-to-date row, the same "now" the rest of the app uses) and starts at the month-end N
@@ -125,6 +127,7 @@ export const buildReturnMatrix = (
   data: AssetRow[] | null,
   lookup: AssetLookup[],
   currency: MarketsCurrency,
+  category = 'Assets', // which SnapshotCategory this table shows
 ): ReturnMatrix | null => {
   if (!data || data.length === 0) return null;
 
@@ -134,11 +137,13 @@ export const buildReturnMatrix = (
   rows.forEach((r, i) => indexByMonth.set(monthKey(String(r.date)), i));
   const endDate = String(rows[rows.length - 1].date);
 
-  // Only the "Assets" rows; "-" was already turned into blank by the lookup parser.
-  const assets = lookup.filter(a => (a.snapshotCategory || '').toLowerCase() === 'assets');
-
+  // Only rows placed in this category. A row can sit in several categories (e.g. IWDA in both
+  // "Assets" and "Factor"), each with its own subcategory and order — pick THIS category's one.
+  const wanted = category.toLowerCase();
   const sectionsMap = new Map<string, { row: MarketRow; order: number; sheetIndex: number }[]>();
-  assets.forEach((a, sheetIndex) => {
+  lookup.forEach((a, sheetIndex) => {
+    const placement = (a.snapshots || []).find(s => s.category.toLowerCase() === wanted);
+    if (!placement) return;
     const nativeCcy = a.currency || 'PLN';
 
     // The asset's latest month with a price. Normally the live month; if the sheet hasn't
@@ -206,7 +211,7 @@ export const buildReturnMatrix = (
       }
     }
 
-    const section = a.snapshotSubcategory || 'Other';
+    const section = placement.subcategory || 'Other';
     if (!sectionsMap.has(section)) sectionsMap.set(section, []);
     sectionsMap.get(section)!.push({
       row: {
@@ -214,7 +219,7 @@ export const buildReturnMatrix = (
         drawdown, isAtAth, athPrice, athDate, sma10, signal,
       },
       // No order number = after the numbered rows; ties keep the sheet's own order.
-      order: a.snapshotOrder ?? Infinity,
+      order: placement.order ?? Infinity,
       sheetIndex,
     });
   });
