@@ -10127,7 +10127,7 @@ const PortfolioBacktester = () => {
             // 5-year trend line drawn as a tiny SVG: green if it ends above where it started, red if below.
             const sparkline = (vals: number[]) => {
               if (vals.length < 2) return <span className="text-gray-300">–</span>;
-              const W = 96, H = 24;
+              const W = 80, H = 24;
               const lo = Math.min(...vals), hi = Math.max(...vals), sp = (hi - lo) || 1;
               const pts = vals.map((v, i) => `${((i / (vals.length - 1)) * W).toFixed(1)},${(H - 1 - ((v - lo) / sp) * (H - 2)).toFixed(1)}`).join(' ');
               const col = vals[vals.length - 1] >= vals[0] ? '#15803d' : '#b91c1c';
@@ -10143,6 +10143,11 @@ const PortfolioBacktester = () => {
             const monthLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleString('en-GB', { month: 'short', year: 'numeric' });
             const isMtd = !!m && m.endDate.slice(0, 7) === new Date().toISOString().slice(0, 7);
             const summary = m ? summariseMatrix(m, marketsPeriod) : null;
+            // Hover text explaining the Signal column (header and every BUY/SELL cell).
+            const SIGNAL_RULE = '10-month SMA trend signal (same rule as the Monthly tab):\n'
+              + '• SMA = average of the last 10 month-end prices, current month included, in the asset\'s own currency.\n'
+              + '• BUY when the latest price is above the SMA, SELL when it is at or below it.\n'
+              + '• Needs a price in each of those 10 months; otherwise shown as –.';
             const colCount = 2 + (m ? m.columns.length : 0) + 4; // name + bar + periods + trend + price + DD + signal
 
             return (
@@ -10226,23 +10231,25 @@ const PortfolioBacktester = () => {
                                 {/* category name (e.g. "EQUITIES · 4") in the first cell instead of "Asset". */}
                                 <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
                                   <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name} · {s.rows.length}</th>
-                                  <th className="text-left font-medium px-3 py-2 min-w-[16rem]">
-                                    <span className="text-gray-800 font-semibold">{marketsPeriod} return</span>
+                                  {/* The fixed-width div is what holds this column open: a table ignores min-width */}
+                                  {/* on cells, and the bars inside are absolutely positioned so they claim no width. */}
+                                  <th className="text-left font-medium px-3 py-2">
+                                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod} return</span></div>
                                   </th>
                                   {m.columns.map(p => (
                                     <th
                                       key={p}
-                                      className={`text-center px-1 py-2 w-16 ${p === marketsPeriod ? 'text-gray-900 font-bold' : 'font-medium'}`}
+                                      className={`text-center px-0.5 py-2 w-14 ${p === marketsPeriod ? 'text-gray-900 font-bold' : 'font-medium'}`}
                                     >
                                       <span className={p === marketsPeriod ? 'border-b-2 border-slate-800 pb-0.5' : ''}>
                                         {p}{['3Y', '5Y', '10Y'].includes(p) && <sup className="text-[8px] ml-px">c</sup>}
                                       </span>
                                     </th>
                                   ))}
-                                  <th className="text-left font-medium px-3 py-2">5Y trend</th>
-                                  <th className="text-right font-medium px-3 py-2">Price</th>
-                                  <th className="text-right font-medium px-3 py-2 whitespace-nowrap">Current DD</th>
-                                  <th className="text-center font-medium px-3 py-2 whitespace-nowrap">10SMA signal</th>
+                                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap">5Y trend</th>
+                                  <th className="text-right font-medium px-2 py-2">Price</th>
+                                  <th className="text-right font-medium px-2 py-2 whitespace-nowrap" title="Current drawdown: how far the latest price is below its all-time high (asset's own currency)">Curr DD</th>
+                                  <th className="text-center font-medium px-2 py-2 cursor-help" title={SIGNAL_RULE}>Signal</th>
                                 </tr>
                                 {s.rows.map(r => {
                                   const fv = r.returns[marketsPeriod];
@@ -10255,7 +10262,7 @@ const PortfolioBacktester = () => {
                                       {/* Horizontal bar for the focused period; label sits just past the bar's end */}
                                       <td className="px-3 py-1">
                                         {fv === null ? <span className="text-gray-300 text-xs">–</span> : (
-                                          <div className="relative h-4 mx-12">
+                                          <div className="relative h-4 mx-10">
                                             <div className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: `${zeroPct}%` }} />
                                             <div
                                               className="absolute top-0.5 bottom-0.5 rounded-sm"
@@ -10275,22 +10282,22 @@ const PortfolioBacktester = () => {
                                         if (v === null) return <td key={p} className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
                                         const bg = returnHeatColor(Math.max(-1, Math.min(1, v / m.colourCaps[p])) * 40);
                                         return (
-                                          <td key={p} className="px-0.5 py-0.5">
-                                            <div className="rounded px-1.5 py-1 text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
+                                          <td key={p} className="px-px py-0.5">
+                                            <div className="rounded px-1 py-1 text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
                                               {fmtRet(v)}
                                             </div>
                                           </td>
                                         );
                                       })}
 
-                                      <td className="px-3 py-1">{sparkline(r.spark)}</td>
+                                      <td className="px-2 py-1">{sparkline(r.spark)}</td>
 
                                       {/* Latest price in the asset's own currency: red if below last month-end, black otherwise */}
-                                      <td className="px-3 py-1 text-right whitespace-nowrap tabular-nums">
-                                        {r.price === null ? <span className="text-gray-300 text-xs">–</span> : (
+                                      <td className="px-2 py-1 text-right text-xs whitespace-nowrap tabular-nums">
+                                        {r.price === null ? <span className="text-gray-300">–</span> : (
                                           <>
                                             <span className={r.priceUp === false ? 'text-red-600' : 'text-gray-900'}>{formatPrice(r.price)}</span>
-                                            <span className="text-[10px] text-gray-400 ml-1">{r.priceCurrency}</span>
+                                            <span className="text-[9px] text-gray-400 ml-0.5">{r.priceCurrency}</span>
                                             {stale && <span className="text-[10px] text-amber-600 ml-1" title={`Latest price is from ${r.priceDate}`}>({monthLabel(r.priceDate)})</span>}
                                           </>
                                         )}
@@ -10298,14 +10305,14 @@ const PortfolioBacktester = () => {
 
                                       {/* Current drawdown from the all-time high — same look as the Annual tab's "Curr DD" */}
                                       {r.drawdown === null ? (
-                                        <td className="px-3 py-1 text-right text-xs text-gray-300">–</td>
+                                        <td className="px-2 py-1 text-right text-xs text-gray-300">–</td>
                                       ) : r.isAtAth ? (
-                                        <td className="px-3 py-1 text-right text-xs font-semibold bg-green-100 text-green-700 cursor-help" title={`At all-time high: ${formatPrice(r.price ?? 0)} ${r.priceCurrency}`}>
+                                        <td className="px-2 py-1 text-right text-xs font-semibold bg-green-100 text-green-700 cursor-help" title={`At all-time high: ${formatPrice(r.price ?? 0)} ${r.priceCurrency}`}>
                                           ATH
                                         </td>
                                       ) : (
                                         <td
-                                          className="px-3 py-1 text-right text-xs tabular-nums bg-orange-50 text-orange-700 cursor-help"
+                                          className="px-2 py-1 text-right text-xs tabular-nums bg-orange-50 text-orange-700 cursor-help"
                                           title={`ATH ${formatPrice(r.athPrice ?? 0)} ${r.priceCurrency} (${monthLabel(r.athDate)})`}
                                         >
                                           {r.drawdown.toFixed(1)}%
@@ -10314,12 +10321,14 @@ const PortfolioBacktester = () => {
 
                                       {/* 10-month SMA signal — same rule and colours as the Monthly tab */}
                                       <td
-                                        className={`px-3 py-1 text-center text-xs font-medium ${
+                                        className={`px-2 py-1 text-center text-xs font-medium cursor-help ${
                                           r.signal === 'BUY' ? 'bg-green-100 text-green-700'
                                             : r.signal === 'SELL' ? 'bg-red-100 text-red-700'
                                             : 'text-gray-300'
                                         }`}
-                                        title={r.sma10 !== null ? `10-month SMA ${formatPrice(r.sma10)} ${r.priceCurrency}` : 'Needs 10 months of prices'}
+                                        title={r.sma10 !== null && r.price !== null
+                                          ? `${r.signal}: price ${formatPrice(r.price)} ${r.priceCurrency} is ${r.signal === 'BUY' ? 'above' : 'at or below'} its 10-month SMA ${formatPrice(r.sma10)} ${r.priceCurrency} (${fmtRet((r.price / r.sma10 - 1) * 100)}%).\n\n${SIGNAL_RULE}`
+                                          : `Not enough history: needs 10 months of prices.\n\n${SIGNAL_RULE}`}
                                       >
                                         {r.signal ?? '–'}
                                       </td>
@@ -10336,7 +10345,7 @@ const PortfolioBacktester = () => {
                         Total return (adjusted-close prices) in {marketsCurrency}, converted at each month-end&apos;s exchange rate ·
                         every period ends at the latest price · 3Y/5Y/10Y are cumulative (c), not annualised ·
                         colour scaled within each column · price in the asset&apos;s own currency, red if below last month-end ·
-                        Current DD and 10SMA signal use the asset&apos;s own currency, like the Annual and Monthly tabs · – = not enough history
+                        Curr DD and Signal use the asset&apos;s own currency, like the Annual and Monthly tabs · – = not enough history
                       </p>
                     </>
                   )}
