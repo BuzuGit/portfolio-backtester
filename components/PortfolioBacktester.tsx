@@ -10499,10 +10499,9 @@ const PortfolioBacktester = () => {
               const cutoff = latest - RANGE_MONTHS[marketsChartRange];
               const inRange = (d: string) => ymKey(d) >= cutoff;
               const dp = kind === 'cpiyoy' ? 1 : 2;
-              const title = kind === 'cpiyoy' ? 'Inflation, 1Y rate' : s.name;
+              // No title: the chart sits right under its own section, which already names it.
               const header = (
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-gray-700">{title} · history</span>
+                <div className="flex items-center justify-end mb-1">
                   <div className="flex gap-1">
                     {(['1Y', '3Y', '5Y', '10Y', 'Max'] as const).map(rg => (
                       <button key={rg} type="button" onClick={() => setMarketsChartRange(rg)}
@@ -10559,7 +10558,7 @@ const PortfolioBacktester = () => {
               return (
                 <tr key={`chart-${s.name}`}><td colSpan={colCount} className="pt-2 pb-4 px-1">
                   {header}
-                  <ResponsiveContainer width="100%" height={280}>
+                  <ResponsiveContainer width="100%" height={364}>
                     <LineChart data={data} margin={{ top: 8, right: 70, left: -8, bottom: 0 }}>
                       <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e5e7eb" />
                       <XAxis dataKey="date" tickFormatter={shortMonth} tick={axisProps} minTickGap={40} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
