@@ -96,11 +96,19 @@ export interface AssetLookup {
   fx: string;               // e.g., "USDPLN", "SGDPLN", "" for PLN assets
   assetClass: string;       // e.g., "Equities", "Fixed Income", "Alternatives"
   assetSubcategory: string; // e.g., "US Stocks", "Emerging Markets", "Gold" — finer grouping within asset class
-  // Markets tab instructions (columns 7-9). Blank or "-" in the sheet arrives here as '' / null,
-  // which means "leave this row out of the Markets tab".
-  snapshotCategory?: string;     // which Markets section the row feeds, e.g. "Assets"
-  snapshotSubcategory?: string;  // group inside that section, e.g. "Equities", "Alternatives"
-  snapshotOrder?: number | null; // row order inside its group (1 = first)
+  // Markets tab instructions (columns 7-9). One entry per Markets section the row appears in;
+  // an empty list (blank or "-" in the sheet) means "leave this row out of the Markets tab".
+  snapshots?: SnapshotPlacement[];
+}
+
+// Where one Lookup row appears in the Markets tab. A row can appear in several sections: the
+// sheet cells hold comma-separated lists that pair up BY POSITION, so
+//   SnapshotCategory "Assets, Factor" · SnapshotSubCategory "Equities, World" · Order "4, 1"
+// means: in Assets, under Equities, 4th row — AND in Factor, under World, 1st row.
+export interface SnapshotPlacement {
+  category: string;      // which Markets section, e.g. "Assets", "Factor"
+  subcategory: string;   // group inside that section, e.g. "Equities"; '' if not given
+  order: number | null;  // row order inside its group (1 = first); null if not given
 }
 
 // Annual portfolio summary data from the "Years" sheet
@@ -588,18 +596,26 @@ function parseLookupTable(csvText: string): AssetLookup[] {
     // Asset subcategory defaults to empty string if not specified (column 6)
     const assetSubcategory = values.length > 5 ? values[5].trim() : '';
     // Markets tab columns 7-9 (SnapshotCategory, SnapshotSubCategory, SnapshotSubCategoryOrder).
-    // A "-" is the sheet's way of saying "not included", so it is treated exactly like a blank.
-    const snap = (i: number) => {
-      const v = values.length > i ? values[i].trim() : '';
-      return v === '-' ? '' : v;
-    };
-    const snapshotCategory = snap(6);
-    const snapshotSubcategory = snap(7);
-    const orderNum = parseFloat(snap(8));
-    const snapshotOrder = isNaN(orderNum) ? null : orderNum;
+    // Each cell may hold a comma-separated list; item N of each list belongs together (see
+    // SnapshotPlacement). A "-" means "not included", so it is treated exactly like a blank.
+    const snapList = (i: number): string[] =>
+      (values.length > i ? values[i] : '').split(',').map(v => v.trim()).map(v => (v === '-' ? '' : v));
+    const categories = snapList(6);
+    const subcategories = snapList(7);
+    const orders = snapList(8);
+    const snapshots: SnapshotPlacement[] = [];
+    categories.forEach((category, k) => {
+      if (!category) return; // a blank slot in the list places the row nowhere
+      const orderNum = parseFloat(orders[k] ?? '');
+      snapshots.push({
+        category,
+        subcategory: subcategories[k] ?? '',
+        order: isNaN(orderNum) ? null : orderNum,
+      });
+    });
 
     if (ticker && name) {
-      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshotCategory, snapshotSubcategory, snapshotOrder });
+      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshots });
     }
   }
 
