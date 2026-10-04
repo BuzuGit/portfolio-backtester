@@ -22,7 +22,7 @@ import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
-import { buildReturnMatrix, summariseMatrix, snapshotCategories, formatFxRate, MARKETS_PERIODS, MarketsCurrency, MarketsPeriod } from '@/lib/markets';
+import { buildReturnMatrix, summariseMatrix, snapshotCategories, formatFxRate, MARKETS_PERIODS, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -10152,6 +10152,31 @@ const PortfolioBacktester = () => {
             const summary = m ? summariseMatrix(m, marketsPeriod) : null;
             // A row's level: exchange rates to 4 decimals, share prices through the app-wide formatPrice.
             const fmtLevel = (isFx: boolean, v: number) => (isFx ? formatFxRate(v) : formatPrice(v));
+            // Hover text for a return cell: which prices, FX rates and dates produced the number.
+            //   S&P 500 · YTD return in EUR: +5.96%
+            //   Start 31 Dec 2025: 820.1 USD × 3.5918 (USDPLN) ÷ 4.2166 (EURPLN) = 698.6 EUR
+            //   End 31 Oct 2026 (month to date): 833.8 USD × 3.8958 (USDPLN) ÷ 4.3884 (EURPLN) = 740.2 EUR
+            //   Return = end ÷ start − 1
+            const dayLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+            const fmtWorking = (r: MarketRow, w: ValueWorking): string => {
+              const first = r.isFx
+                ? (w.firstLabel ? `${w.firstLabel} ${formatFxRate(w.first)}` : formatFxRate(w.first))
+                : `${formatPrice(w.first)} ${w.firstLabel}`;
+              if (!w.ops.length) return first;
+              const ops = w.ops.map(o => ` ${o.op} ${formatFxRate(o.value)} (${o.label})`).join('');
+              return `${first}${ops} = ${fmtLevel(r.isFx, w.result)} ${w.resultUnit}`;
+            };
+            const returnTooltip = (r: MarketRow, p: MarketsPeriod, v: number): string => {
+              const w = r.working[p];
+              const ccy = marketsCurrency === 'Original' ? `${r.priceCurrency} (own currency)` : marketsCurrency;
+              const head = `${r.name} · ${p} return${r.isFx ? '' : ` in ${ccy}`}: ${fmtRet(v)}%`;
+              if (!w) return head;
+              const mtd = isMtd && w.endDate.slice(0, 7) === m?.endDate.slice(0, 7) ? ' (month to date)' : '';
+              return `${head}\n`
+                + `Start ${dayLabel(w.startDate)}: ${fmtWorking(r, w.start)}\n`
+                + `End ${dayLabel(w.endDate)}${mtd}: ${fmtWorking(r, w.end)}\n`
+                + `Return = end ÷ start − 1 = ${(w.end.result / w.start.result - 1 >= 0 ? '+' : '')}${((w.end.result / w.start.result - 1) * 100).toFixed(2)}%`;
+            };
             // Hover text explaining the Signal column (header and every BUY/SELL cell).
             const SIGNAL_RULE = '10-month SMA trend signal (same rule as the Monthly tab):\n'
               + '• SMA = average of the last 10 month-end prices, current month included, in the asset\'s own currency.\n'
@@ -10304,8 +10329,8 @@ const PortfolioBacktester = () => {
                                         if (v === null) return <td key={p} className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
                                         const bg = returnHeatColor(Math.max(-1, Math.min(1, v / m.colourCaps[p])) * 40);
                                         return (
-                                          <td key={p} className="px-px py-0.5">
-                                            <div className="rounded px-1 py-1 text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
+                                          <td key={p} className="px-px py-0.5" title={returnTooltip(r, p, v)}>
+                                            <div className="rounded px-1 py-1 cursor-help text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
                                               {fmtRet(v)}
                                             </div>
                                           </td>

@@ -42,11 +42,33 @@ const PERIOD_MONTHS: Record<Exclude<MarketsPeriod, 'YTD'>, number> = {
 // The trend sparkline always shows 5 years: 60 monthly steps = 61 month-end points.
 const SPARK_POINTS = 61;
 
+/**
+ * How one value in the table was built from the sheet, so a tooltip can show the working:
+ *   asset converted to EUR:  833.80 USD × 3.8958 (USDPLN) ÷ 4.3884 (EURPLN) = 740.21
+ *   FX cross rate USD/EUR:   USDPLN 3.8958 ÷ 4.3884 (EURPLN) = 0.8877
+ * `first` is the starting number (a price, or a rate for FX rows), `ops` the FX steps applied.
+ */
+export interface ValueWorking {
+  first: number;
+  firstLabel: string;   // unit after a price ("USD"), or the rate's name before an FX value ("USDPLN")
+  ops: { op: '×' | '÷'; value: number; label: string }[];
+  result: number;
+  resultUnit: string;   // currency the result is in
+}
+
+export interface PeriodWorking {
+  startDate: string;
+  start: ValueWorking;
+  endDate: string;
+  end: ValueWorking;
+}
+
 export interface MarketRow {
   ticker: string;
   name: string;             // for FX rows, the pair as shown, e.g. "USD/EUR"
   isFx: boolean;            // FX row: price/DD/signal are on the shown exchange rate
   returns: Record<MarketsPeriod, number | null>; // percent; null = not enough history (shown as "–")
+  working: Record<MarketsPeriod, PeriodWorking | null>; // the prices/rates/dates behind each return
   spark: number[];          // last 5 years of prices in the SELECTED currency, oldest first
   price: number | null;     // latest price in the asset's OWN currency
   priceCurrency: string;    // e.g. "USD"
@@ -169,6 +191,18 @@ export const buildReturnMatrix = (
     const positive = (r: AssetRow, col: string): number | null => { const v = Number(r[col]); return v > 0 ? v : null; };
     let conv = (r: AssetRow) => convertedPrice(r, a.ticker, nativeCcy, currency);
     let nat = (r: AssetRow) => positive(r, a.ticker);
+    // The same value as conv(), but showing its working (for the return-cell tooltips).
+    const rateOf = (r: AssetRow, c: string) => Number(r[`${c}PLN`]);
+    let explain = (r: AssetRow): ValueWorking | null => {
+      const p = positive(r, a.ticker), v = conv(r);
+      if (p === null || v === null) return null;
+      const ops: ValueWorking['ops'] = [];
+      if (currency !== 'Original' && nativeCcy !== currency) {
+        if (nativeCcy !== 'PLN') ops.push({ op: '×', value: rateOf(r, nativeCcy), label: `${nativeCcy}PLN` });
+        if (currency !== 'PLN') ops.push({ op: '÷', value: rateOf(r, currency), label: `${currency}PLN` });
+      }
+      return { first: p, firstLabel: nativeCcy, ops, result: v, resultUnit: currency === 'Original' ? nativeCcy : currency };
+    };
     let name = a.name;
     let priceCurrency = nativeCcy;
     const isFx = isFxPair(a);
@@ -186,6 +220,10 @@ export const buildReturnMatrix = (
       if (currency === 'Original') {
         base = pairBase; other = pairQuote;
         conv = nat = r => positive(r, a.ticker);
+        explain = r => {
+          const v = positive(r, a.ticker);
+          return v === null ? null : { first: v, firstLabel: a.ticker, ops: [], result: v, resultUnit: pairQuote };
+        };
       } else {
         base = currency;
         other = pairBase !== currency ? pairBase : pairQuote;
@@ -195,6 +233,16 @@ export const buildReturnMatrix = (
         conv = nat = r => {
           const b = toPln(r, base), o = toPln(r, other);
           return b !== null && o !== null ? b / o : null;
+        };
+        // e.g. USD/EUR = USDPLN ÷ EURPLN;  USD/PLN = USDPLN;  PLN/USD = 1 ÷ USDPLN
+        explain = r => {
+          const b = toPln(r, base), o = toPln(r, other);
+          if (b === null || o === null) return null;
+          return {
+            first: b, firstLabel: base === 'PLN' ? '' : `${base}PLN`,
+            ops: other === 'PLN' ? [] : [{ op: '÷', value: o, label: `${other}PLN` }],
+            result: b / o, resultUnit: other,
+          };
         };
       }
       name = `${base}/${other}`;
@@ -207,7 +255,8 @@ export const buildReturnMatrix = (
     while (endIdx >= 0 && nat(rows[endIdx]) === null) endIdx--;
 
     const returns = {} as Record<MarketsPeriod, number | null>;
-    MARKETS_PERIODS.forEach(p => { returns[p] = null; });
+    const working = {} as Record<MarketsPeriod, PeriodWorking | null>;
+    MARKETS_PERIODS.forEach(p => { returns[p] = null; working[p] = null; });
     let spark: number[] = [];
     let price: number | null = null;
     let priceUp: boolean | null = null;
@@ -223,6 +272,7 @@ export const buildReturnMatrix = (
       const endRow = rows[endIdx];
       const endKey = monthKey(String(endRow.date));
       const endValue = conv(endRow);
+      const endWorking = explain(endRow);
 
       MARKETS_PERIODS.forEach(p => {
         // YTD starts at last December; everything else N months before the end.
@@ -234,6 +284,10 @@ export const buildReturnMatrix = (
         const startValue = conv(rows[startIdx]);
         if (startValue === null) return;
         returns[p] = (endValue / startValue - 1) * 100;
+        const startWorking = explain(rows[startIdx]);
+        if (startWorking && endWorking) {
+          working[p] = { startDate: String(rows[startIdx].date), start: startWorking, endDate: String(endRow.date), end: endWorking };
+        }
       });
 
       // 5-year trend line in the selected currency. Months with no price are simply skipped.
@@ -271,7 +325,7 @@ export const buildReturnMatrix = (
     if (!sectionsMap.has(section)) sectionsMap.set(section, []);
     sectionsMap.get(section)!.push({
       row: {
-        ticker: a.ticker, name, isFx, returns, spark, price, priceCurrency, priceUp, priceDate,
+        ticker: a.ticker, name, isFx, returns, working, spark, price, priceCurrency, priceUp, priceDate,
         drawdown, isAtAth, athPrice, athDate, sma10, signal,
       },
       // No order number = after the numbered rows; ties keep the sheet's own order.
