@@ -542,11 +542,12 @@ export const buildCountryMatrix = (
   const { rows, indexByMonth, endDate } = prepareRows(data);
   const isThisCountry = (a: AssetLookup) => (a.snapshotCountry || '').toUpperCase() === country;
   // A row's group: its placement in `preferred` (Assets for prices, Macro for macro rows),
-  // else its first placement anywhere, else its Asset Class.
+  // else its first placement anywhere, else its Asset Class. Its order inside the group comes
+  // from SnapshotCountryOrder (smaller first), falling back to that placement's order.
   const groupOf = (a: AssetLookup, preferred: string) => {
     const p = (a.snapshots || []).find(s => s.category.toLowerCase() === preferred.toLowerCase())
       ?? (a.snapshots || [])[0];
-    return { section: p?.subcategory || a.assetClass || 'Other', order: p?.order ?? Infinity };
+    return { section: p?.subcategory || a.assetClass || 'Other', order: a.snapshotCountryOrder ?? p?.order ?? Infinity };
   };
 
   const assets: PlacedRow[] = [];

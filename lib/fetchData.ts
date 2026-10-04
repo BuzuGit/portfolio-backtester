@@ -102,6 +102,8 @@ export interface AssetLookup {
   // Markets "Country" view (column 10, SnapshotCountry): the country this row belongs to, written
   // as its currency code ("PLN", "USD"...). '' = not part of any country page.
   snapshotCountry?: string;
+  // Column 11, SnapshotCountryOrder: row order on that country page (smaller first). null = not given.
+  snapshotCountryOrder?: number | null;
 }
 
 // Where one Lookup row appears in the Markets tab. A row can appear in several sections: the
@@ -619,9 +621,12 @@ function parseLookupTable(csvText: string): AssetLookup[] {
 
     // Column 10, SnapshotCountry: a single currency code; "-" counts as blank.
     const snapshotCountry = (snapList(9)[0] || '').toUpperCase();
+    // Column 11, SnapshotCountryOrder: a single number; blank or "-" = no order given.
+    const countryOrderNum = parseFloat(snapList(10)[0] || '');
+    const snapshotCountryOrder = isNaN(countryOrderNum) ? null : countryOrderNum;
 
     if (ticker && name) {
-      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshots, snapshotCountry });
+      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshots, snapshotCountry, snapshotCountryOrder });
     }
   }
 
