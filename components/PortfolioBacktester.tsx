@@ -10305,19 +10305,30 @@ const PortfolioBacktester = () => {
                     <>
                       {/* Summary tiles for the focused period. Hidden for Macro: there a "leader" would */}
                       {/* compare a change in bp with an inflation %, which means nothing. */}
-                      {!isMacroTable && <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+                      {/* Leader/Laggard put the ASSET NAME up front in bold — "which one" is the point of */}
+                      {/* those tiles. Trend is today's 10-month-SMA signal, so it has no period in its label. */}
+                      {!isMacroTable && <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
                         {[
-                          { label: 'Leader', value: summary?.leader ? fmtRet(summary.leader.value) : '–', sub: summary?.leader?.name ?? '', cls: 'text-green-700' },
-                          { label: 'Laggard', value: summary?.laggard ? fmtRet(summary.laggard.value) : '–', sub: summary?.laggard?.name ?? '', cls: 'text-red-700' },
-                          { label: 'Dispersion', value: summary?.dispersion != null ? `${summary.dispersion.toFixed(1)} pp` : '–', sub: 'best − worst', cls: 'text-gray-800' },
-                          { label: 'Positive', value: summary ? `${summary.positive}/${summary.total}` : '–', sub: 'assets above 0', cls: 'text-gray-800' },
+                          { label: `Leader · ${marketsPeriod}`, value: summary?.leader ? fmtRet(summary.leader.value) : '–', name: summary?.leader?.name ?? '', sub: '', cls: 'text-green-700' },
+                          { label: `Laggard · ${marketsPeriod}`, value: summary?.laggard ? fmtRet(summary.laggard.value) : '–', name: summary?.laggard?.name ?? '', sub: '', cls: 'text-red-700' },
+                          { label: `Dispersion · ${marketsPeriod}`, value: summary?.dispersion != null ? `${summary.dispersion.toFixed(1)} pp` : '–', name: '', sub: 'best − worst', cls: 'text-gray-800' },
+                          { label: `Positive · ${marketsPeriod}`, value: summary ? `${summary.positive}/${summary.total}` : '–', name: '', sub: 'assets above 0', cls: 'text-gray-800' },
+                          { label: 'Trend · 10M SMA', value: summary ? `${summary.buy}/${summary.signalTotal}` : '–', name: '', sub: 'on BUY signal', cls: 'text-gray-800' },
                         ].map(t => (
-                          <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                            <div className="text-[10px] uppercase tracking-wide text-gray-500">{t.label} · {marketsPeriod}</div>
-                            <div className="text-sm">
-                              <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
-                              <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
-                            </div>
+                          <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0">
+                            <div className="text-[10px] uppercase tracking-wide text-gray-500">{t.label}</div>
+                            {t.name ? (
+                              <div className="flex items-baseline justify-between gap-2">
+                                {/* Wraps rather than truncates: a cut-off name would defeat the tile's purpose */}
+                                <span className="text-sm font-semibold text-gray-900 leading-tight min-w-0 break-words">{t.name}</span>
+                                <span className={`text-sm font-bold tabular-nums ${t.cls}`}>{t.value}</span>
+                              </div>
+                            ) : (
+                              <div className="text-sm">
+                                <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
+                                <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>}
