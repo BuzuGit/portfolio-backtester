@@ -7744,7 +7744,10 @@ const PortfolioBacktester = () => {
           {isLoading ? 'Loading...' : 'Refresh Data'}
         </button>
         <div className={`px-1 pt-1.5 pb-2 text-[11px] leading-snug text-center ${loadStatusClass}`}>
-          {loadingMessage || 'Ready'}
+          {/* Too long for one line at this width, so break it deliberately after the first comma
+              ("Loaded 128 assets" / "203 data points") instead of wherever the text happens to wrap.
+              Other messages (loading, errors) have no comma and show as they are. */}
+          {(loadingMessage || 'Ready').split(/,\s*/).map((part, i) => <div key={i}>{part}</div>)}
         </div>
         <div className="border-t border-gray-100 pt-2">
           {isConnected && assetData
