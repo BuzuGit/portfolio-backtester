@@ -7672,44 +7672,67 @@ const PortfolioBacktester = () => {
     { view: 'portfolio', label: 'Portfolio' },
     { view: 'positions', label: 'Positions' },
   ];
+  // Sections INSIDE a view, listed indented under it in the left panel while that view is open:
+  // the left panel is for moving between pages and sections, the top of each page for filtering
+  // what is on it. To give another view sections, add a case here.
+  //   Markets      — its categories, straight from the sheet's SnapshotCategory column
+  //   Best To Worst — the one-year Ranking table or the multi-year Return Map
+  const navSections = (view: typeof activeView): { items: { key: string; label: string }[]; active: string; select: (key: string) => void } | null => {
+    if (view === 'markets') {
+      return {
+        items: marketsCategories.map(c => ({ key: c, label: c })),
+        active: activeMarketsCategory,
+        select: setMarketsCategory,
+      };
+    }
+    if (view === 'bestToWorst') {
+      return {
+        items: [{ key: 'ranking', label: 'Ranking' }, { key: 'map', label: 'Return Map' }],
+        active: bestToWorstLayout,
+        select: key => setBestToWorstLayout(key as 'ranking' | 'map'),
+      };
+    }
+    return null;
+  };
+
   // The list of view buttons, shared by the sidebar and the drawer. Choosing one also closes
   // the drawer (harmless on wide screens, where it is never open).
-  // While Markets is open, its categories (Assets, Equities, Macro... straight from the sheet's
-  // SnapshotCategory column) are listed indented underneath it: the left panel is for moving
-  // between pages and sections, the top of each page for filtering what is on it.
   const navList = (
     <div className="flex flex-col gap-1">
-      {NAV_VIEWS.map(({ view, label }) => (
-        <React.Fragment key={view}>
-          <button
-            type="button"
-            onClick={() => { setActiveView(view); setNavOpen(false); }}
-            className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeView === view ? 'bg-slate-800 text-white' : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            {label}
-          </button>
-          {view === 'markets' && activeView === 'markets' && marketsCategories.length > 0 && (
-            <div className="flex flex-col gap-0.5 ml-3 pl-2 border-l border-gray-200 mb-1">
-              {marketsCategories.map(c => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => { setMarketsCategory(c); setNavOpen(false); }}
-                  className={`w-full text-left px-2 py-1 rounded-md text-xs transition-colors ${
-                    activeMarketsCategory === c
-                      ? 'bg-gray-100 text-gray-900 font-semibold'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
-          )}
-        </React.Fragment>
-      ))}
+      {NAV_VIEWS.map(({ view, label }) => {
+        const sections = activeView === view ? navSections(view) : null;
+        return (
+          <React.Fragment key={view}>
+            <button
+              type="button"
+              onClick={() => { setActiveView(view); setNavOpen(false); }}
+              className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeView === view ? 'bg-slate-800 text-white' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {label}
+            </button>
+            {sections && sections.items.length > 0 && (
+              <div className="flex flex-col gap-0.5 ml-3 pl-2 border-l border-gray-200 mb-1">
+                {sections.items.map(s => (
+                  <button
+                    key={s.key}
+                    type="button"
+                    onClick={() => { sections.select(s.key); setNavOpen(false); }}
+                    className={`w-full text-left px-2 py-1 rounded-md text-xs transition-colors ${
+                      sections.active === s.key
+                        ? 'bg-gray-100 text-gray-900 font-semibold'
+                        : 'text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 
@@ -9892,22 +9915,7 @@ const PortfolioBacktester = () => {
                   <>
                   {/* Filter controls + Year/Period selectors on one line */}
                   <AssetFilterControls>
-                    {/* Layout switch: the original one-year Ranking table, or the multi-year Return Map */}
-                    <div className="flex gap-0">
-                      {([['ranking', 'Ranking'], ['map', 'Return Map']] as const).map(([value, label], i) => (
-                        <button
-                          key={value}
-                          onClick={() => setBestToWorstLayout(value)}
-                          className={`px-3 py-1.5 text-sm font-medium border transition-colors ${i === 0 ? 'rounded-l-lg' : 'rounded-r-lg'} ${
-                            bestToWorstLayout === value
-                              ? 'bg-slate-800 text-white border-slate-800'
-                              : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
+                    {/* (Ranking vs Return Map is chosen in the left panel, under "Best To Worst".) */}
                     {bestToWorstLayout === 'map' && (
                       <>
                         {/* Return Map: how many recent years to show */}
