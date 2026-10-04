@@ -10409,8 +10409,10 @@ const PortfolioBacktester = () => {
                             ? {
                                 label: `${marketsCountry} vs basket · ${marketsPeriod}`,
                                 value: basket ? `${fmtRet(basket.value)}%` : '–',
-                                name: '',
-                                sub: !basket ? '' : basket.value > 0 ? 'appreciated' : basket.value < 0 ? 'depreciated' : 'unchanged',
+                                // Shown like Leader/Laggard: the verdict is the headline, in its colour.
+                                name: !basket ? '' : basket.value > 0 ? 'Appreciated' : basket.value < 0 ? 'Depreciated' : 'Unchanged',
+                                nameCls: !basket || basket.value === 0 ? 'text-gray-900' : basket.value > 0 ? 'text-green-700' : 'text-red-700',
+                                sub: '',
                                 cls: !basket || basket.value === 0 ? 'text-gray-800' : basket.value > 0 ? 'text-green-700' : 'text-red-700',
                                 title: basket
                                   ? `${marketsCountry} against an equal-weighted basket of ${basket.parts.length} currencies, ${marketsPeriod}:\n`
@@ -10435,7 +10437,7 @@ const PortfolioBacktester = () => {
                                   <span className="text-[10px] uppercase tracking-wide text-gray-500">{t.label}</span>
                                   <span className={`text-sm font-bold tabular-nums ${t.cls}`}>{t.value}</span>
                                 </div>
-                                <div className="text-sm font-semibold text-gray-900 whitespace-nowrap truncate" title={t.name}>{t.name}</div>
+                                <div className={`text-sm font-semibold whitespace-nowrap truncate ${(t as { nameCls?: string }).nameCls ?? 'text-gray-900'}`} title={t.name}>{t.name}</div>
                               </>
                             ) : (
                               <>
