@@ -498,14 +498,22 @@ export interface MatrixSummary {
   dispersion: number | null; // best minus worst, in percentage points
   positive: number;          // how many assets are above zero
   total: number;             // how many assets have a figure for this period
+  // Trend tile: how many rows are on a 10-month-SMA BUY signal, out of the rows that have a
+  // signal at all (needs 10 months of prices). Today's signal, so it ignores the period.
+  buy: number;
+  signalTotal: number;
 }
 
-/** The four tiles above the table, for one period. */
+/** The tiles above the table, for one period. */
 export const summariseMatrix = (matrix: ReturnMatrix, period: MarketsPeriod): MatrixSummary => {
-  const vals = matrix.sections.flatMap(s => s.rows)
+  const rows = matrix.sections.flatMap(s => s.rows);
+  const withSignal = rows.filter(r => r.signal !== null);
+  const buy = withSignal.filter(r => r.signal === 'BUY').length;
+  const signalTotal = withSignal.length;
+  const vals = rows
     .filter(r => r.returns[period] !== null)
     .map(r => ({ name: r.name, value: r.returns[period] as number }));
-  if (!vals.length) return { leader: null, laggard: null, dispersion: null, positive: 0, total: 0 };
+  if (!vals.length) return { leader: null, laggard: null, dispersion: null, positive: 0, total: 0, buy, signalTotal };
   const sorted = [...vals].sort((a, b) => b.value - a.value);
   const leader = sorted[0];
   const laggard = sorted[sorted.length - 1];
@@ -514,5 +522,6 @@ export const summariseMatrix = (matrix: ReturnMatrix, period: MarketsPeriod): Ma
     dispersion: leader.value - laggard.value,
     positive: vals.filter(v => v.value > 0).length,
     total: vals.length,
+    buy, signalTotal,
   };
 };
