@@ -14,8 +14,9 @@
   HOW A RETURN IS MEASURED: every period ends at the asset's latest monthly price (the live,
   month-to-date row, the same "now" the rest of the app uses) and starts at the month-end N
   months earlier. YTD starts at the last price of the previous December. The prices are
-  adjusted close, so every figure is a TOTAL return. Long periods (3Y/5Y/10Y) are cumulative,
-  not annualised, so every column means the same thing: "how much did it change in total".
+  adjusted close, so every figure is a TOTAL return. Long periods (3Y/5Y/10Y/Max) are
+  cumulative, not annualised, so every column means the same thing: "how much did it change in
+  total". (The Stats view annualises separately — see PeriodStats.)
 
   CURRENCY: the sheet stores each asset in its own currency plus xxxPLN exchange rates, so
   PLN is the hub — like changing money at one central desk. A dollar asset shown in euros is
@@ -156,7 +157,7 @@ export interface MarketRow {
   isFx: boolean;            // FX row: price/DD/signal are on the shown exchange rate
   returns: Record<MarketsPeriod, number | null>; // percent (bp for 'rate' rows); null = not enough history ("–")
   working: Record<MarketsPeriod, PeriodWorking | null>; // the prices/rates/dates behind each return
-  spark: number[];          // last 10 years of prices in the SELECTED currency, oldest first (months with no price skipped)
+  spark: number[];          // the row's whole history in the SELECTED currency, oldest first (months with no value skipped)
   price: number | null;     // latest price in the asset's OWN currency
   priceCurrency: string;    // e.g. "USD"
   priceUp: boolean | null;  // latest price >= previous month's (native); null if unknown
@@ -349,7 +350,7 @@ const buildMacroRow = (
       working[p] = { startDate: String(rows[startIdx].date), start: w(s), endDate: String(endRow.date), end: w(e) };
     });
 
-    // Trend (up to 10 years) of the shown number (the rate, or YoY inflation).
+    // Trend (whole history) of the shown number (the rate, or YoY inflation).
     for (let i = Math.max(0, endIdx - SPARK_POINTS + 1); i <= endIdx; i++) {
       const v = shown(i);
       if (v !== null) spark.push(v);
@@ -447,8 +448,8 @@ const buildPriceRow = (
   // become the rate itself, shown picture-style as BASE/OTHER (units of OTHER per 1 BASE,
   // so + = the base currency strengthened). In a base currency, each of the sheet's pairs
   // stands for its non-base currency — USDPLN stands for USD, unless USD IS the base, in
-  // which case it stands for PLN. That way the four sheet rows always show the four
-  // currencies other than the base, with cross rates rebuilt through the PLN hub
+  // which case it stands for PLN. That way the sheet's pairs always show every currency
+  // other than the base exactly once, with cross rates rebuilt through the PLN hub
   // (USD/EUR = USDPLN / EURPLN). 'Native' shows the sheet's pairs exactly as written.
   if (isFx) {
     const pairBase = a.ticker.slice(0, 3), pairQuote = a.ticker.slice(3);
@@ -510,19 +511,22 @@ const buildPriceRow = (
   if (endIdx >= 0) {
     const endRow = rows[endIdx];
     const endKey = monthKey(String(endRow.date));
-    const endValue = conv(endRow);
+    // Every month's value in the view currency, worked out ONCE and reused by the returns, the
+    // Stats windows, the stress years and the trend line (each used to redo the conversion).
+    const convAt = rows.slice(0, endIdx + 1).map(conv);
+    const endValue = convAt[endIdx];
     const endWorking = explain(endRow);
 
     // "Max" starts at the first month this row has a value in the view currency.
     let firstIdx = 0;
-    while (firstIdx < endIdx && conv(rows[firstIdx]) === null) firstIdx++;
+    while (firstIdx < endIdx && convAt[firstIdx] === null) firstIdx++;
 
     MARKETS_PERIODS.forEach(p => {
       // YTD starts at last December; Max at the first month with data; everything else N months
       // before the end.
       const startIdx = periodStartIdx(p, endKey, firstIdx, indexByMonth);
       if (startIdx === undefined || startIdx >= endIdx || endValue === null) return;
-      const startValue = conv(rows[startIdx]);
+      const startValue = convAt[startIdx];
       if (startValue === null) return;
       returns[p] = (endValue / startValue - 1) * 100;
       const startWorking = explain(rows[startIdx]);
@@ -530,23 +534,24 @@ const buildPriceRow = (
         working[p] = { startDate: String(rows[startIdx].date), start: startWorking, endDate: String(endRow.date), end: endWorking };
       }
       // Stats view: the same window's month-end values, gaps skipped.
-      const window = rows.slice(startIdx, endIdx + 1)
-        .map(r => ({ date: String(r.date), v: conv(r) }))
-        .filter((x): x is { date: string; v: number } => x.v !== null);
-      stats[p] = statsFor(window);
+      const windowValues: { date: string; v: number }[] = [];
+      for (let i = startIdx; i <= endIdx; i++) {
+        const v = convAt[i];
+        if (v !== null) windowValues.push({ date: String(rows[i].date), v });
+      }
+      stats[p] = statsFor(windowValues);
     });
 
     // Stress-year returns for the Stats view: last December to December, in the view currency.
     STATS_YEARS.forEach(y => {
       const from = indexByMonth.get(y * 12 - 1), to = indexByMonth.get(y * 12 + 11);
       if (from === undefined || to === undefined || to > endIdx) return;
-      const a0 = conv(rows[from]), a1 = conv(rows[to]);
+      const a0 = convAt[from], a1 = convAt[to];
       if (a0 !== null && a1 !== null) yearReturns[y] = (a1 / a0 - 1) * 100;
     });
 
-    // Trend line (up to 10 years) in the selected currency. Months with no price are simply skipped.
-    spark = rows.slice(Math.max(0, endIdx - SPARK_POINTS + 1), endIdx + 1)
-      .map(conv)
+    // Trend line (whole history) in the selected currency. Months with no value are simply skipped.
+    spark = convAt.slice(Math.max(0, endIdx - SPARK_POINTS + 1))
       .filter((v): v is number => v !== null);
 
     // Price column: native currency (the shown rate, for FX), coloured by the move since
@@ -739,6 +744,8 @@ export const buildCountryMatrix = (
  * strengthened), so the basket move is the geometric average of those rows:
  *   ((1 + r1) × (1 + r2) × ... × (1 + rn)) ^ (1/n) − 1
  * A geometric average, because FX moves compound: +10% then −10% is not "flat".
+ * On "Max" each pair runs over its own full history; today every pair starts in Dec 2009, but a
+ * pair added later with a shorter history would bring a shorter window into the average.
  */
 export const currencyBasketMove = (
   matrix: ReturnMatrix,
