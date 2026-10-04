@@ -10489,7 +10489,7 @@ const PortfolioBacktester = () => {
                                   <th className="text-left font-medium px-3 py-2">
                                     <div className="w-[200px]"><span className="text-gray-800 font-semibold">{
                                       s.rows.every(r => r.kind === 'cpiyoy')
-                                        ? (marketsPeriod === 'YTD' ? '1Y rate at Dec' : `1Y rate ${marketsPeriod} ago`)
+                                        ? (marketsPeriod === 'YTD' ? 'Now vs Dec' : `Now vs ${marketsPeriod} ago`)
                                         : `${marketsPeriod} ${isMacroSection(s.rows) ? 'change' : 'return'}`
                                     }</span></div>
                                   </th>
@@ -10537,9 +10537,26 @@ const PortfolioBacktester = () => {
                                         >{r.name}</button>
                                       </td>
 
-                                      {/* Horizontal bar for the focused period; label sits just past the bar's end */}
+                                      {/* Horizontal bar for the focused period; label sits just past the bar's end. */}
+                                      {/* Inflation 1Y rate rows show a verdict instead: today's rate vs the rate at the */}
+                                      {/* selected period — "Accelerating +0.2 pp" (red) or "Easing −0.5 pp" (green). */}
                                       <td className="px-3 py-1">
-                                        {fv === null ? <span className="text-gray-300 text-xs">–</span> : (
+                                        {r.kind === 'cpiyoy' ? (() => {
+                                          const wk = r.working[marketsPeriod];
+                                          if (!wk) return <span className="text-gray-300 text-xs">–</span>;
+                                          const diff = wk.end.result - wk.start.result;
+                                          const flat = Math.abs(diff) < 0.05; // rounds to 0.0 pp
+                                          const verdict = flat ? 'Unchanged' : diff > 0 ? 'Accelerating' : 'Easing';
+                                          const cls = flat ? 'text-gray-600' : diff > 0 ? 'text-red-700' : 'text-green-700';
+                                          return (
+                                            <div
+                                              className={`text-xs font-semibold whitespace-nowrap cursor-help ${cls}`}
+                                              title={`Now ${wk.end.result.toFixed(2)}% (${monthLabel(wk.endDate)}) vs ${wk.start.result.toFixed(2)}% (${monthLabel(wk.startDate)})`}
+                                            >
+                                              {verdict}{!flat && <span className="tabular-nums ml-1.5">{diff > 0 ? '+' : '−'}{Math.abs(diff).toFixed(1)} pp</span>}
+                                            </div>
+                                          );
+                                        })() : fv === null ? <span className="text-gray-300 text-xs">–</span> : (
                                           <div className="relative h-4 mx-10">
                                             <div className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: `${zeroPct}%` }} />
                                             <div
@@ -10677,7 +10694,8 @@ const PortfolioBacktester = () => {
                         last month the index actually changed (later months repeat it until the next print) ·
                         inflation 1Y rate: the year-on-year rate as it stood that long before the last print (1M = the month
                         before, YTD = last December), so comparing it with Value shows whether inflation is accelerating;
-                        coloured by level — deeper red = higher inflation, green = deflation ·
+                        coloured by level — deeper red = higher inflation, green = deflation; the first column compares today&apos;s
+                        rate with the selected period&apos;s: Accelerating (higher now, red) or Easing (lower now, green), in pp ·
                         Value = latest rate / YoY inflation, red if it rose vs the month before · ATH = highest ever recorded ·
                         vs peak = ATH − Value in pp · colours reversed: rising = red{marketsIsCountry ? '' : ' · the currency button does not apply'} · – = not enough history
                       </p>
