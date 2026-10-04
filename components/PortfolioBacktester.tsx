@@ -10230,6 +10230,33 @@ const PortfolioBacktester = () => {
               + '• SMA = average of the last 10 month-end prices, current month included, in the asset\'s own currency.\n'
               + '• BUY when the latest price is above the SMA, SELL when it is at or below it.\n'
               + '• Needs a price in each of those 10 months; otherwise shown as –.';
+            // Clicking an asset name opens it in the Monthly tab's detail panel. That panel closes
+            // itself if the asset is hidden by the Monthly filters (Assets / Class / Currency /
+            // Subcategory), so first make sure each filter lets this asset through — only ever ADDING
+            // it, never removing anything else you had selected. Then select it in its own currency
+            // (as clicking its row in Monthly does), switch tab, and scroll to the panel once drawn.
+            const openInMonthly = (ticker: string) => {
+              const a = assetLookup.find(x => x.ticker === ticker);
+              if (!a) return;
+              const add = (list: string[], v: string) => (v && !list.includes(v) ? [...list, v] : list);
+              setSelectedAssetTickers(prev => add(prev, a.ticker));
+              setSelectedAssetClasses(prev => add(prev, a.assetClass));
+              setSelectedCurrencies(prev => add(prev, a.currency));
+              setSelectedAssetSubcategories(prev => add(prev, a.assetSubcategory));
+              setMonthlySelectedTicker(ticker);
+              setMonthlyDisplayCurrency(getAssetCurrency(ticker));
+              setActiveView('monthlyPrices');
+              // The Monthly tab is heavy; look for the panel a few times rather than guessing a delay.
+              let tries = 0;
+              const scroll = () => {
+                const el = document.getElementById('monthly-asset-detail');
+                // An instant jump (not 'smooth'): we are switching tabs anyway, and it lands reliably.
+                if (el) el.scrollIntoView({ block: 'start' });
+                else if (++tries < 20) setTimeout(scroll, 100);
+              };
+              setTimeout(scroll, 50);
+            };
+
             // name + bar + periods + trend + price + (DD + signal | ATH + vs peak) — four after the periods either way
             const colCount = 2 + (m ? m.columns.length : 0) + 4;
 
@@ -10384,7 +10411,14 @@ const PortfolioBacktester = () => {
                                   const stale = !!r.priceDate && r.priceDate.slice(0, 7) !== m.endDate.slice(0, 7);
                                   return (
                                     <tr key={r.ticker} className="border-b border-gray-100 hover:bg-gray-50">
-                                      <td className="px-3 py-1 text-gray-800 whitespace-nowrap" title={r.ticker}>{r.name}</td>
+                                      <td className="px-3 py-1 whitespace-nowrap">
+                                        <button
+                                          type="button"
+                                          onClick={() => openInMonthly(r.ticker)}
+                                          className="text-gray-800 hover:text-slate-900 hover:underline underline-offset-2 text-left"
+                                          title={`${r.ticker} — open full details in the Monthly tab${r.isFx ? ` (shows the sheet's ${r.ticker} series)` : ''}`}
+                                        >{r.name}</button>
+                                      </td>
 
                                       {/* Horizontal bar for the focused period; label sits just past the bar's end */}
                                       <td className="px-3 py-1">
@@ -11394,8 +11428,9 @@ const PortfolioBacktester = () => {
                         })) || [];
                       const assetMonthlyReturns = calculateMonthlyReturns(assetReturnPoints);
 
+                      // The id lets the Markets tab scroll straight here after opening an asset.
                       return (
-                        <div className="mt-6 border-t border-gray-200 pt-4">
+                        <div id="monthly-asset-detail" className="mt-6 border-t border-gray-200 pt-4 scroll-mt-4">
                           {/* Title + Period buttons */}
                           <div className="flex items-center justify-between mb-3 px-2">
                             <h3 className="text-sm font-semibold text-gray-700">
