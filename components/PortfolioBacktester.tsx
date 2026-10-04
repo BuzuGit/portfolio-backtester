@@ -10592,9 +10592,15 @@ const PortfolioBacktester = () => {
                               const up = policyBp !== null && policyBp > 0;
                               const cls = policyBp === null || policyBp === 0 ? 'text-gray-900' : up ? 'text-red-700' : 'text-green-700';
                               return {
-                                label: 'Policy rate · last move',
+                                // Short label so it stays on ONE line in the narrow tile (a wrapped label
+                                // made the whole row of tiles taller); the decision month sits after the
+                                // verdict in small print, e.g. "Cutting  Mar 26".
+                                label: 'Policy rate',
                                 value: policyBp === null ? '–' : `${up ? '+' : '−'}${Math.abs(policyBp)} bp`,
-                                name: !policyMove ? (policyRow ? 'No change' : 'No data') : `${up ? 'Hiking' : 'Cutting'} · ${monthLabel(policyMove.date)}`,
+                                name: !policyMove ? (policyRow ? 'No change' : 'No data') : (up ? 'Hiking' : 'Cutting'),
+                                nameSuffix: policyMove
+                                  ? `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(policyMove.date.slice(5, 7)) - 1]} ${policyMove.date.slice(2, 4)}`
+                                  : '',
                                 nameCls: cls, sub: '', cls,
                                 title: policyMove && policyRow
                                   ? `${policyRow.name}: last decision in ${monthLabel(policyMove.date)}, `
@@ -10618,14 +10624,20 @@ const PortfolioBacktester = () => {
                                 {/* Figure sits up on the label line so the name gets a whole line to */}
                                 {/* itself, on ONE line. truncate is only a last resort on a phone. */}
                                 <div className="flex items-baseline justify-between gap-2">
-                                  <span className="text-[10px] uppercase tracking-wide text-gray-500">{t.label}</span>
+                                  <span className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</span>
                                   <span className={`text-sm font-bold tabular-nums ${t.cls}`}>{t.value}</span>
                                 </div>
-                                <div className={`text-sm font-semibold whitespace-nowrap truncate ${(t as { nameCls?: string }).nameCls ?? 'text-gray-900'}`} title={t.name}>{t.name}</div>
+                                <div className={`text-sm leading-5 font-semibold whitespace-nowrap truncate ${(t as { nameCls?: string }).nameCls ?? 'text-gray-900'}`} title={t.name}>
+                                  {t.name}
+                                  {/* optional small print after the name, e.g. the policy decision month */}
+                                  {(t as { nameSuffix?: string }).nameSuffix && (
+                                    <span className="text-[10px] leading-none font-normal text-gray-500 ml-1.5">{(t as { nameSuffix?: string }).nameSuffix}</span>
+                                  )}
+                                </div>
                               </>
                             ) : (
                               <>
-                              <div className="text-[10px] uppercase tracking-wide text-gray-500">{t.label}</div>
+                              <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
                               <div className="text-sm">
                                 <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
                                 <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
