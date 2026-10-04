@@ -10159,7 +10159,7 @@ const PortfolioBacktester = () => {
             // Macro rows (rates in bp, inflation in %) follow different rules from prices:
             //  - colours are REVERSED: rising rates/inflation show red, falling green;
             //  - rate rows are in basis points, so they get their own bar and colour scale.
-            const isMacroKind = (r: MarketRow) => r.kind === 'rate' || r.kind === 'cpi';
+            const isMacroKind = (r: MarketRow) => r.kind === 'rate' || r.kind === 'cpi' || r.kind === 'cpiyoy';
             const isMacroTable = allRows.length > 0 && allRows.every(isMacroKind);
             // The Country page mixes both kinds in one table, so the column layout is decided per
             // SECTION: a section of rates/inflation gets Value / ATH / vs peak, any other section
@@ -10173,7 +10173,8 @@ const PortfolioBacktester = () => {
               const r = Math.round(v);
               return r === 0 ? '0' : `${r > 0 ? '+' : ''}${r}`;
             };
-            const fmtCell = (r: MarketRow, v: number) => (r.kind === 'rate' ? fmtBp(v) : fmtRet(v));
+            // 1Y-rate cells are LEVELS (3.2 = inflation was 3.2% back then), so no +/- sign like a change.
+            const fmtCell = (r: MarketRow, v: number) => (r.kind === 'rate' ? fmtBp(v) : r.kind === 'cpiyoy' ? v.toFixed(1) : fmtRet(v));
             // Macro rows keep a rate / YoY inflation in the row's price fields; it is a percentage,
             // not a share price, so it is printed as one ("4.00%") rather than through formatPrice.
             const fmtPct = (v: number) => `${v.toFixed(2)}%`;
@@ -10182,15 +10183,23 @@ const PortfolioBacktester = () => {
             // row, always including zero, so every bar starts from the same zero line. Prices, rates
             // (bp) and inflation each get their own scale (+85 bp would otherwise dwarf +3%
             // inflation, and a +20% equity would make inflation bars invisible).
-            const barGroup = (r: MarketRow) => (r.kind === 'rate' ? 'bp' : r.kind === 'cpi' ? 'cpi' : 'pct');
-            const barScale = (group: 'pct' | 'bp' | 'cpi') => {
+            type BarGroup = 'pct' | 'bp' | 'cpi' | 'yoy';
+            const barGroup = (r: MarketRow): BarGroup =>
+              (r.kind === 'rate' ? 'bp' : r.kind === 'cpi' ? 'cpi' : r.kind === 'cpiyoy' ? 'yoy' : 'pct');
+            const barScale = (group: BarGroup) => {
               const vals = allRows.filter(r => barGroup(r) === group)
                 .map(r => r.returns[marketsPeriod]).filter((v): v is number => v !== null);
               const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
               const span = (hi - lo) || 1;
               return { span, zeroPct: (-lo / span) * 100 };
             };
-            const barScales = { pct: barScale('pct'), bp: barScale('bp'), cpi: barScale('cpi') };
+            const barScales = { pct: barScale('pct'), bp: barScale('bp'), cpi: barScale('cpi'), yoy: barScale('yoy') };
+            // "Inflation 1Y rate" cells are coloured by LEVEL, one scale for the whole section: the
+            // highest rate anywhere in it is the deepest red, low inflation a light red, deflation
+            // (below zero) green. So this is the largest |rate| across all its cells.
+            const yoyCap = Math.max(1e-9, ...allRows.filter(r => r.kind === 'cpiyoy')
+              .flatMap(r => MARKETS_PERIODS.map(p => r.returns[p]))
+              .filter((v): v is number => v !== null).map(Math.abs));
             // Medium shades of the same green/red the cells use, so bars and cells read as one palette.
             const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
 
@@ -10256,6 +10265,18 @@ const PortfolioBacktester = () => {
                   + `End ${dayLabel(w.endDate)}: ${w.end.result.toFixed(2)}%\n`
                   + `Change = end − start = ${fmtBp(v)} bp (${w.end.result >= w.start.result ? '+' : ''}${(w.end.result - w.start.result).toFixed(2)} pp)\n`
                   + `Growth = end ÷ start − 1 = ${growth}`;
+              }
+              // Inflation 1Y rate: the YoY rate back then vs today, and which way it has moved since.
+              if (r.kind === 'cpiyoy') {
+                const when = p === 'YTD' ? 'at last December' : `${p} before the latest print`;
+                const head = `${r.name} · 1Y inflation rate ${when}: ${v.toFixed(2)}%`;
+                if (!w) return head;
+                const diff = w.end.result - w.start.result;
+                const trend = Math.abs(diff) < 0.005 ? 'unchanged' : diff > 0 ? 'accelerating' : 'decelerating';
+                return `${head}\n`
+                  + `${monthLabel(w.startDate)}: ${w.start.result.toFixed(2)}% year-on-year\n`
+                  + `Now (${monthLabel(w.endDate)}, last CPI print): ${w.end.result.toFixed(2)}%\n`
+                  + `Change since: ${diff >= 0 ? '+' : ''}${diff.toFixed(2)} pp → ${trend}`;
               }
               // Inflation: the CPI index at both ends, anchored at the last real CPI print.
               if (r.kind === 'cpi') {
@@ -10466,7 +10487,11 @@ const PortfolioBacktester = () => {
                                   {/* The fixed-width div is what holds this column open: a table ignores min-width */}
                                   {/* on cells, and the bars inside are absolutely positioned so they claim no width. */}
                                   <th className="text-left font-medium px-3 py-2">
-                                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod} {isMacroSection(s.rows) ? 'change' : 'return'}</span></div>
+                                    <div className="w-[200px]"><span className="text-gray-800 font-semibold">{
+                                      s.rows.every(r => r.kind === 'cpiyoy')
+                                        ? (marketsPeriod === 'YTD' ? '1Y rate at Dec' : `1Y rate ${marketsPeriod} ago`)
+                                        : `${marketsPeriod} ${isMacroSection(s.rows) ? 'change' : 'return'}`
+                                    }</span></div>
                                   </th>
                                   {m.columns.map(p => (
                                     <th
@@ -10534,7 +10559,8 @@ const PortfolioBacktester = () => {
                                         const v = r.returns[p];
                                         if (v === null) return <td key={p} className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
                                         // Rate rows use the bp scale; Macro rows flip the colour (up = red).
-                                        const cap = r.kind === 'rate' ? m.colourCapsBp[p] : r.kind === 'cpi' ? m.colourCapsCpi[p] : m.colourCaps[p];
+                                        const cap = r.kind === 'cpiyoy' ? yoyCap
+                                          : r.kind === 'rate' ? m.colourCapsBp[p] : r.kind === 'cpi' ? m.colourCapsCpi[p] : m.colourCaps[p];
                                         const bg = returnHeatColor(Math.max(-1, Math.min(1, v / cap)) * 40 * (macro ? -1 : 1));
                                         return (
                                           <td key={p} className="px-px py-0.5" title={returnTooltip(r, p, v)}>
@@ -10647,8 +10673,11 @@ const PortfolioBacktester = () => {
                       {hasMacroRows && (
                       <p className="text-[11px] text-gray-500 mt-3">
                         Rates and 10Y yields: period columns are the change in basis points (hover for the % growth) ·
-                        inflation: cumulative change in the CPI index over the period (1Y = year-on-year), measured from the
+                        inflation cumulative: change in the CPI index over the period (1Y = year-on-year), measured from the
                         last month the index actually changed (later months repeat it until the next print) ·
+                        inflation 1Y rate: the year-on-year rate as it stood that long before the last print (1M = the month
+                        before, YTD = last December), so comparing it with Value shows whether inflation is accelerating;
+                        coloured by level — deeper red = higher inflation, green = deflation ·
                         Value = latest rate / YoY inflation, red if it rose vs the month before · ATH = highest ever recorded ·
                         vs peak = ATH − Value in pp · colours reversed: rising = red{marketsIsCountry ? '' : ' · the currency button does not apply'} · – = not enough history
                       </p>

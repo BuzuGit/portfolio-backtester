@@ -71,7 +71,9 @@ export interface PeriodWorking {
 //   fx    — an exchange rate shown as BASE/OTHER
 //   rate  — an interest rate or bond yield in %; "returns" are CHANGES in basis points
 //   cpi   — a consumer price index; returns are cumulative inflation in %, Value is YoY inflation
-export type MarketRowKind = 'asset' | 'fx' | 'rate' | 'cpi';
+//   cpiyoy — the same index seen as its 1Y inflation RATE: each period column shows the YoY rate
+//            as it stood that long before the latest print (a level, not a change)
+export type MarketRowKind = 'asset' | 'fx' | 'rate' | 'cpi' | 'cpiyoy';
 
 export interface MarketRow {
   ticker: string;
@@ -185,11 +187,17 @@ const isCpiRow = (a: AssetLookup): boolean => /^CPI/i.test(a.ticker);
  * every CPI figure is anchored at the LAST MONTH THE INDEX ACTUALLY CHANGED — otherwise the
  * repeated months would turn 1Y inflation into a 10-month figure. (A genuinely flat print
  * in the latest month would be read as a repeat and dated one month earlier; rare.)
+ *
+ * CPI in mode 'yoy' (the "Inflation 1Y rate" section): the same index, but each period column
+ * shows the 1Y inflation RATE as it stood that long before the latest print — with the last
+ * print in Aug 2026, 1M = the YoY rate for Jul 2026, 3M = May 2026, YTD = last December. Set
+ * against Value (today's rate), the row shows whether inflation is accelerating or easing.
  */
 const buildMacroRow = (
   a: AssetLookup,
   rows: AssetRow[],
   indexByMonth: Map<number, number>,
+  mode: 'cumulative' | 'yoy' = 'cumulative',
 ): MarketRow => {
   const cpi = isCpiRow(a);
   // Rates can be 0 or negative (Swiss rates were for years), so presence is the test, not > 0.
@@ -235,6 +243,15 @@ const buildMacroRow = (
       const startKey = p === 'YTD' ? (Math.floor(endKey / 12) - 1) * 12 + 11 : endKey - PERIOD_MONTHS[p];
       const startIdx = indexByMonth.get(startKey);
       if (startIdx === undefined) return;
+      // 1Y-rate mode: the YoY rate back then (start) against the YoY rate now (end).
+      if (cpi && mode === 'yoy') {
+        const then = yoyAt(startIdx), now = yoyAt(endIdx);
+        if (then === null || now === null) return;
+        returns[p] = then;
+        const pct = (v: number): ValueWorking => ({ first: v, firstLabel: '%', ops: [], result: v, resultUnit: '%' });
+        working[p] = { startDate: String(rows[startIdx].date), start: pct(then), endDate: String(endRow.date), end: pct(now) };
+        return;
+      }
       const s = level(rows[startIdx]);
       if (s === null) return;
       if (cpi) {
@@ -265,7 +282,7 @@ const buildMacroRow = (
   }
 
   return {
-    ticker: a.ticker, name: a.name, kind: cpi ? 'cpi' : 'rate', isFx: false, returns, working, spark,
+    ticker: a.ticker, name: a.name, kind: cpi ? (mode === 'yoy' ? 'cpiyoy' : 'cpi') : 'rate', isFx: false, returns, working, spark,
     price: value, priceCurrency: '%', priceUp: valueUp, priceDate: valueDate,
     drawdown: null, isAtAth: value !== null && ath !== null && value >= ath, athPrice: ath, athDate,
     sma10: null, signal: null,
@@ -450,6 +467,25 @@ const buildPriceRow = (
 interface PlacedRow { section: string; row: MarketRow; order: number; sheetIndex: number }
 
 /**
+ * Places one Macro row. Rates go straight into their section. An inflation (CPI) row appears
+ * TWICE: in "<section> cumulative" (inflation over each period) and, right below, in
+ * "<section> 1Y rate" (the YoY rate as it stood at each point) — e.g. the sheet's "Inflation"
+ * becomes "Inflation cumulative" and "Inflation 1Y rate". Used by every page that shows macro
+ * rows, so the Macro page and the Country pages always agree.
+ */
+const placeMacroRow = (
+  a: AssetLookup, section: string, order: number, sheetIndex: number,
+  rows: AssetRow[], indexByMonth: Map<number, number>, placed: PlacedRow[],
+) => {
+  if (!isCpiRow(a)) {
+    placed.push({ section, row: buildMacroRow(a, rows, indexByMonth), order, sheetIndex });
+    return;
+  }
+  placed.push({ section: `${section} cumulative`, row: buildMacroRow(a, rows, indexByMonth, 'cumulative'), order, sheetIndex });
+  placed.push({ section: `${section} 1Y rate`, row: buildMacroRow(a, rows, indexByMonth, 'yoy'), order, sheetIndex });
+};
+
+/**
  * Groups placed rows into sections and works out the colour scales. Sections come out in the
  * order they are first met; rows inside a section by order number (none = last), ties in
  * sheet order.
@@ -502,9 +538,11 @@ export const buildReturnMatrix = (
     const placement = (a.snapshots || []).find(s => s.category.toLowerCase() === wanted);
     if (!placement) return;
     // Rates and inflation have their own rules (see buildMacroRow) and ignore the currency.
-    const row = isMacroRow(a)
-      ? buildMacroRow(a, rows, indexByMonth)
-      : buildPriceRow(a, currency, rows, indexByMonth, shownFx);
+    if (isMacroRow(a)) {
+      placeMacroRow(a, placement.subcategory || 'Other', placement.order ?? Infinity, sheetIndex, rows, indexByMonth, placed);
+      return;
+    }
+    const row = buildPriceRow(a, currency, rows, indexByMonth, shownFx);
     if (row) placed.push({ section: placement.subcategory || 'Other', row, order: placement.order ?? Infinity, sheetIndex });
   });
 
@@ -565,7 +603,7 @@ export const buildCountryMatrix = (
     if (!isThisCountry(a)) return;
     if (isMacroRow(a)) {
       const g = groupOf(a, 'Macro');
-      macro.push({ section: g.section, row: buildMacroRow(a, rows, indexByMonth), order: g.order, sheetIndex });
+      placeMacroRow(a, g.section, g.order, sheetIndex, rows, indexByMonth, macro);
     } else {
       const g = groupOf(a, 'Assets');
       const row = buildPriceRow(a, country, rows, indexByMonth, shownFx);
