@@ -26,7 +26,9 @@
 
 import type { AssetRow, AssetLookup } from './fetchData';
 
-export type MarketsCurrency = 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD';
+// 'Original' = no conversion: each asset's returns stay in its own currency (S&P 500 in USD,
+// WIG20 in PLN...), i.e. what a local investor in that asset experienced.
+export type MarketsCurrency = 'Original' | 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD';
 export type MarketsPeriod = 'YTD' | '1M' | '3M' | '6M' | '1Y' | '3Y' | '5Y' | '10Y';
 
 // The period buttons, in the order the user asked for them.
@@ -102,7 +104,7 @@ export const orderedColumns = (endDate: string): MarketsPeriod[] => {
 const convertedPrice = (row: AssetRow, ticker: string, nativeCcy: string, target: MarketsCurrency): number | null => {
   const price = Number(row[ticker]);
   if (!(price > 0)) return null;
-  if (nativeCcy === target) return price;            // same currency: no FX involved at all
+  if (target === 'Original' || nativeCcy === target) return price; // no FX involved at all
   const toPln = (ccy: string): number | null => {
     if (ccy === 'PLN') return 1;
     const rate = Number(row[`${ccy}PLN`]);
@@ -238,6 +240,20 @@ export const buildReturnMatrix = (
   });
 
   return { sections, columns: orderedColumns(endDate), colourCaps, endDate };
+};
+
+/**
+ * Every SnapshotCategory used in the Lookup tab ("Assets", "Factor", ...), in the order each
+ * first appears in the sheet — these become the Category buttons, so a new category added in
+ * the sheet gets its own button without any code change. Spelling/case follows the first use.
+ */
+export const snapshotCategories = (lookup: AssetLookup[]): string[] => {
+  const seen = new Map<string, string>(); // lower-case key -> first spelling seen
+  lookup.forEach(a => (a.snapshots || []).forEach(s => {
+    const key = s.category.toLowerCase();
+    if (!seen.has(key)) seen.set(key, s.category);
+  }));
+  return Array.from(seen.values());
 };
 
 export interface MatrixSummary {
