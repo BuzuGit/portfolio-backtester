@@ -18,7 +18,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
-import { RefreshCw, Plus, Trash2 } from 'lucide-react';
+import { RefreshCw, Plus, Trash2, Menu, X } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
@@ -1612,6 +1612,8 @@ const PortfolioBacktester = () => {
   // 'trendFollowing' = compare Buy & Hold vs 10-month SMA trend following strategy
   // 'markets' = one-screen market overview (Return matrix), driven by the Lookup tab's Snapshot columns
   const [activeView, setActiveView] = useState<'backtest' | 'markets' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'graphs' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'positions'>('backtest');
+  // Narrow screens only: is the slide-in navigation drawer open? (Wide screens show the sidebar.)
+  const [navOpen, setNavOpen] = useState(false);
 
   // The year selected for the "Best To Worst" ranking view
   // Defaults to null, and will be set to the most recent year when data loads
@@ -7656,10 +7658,57 @@ const PortfolioBacktester = () => {
   // RENDER THE UI
   // ----------------------------------------
 
-  // Page background: flat, neutral light grey so the white cards stand out cleanly
+  // Every view, in menu order. The sidebar (wide screens) and the slide-in drawer (narrow
+  // screens) are both drawn from this one list, so they can never disagree.
+  const NAV_VIEWS: { view: typeof activeView; label: string }[] = [
+    { view: 'backtest', label: 'Backtest' },
+    { view: 'markets', label: 'Markets' },
+    { view: 'monthlyPrices', label: 'Monthly' },
+    { view: 'annualReturns', label: 'Annual' },
+    { view: 'bestToWorst', label: 'Best To Worst' },
+    { view: 'graphs', label: 'Graphs' },
+    { view: 'trendFollowing', label: 'Trend Following' },
+    { view: 'correlationMatrix', label: 'Correlations' },
+    { view: 'portfolio', label: 'Portfolio' },
+    { view: 'positions', label: 'Positions' },
+  ];
+  // The list of view buttons, shared by the sidebar and the drawer. Choosing one also closes
+  // the drawer (harmless on wide screens, where it is never open).
+  const navList = (
+    <div className="flex flex-col gap-1">
+      {NAV_VIEWS.map(({ view, label }) => (
+        <button
+          key={view}
+          type="button"
+          onClick={() => { setActiveView(view); setNavOpen(false); }}
+          className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeView === view ? 'bg-slate-800 text-white' : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  // Page background: flat, neutral light grey so the white cards stand out cleanly.
+  //
+  // LAYOUT: the content column is max-w-6xl (1,152px), exactly as before. From 1,368px of window
+  // width there is room for a 168px sidebar + 16px gap beside it (1,152 + 16 + 168 + the page's
+  // 2×16px padding = 1,368), so the sidebar sits to its left and the pair is centred as one block —
+  // the content keeps its full width and the sidebar uses what used to be empty grey margin.
+  // Below 1,368px the sidebar disappears and a "Menu" button opens the drawer instead, so the
+  // content never gives up width to navigation.
   return (
     <div className="min-h-screen bg-[#f1f2f4] p-4">
-      <div className="max-w-6xl mx-auto">
+      <div className="mx-auto max-w-6xl min-[1368px]:max-w-[1336px] min-[1368px]:flex min-[1368px]:items-start min-[1368px]:gap-4">
+      {/* Sidebar (wide screens): pinned to the top of the window while the page scrolls */}
+      <nav className="hidden min-[1368px]:block w-[168px] shrink-0 sticky top-4 bg-white rounded-xl border border-gray-200 shadow-sm p-2">
+        {isConnected && assetData
+          ? navList
+          : <div className="px-3 py-2 text-xs text-gray-400">Loading data…</div>}
+      </nav>
+      <div className="min-w-0 min-[1368px]:w-[1152px] min-[1368px]:shrink-0">
         {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy) */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4">
 
@@ -7738,109 +7787,21 @@ const PortfolioBacktester = () => {
             </div>
           )}
 
-          {/* View Toggle Buttons - Only show when data is loaded */}
-          {/* These act like tabs: click one to switch between the three views */}
+          {/* Navigation on narrow screens. Wide screens (1,368px+) get the sidebar on the left
+              instead, so this button hides there. Tapping it slides the same list in from the
+              left (see the drawer at the bottom of the page). */}
           {isConnected && assetData && (
-            <div className="mb-6 flex gap-2 flex-wrap">
+            <div className="mb-6 min-[1368px]:hidden">
               <button
-                onClick={() => setActiveView('backtest')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'backtest'
-                    ? 'bg-slate-800 text-white'           // Active: highlighted
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'  // Inactive: muted
-                }`}
+                type="button"
+                onClick={() => setNavOpen(true)}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center gap-2"
+                aria-label="Open navigation"
               >
-                Backtest
-              </button>
-              <button
-                onClick={() => setActiveView('markets')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'markets'
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Markets
-              </button>
-              <button
-                onClick={() => setActiveView('monthlyPrices')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'monthlyPrices'
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Monthly
-              </button>
-              <button
-                onClick={() => setActiveView('annualReturns')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'annualReturns'
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Annual
-              </button>
-              <button
-                onClick={() => setActiveView('bestToWorst')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'bestToWorst'
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Best To Worst
-              </button>
-              <button
-                onClick={() => setActiveView('graphs')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'graphs'
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Graphs
-              </button>
-              <button
-                onClick={() => setActiveView('trendFollowing')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'trendFollowing'
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Trend Following
-              </button>
-              <button
-                onClick={() => setActiveView('correlationMatrix')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'correlationMatrix'
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Correlations
-              </button>
-              <button
-                onClick={() => setActiveView('portfolio')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'portfolio'
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Portfolio
-              </button>
-              <button
-                onClick={() => setActiveView('positions')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeView === 'positions'
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Positions
+                <Menu className="w-4 h-4" />
+                Menu
+                <span className="text-gray-400">·</span>
+                <span className="text-gray-900">{NAV_VIEWS.find(v => v.view === activeView)?.label}</span>
               </button>
             </div>
           )}
@@ -19488,6 +19449,29 @@ const PortfolioBacktester = () => {
           )}
         </div>
       </div>
+      </div>
+
+      {/* Slide-in navigation drawer (narrow screens), opened by the "Menu" button. Tapping the
+          dimmed backdrop, the close button, or any view closes it. */}
+      {navOpen && (
+        <div className="fixed inset-0 z-50 min-[1368px]:hidden">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setNavOpen(false)} />
+          <nav className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-white shadow-xl p-3 overflow-y-auto">
+            <div className="flex items-center justify-between mb-2 px-1">
+              <span className="text-sm font-semibold text-gray-700">Views</span>
+              <button
+                type="button"
+                onClick={() => setNavOpen(false)}
+                className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100"
+                aria-label="Close navigation"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {navList}
+          </nav>
+        </div>
+      )}
     </div>
   );
 };
