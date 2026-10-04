@@ -31,19 +31,93 @@ import type { AssetRow, AssetLookup } from './fetchData';
 // GBP and JPY are only offered as Country pages (the Currency buttons elsewhere stay at five),
 // but the conversion works for any currency with an xxxPLN column in the sheet.
 export type MarketsCurrency = 'Native' | 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD' | 'GBP' | 'JPY';
-export type MarketsPeriod = 'YTD' | '1M' | '3M' | '6M' | '1Y' | '3Y' | '5Y' | '10Y';
+export type MarketsPeriod = 'YTD' | '1M' | '3M' | '6M' | '1Y' | '3Y' | '5Y' | '10Y' | 'Max';
 
-// The period buttons, in the order the user asked for them.
-export const MARKETS_PERIODS: MarketsPeriod[] = ['YTD', '1M', '3M', '6M', '1Y', '3Y', '5Y', '10Y'];
+// The period buttons, in the order the user asked for them. "Max" = each row's whole history,
+// from the first month it has data (so it differs from row to row).
+export const MARKETS_PERIODS: MarketsPeriod[] = ['YTD', '1M', '3M', '6M', '1Y', '3Y', '5Y', '10Y', 'Max'];
 
-// How many months each fixed period looks back. YTD is not here: its length depends on the date.
-const PERIOD_MONTHS: Record<Exclude<MarketsPeriod, 'YTD'>, number> = {
+// How many months each fixed period looks back. YTD and Max are not here: YTD's length depends
+// on the date, Max's on the row.
+const PERIOD_MONTHS: Record<Exclude<MarketsPeriod, 'YTD' | 'Max'>, number> = {
   '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '3Y': 36, '5Y': 60, '10Y': 120,
 };
 
-// The trend sparkline keeps up to 10 years: 120 monthly steps = 121 month-end points. The table
-// shows the last 1, 3, 5 or 10 years of it, depending on the chosen trend window.
-const SPARK_POINTS = 121;
+/**
+ * The row index a period starts at, or undefined if the history doesn't reach back that far.
+ * YTD starts at last December, Max at the row's first month with data (`firstIdx`), everything
+ * else N months before the end.
+ */
+const periodStartIdx = (
+  p: MarketsPeriod, endKey: number, firstIdx: number, indexByMonth: Map<number, number>,
+): number | undefined => {
+  if (p === 'Max') return firstIdx;
+  const startKey = p === 'YTD' ? (Math.floor(endKey / 12) - 1) * 12 + 11 : endKey - PERIOD_MONTHS[p];
+  return indexByMonth.get(startKey);
+};
+
+// The trend sparkline keeps the row's WHOLE history; the table shows the last 1, 3, 5 or 10
+// years of it, or all of it on "Max".
+const SPARK_POINTS = Infinity;
+
+// The calendar years the Stats view shows returns for — stress years, to see who held up:
+// 2018 (Q4 sell-off, rates up), 2020 (COVID crash), 2022 (stocks AND bonds down together).
+export const STATS_YEARS = [2018, 2020, 2022];
+
+/**
+ * Risk & return statistics for one row over one period, in the view currency. Same rules as the
+ * Backtest / Annual tabs: CAGR over calendar time, Vol = standard deviation of monthly returns
+ * × √12, Sharpe = CAGR ÷ Vol (0% risk-free rate), drawdowns from the running peak inside the
+ * window. CAGR, 2x time, Vol and Sharpe are null for windows under a year (annualising a few
+ * months would look precise and mean little); 2x time is null when CAGR is zero or negative.
+ */
+export interface PeriodStats {
+  startDate: string;
+  endDate: string;
+  months: number;
+  cagr: number | null;          // % a year
+  doublingYears: number | null; // years for money to double at that CAGR
+  vol: number | null;           // % a year
+  sharpe: number | null;
+  maxDD: number;                // %, <= 0
+  longestDDMonths: number;      // longest stretch below a previous peak (ongoing counts)
+  currDD: number;               // %, <= 0, at the end of the window
+}
+
+const emptyStats = (): Record<MarketsPeriod, PeriodStats | null> => {
+  const s = {} as Record<MarketsPeriod, PeriodStats | null>;
+  MARKETS_PERIODS.forEach(p => { s[p] = null; });
+  return s;
+};
+
+/** Computes PeriodStats from a window of month-end values (oldest first, gaps already removed). */
+const statsFor = (series: { date: string; v: number }[]): PeriodStats | null => {
+  if (series.length < 2) return null;
+  const first = series[0], last = series[series.length - 1];
+  const months = series.length - 1;
+  const years = (new Date(last.date).getTime() - new Date(first.date).getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+  const longEnough = months >= 12 && years > 0;
+  const cagr = longEnough ? (Math.pow(last.v / first.v, 1 / years) - 1) * 100 : null;
+  const rets = series.slice(1).map((s, i) => s.v / series[i].v - 1);
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const variance = rets.reduce((a, r) => a + (r - mean) ** 2, 0) / rets.length;
+  const vol = longEnough ? Math.sqrt(variance) * Math.sqrt(12) * 100 : null;
+  let peak = -Infinity, maxDD = 0, streak = 0, longest = 0, dd = 0;
+  for (const s of series) {
+    peak = Math.max(peak, s.v);
+    dd = (s.v / peak - 1) * 100;
+    maxDD = Math.min(maxDD, dd);
+    if (dd < 0) { streak++; longest = Math.max(longest, streak); } else streak = 0;
+  }
+  return {
+    startDate: first.date, endDate: last.date, months,
+    cagr,
+    doublingYears: cagr !== null && cagr > 0 ? Math.log(2) / Math.log(1 + cagr / 100) : null,
+    vol,
+    sharpe: cagr !== null && vol !== null && vol > 0 ? cagr / vol : null,
+    maxDD, longestDDMonths: longest, currDD: dd,
+  };
+};
 
 /**
  * How one value in the table was built from the sheet, so a tooltip can show the working:
@@ -98,6 +172,9 @@ export interface MarketRow {
   // above that average, SELL otherwise; null if there aren't 10 months of prices yet.
   sma10: number | null;
   signal: 'BUY' | 'SELL' | null;
+  // Stats view (price rows; empty for macro): risk/return per period, and stress-year returns.
+  stats: Record<MarketsPeriod, PeriodStats | null>;
+  yearReturns: Record<number, number | null>;
 }
 
 export interface MarketSection {
@@ -127,10 +204,10 @@ const monthKey = (date: string): number => {
  */
 export const orderedColumns = (endDate: string): MarketsPeriod[] => {
   const monthsElapsed = Number(endDate.split('-')[1]) || 12;
-  const fixed = MARKETS_PERIODS.filter(p => p !== 'YTD') as Exclude<MarketsPeriod, 'YTD'>[];
+  const fixed = MARKETS_PERIODS.filter(p => p !== 'YTD' && p !== 'Max') as Exclude<MarketsPeriod, 'YTD' | 'Max'>[];
   let insertAt = 0;
   fixed.forEach((p, i) => { if (PERIOD_MONTHS[p] <= monthsElapsed) insertAt = i + 1; });
-  return [...fixed.slice(0, insertAt), 'YTD', ...fixed.slice(insertAt)];
+  return [...fixed.slice(0, insertAt), 'YTD', ...fixed.slice(insertAt), 'Max']; // Max always last
 };
 
 /**
@@ -239,10 +316,16 @@ const buildMacroRow = (
     const endRow = rows[endIdx];
     const endKey = monthKey(String(endRow.date));
     const e = level(endRow) as number;
+    // "Max" starts at the first month this row can be measured: the first YoY rate for the 1Y-rate
+    // view (a year after the index starts), the first positive index for cumulative inflation, the
+    // first rate otherwise.
+    let firstIdx = 0;
+    const measurable = (i: number) => (cpi && mode === 'yoy' ? yoyAt(i) !== null
+      : cpi ? (level(rows[i]) ?? 0) > 0 : level(rows[i]) !== null);
+    while (firstIdx < endIdx && !measurable(firstIdx)) firstIdx++;
     MARKETS_PERIODS.forEach(p => {
-      const startKey = p === 'YTD' ? (Math.floor(endKey / 12) - 1) * 12 + 11 : endKey - PERIOD_MONTHS[p];
-      const startIdx = indexByMonth.get(startKey);
-      if (startIdx === undefined) return;
+      const startIdx = periodStartIdx(p, endKey, firstIdx, indexByMonth);
+      if (startIdx === undefined || startIdx >= endIdx) return;
       // 1Y-rate mode: the YoY rate back then (start) against the YoY rate now (end).
       if (cpi && mode === 'yoy') {
         const then = yoyAt(startIdx), now = yoyAt(endIdx);
@@ -285,7 +368,7 @@ const buildMacroRow = (
     ticker: a.ticker, name: a.name, kind: cpi ? (mode === 'yoy' ? 'cpiyoy' : 'cpi') : 'rate', isFx: false, returns, working, spark,
     price: value, priceCurrency: '%', priceUp: valueUp, priceDate: valueDate,
     drawdown: null, isAtAth: value !== null && ath !== null && value >= ath, athPrice: ath, athDate,
-    sma10: null, signal: null,
+    sma10: null, signal: null, stats: emptyStats(), yearReturns: {},
   };
 };
 
@@ -403,6 +486,9 @@ const buildPriceRow = (
   let athDate = '';
   let sma10: number | null = null;
   let signal: 'BUY' | 'SELL' | null = null;
+  const stats = emptyStats();
+  const yearReturns: Record<number, number | null> = {};
+  STATS_YEARS.forEach(y => { yearReturns[y] = null; });
 
   if (endIdx >= 0) {
     const endRow = rows[endIdx];
@@ -410,13 +496,15 @@ const buildPriceRow = (
     const endValue = conv(endRow);
     const endWorking = explain(endRow);
 
+    // "Max" starts at the first month this row has a value in the view currency.
+    let firstIdx = 0;
+    while (firstIdx < endIdx && conv(rows[firstIdx]) === null) firstIdx++;
+
     MARKETS_PERIODS.forEach(p => {
-      // YTD starts at last December; everything else N months before the end.
-      const startKey = p === 'YTD'
-        ? (Math.floor(endKey / 12) - 1) * 12 + 11
-        : endKey - PERIOD_MONTHS[p];
-      const startIdx = indexByMonth.get(startKey);
-      if (startIdx === undefined || endValue === null) return;
+      // YTD starts at last December; Max at the first month with data; everything else N months
+      // before the end.
+      const startIdx = periodStartIdx(p, endKey, firstIdx, indexByMonth);
+      if (startIdx === undefined || startIdx >= endIdx || endValue === null) return;
       const startValue = conv(rows[startIdx]);
       if (startValue === null) return;
       returns[p] = (endValue / startValue - 1) * 100;
@@ -424,6 +512,19 @@ const buildPriceRow = (
       if (startWorking && endWorking) {
         working[p] = { startDate: String(rows[startIdx].date), start: startWorking, endDate: String(endRow.date), end: endWorking };
       }
+      // Stats view: the same window's month-end values, gaps skipped.
+      const window = rows.slice(startIdx, endIdx + 1)
+        .map(r => ({ date: String(r.date), v: conv(r) }))
+        .filter((x): x is { date: string; v: number } => x.v !== null);
+      stats[p] = statsFor(window);
+    });
+
+    // Stress-year returns for the Stats view: last December to December, in the view currency.
+    STATS_YEARS.forEach(y => {
+      const from = indexByMonth.get(y * 12 - 1), to = indexByMonth.get(y * 12 + 11);
+      if (from === undefined || to === undefined || to > endIdx) return;
+      const a0 = conv(rows[from]), a1 = conv(rows[to]);
+      if (a0 !== null && a1 !== null) yearReturns[y] = (a1 / a0 - 1) * 100;
     });
 
     // Trend line (up to 10 years) in the selected currency. Months with no price are simply skipped.
@@ -458,7 +559,7 @@ const buildPriceRow = (
   }
   return {
     ticker: a.ticker, name, kind: isFx ? 'fx' : 'asset', isFx, returns, working, spark, price, priceCurrency, priceUp, priceDate,
-    drawdown, isAtAth, athPrice, athDate, sma10, signal,
+    drawdown, isAtAth, athPrice, athDate, sma10, signal, stats, yearReturns,
   };
 };
 
