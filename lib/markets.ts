@@ -179,6 +179,9 @@ export interface MarketRow {
   // Rate rows only: the most recent month the rate changed — the last policy decision for a
   // reference rate (from -> to, in %). null if it never changed in the data.
   lastMove?: { date: string; from: number; to: number } | null;
+  // Macro rows only: the dated history of the shown number (the rate, or YoY inflation), oldest
+  // first, for the Macro / Country charts. Inflation ends at the last real CPI print.
+  history?: { date: string; v: number }[];
 }
 
 export interface MarketSection {
@@ -313,6 +316,7 @@ const buildMacroRow = (
   let value: number | null = null;
   let valueUp: boolean | null = null;
   let valueDate = '';
+  const history: { date: string; v: number }[] = [];
   let ath: number | null = null;
   let athDate = '';
 
@@ -350,10 +354,11 @@ const buildMacroRow = (
       working[p] = { startDate: String(rows[startIdx].date), start: w(s), endDate: String(endRow.date), end: w(e) };
     });
 
-    // Trend (whole history) of the shown number (the rate, or YoY inflation).
+    // Trend (whole history) of the shown number (the rate, or YoY inflation), plus the same
+    // values with their dates for the charts.
     for (let i = Math.max(0, endIdx - SPARK_POINTS + 1); i <= endIdx; i++) {
       const v = shown(i);
-      if (v !== null) spark.push(v);
+      if (v !== null) { spark.push(v); history.push({ date: String(rows[i].date), v }); }
     }
 
     value = shown(endIdx);
@@ -386,7 +391,7 @@ const buildMacroRow = (
     ticker: a.ticker, name: a.name, kind: cpi ? (mode === 'yoy' ? 'cpiyoy' : 'cpi') : 'rate', isFx: false, returns, working, spark,
     price: value, priceCurrency: '%', priceUp: valueUp, priceDate: valueDate,
     drawdown: null, isAtAth: value !== null && ath !== null && value >= ath, athPrice: ath, athDate,
-    sma10: null, signal: null, stats: emptyStats(), yearReturns: {}, lastMove,
+    sma10: null, signal: null, stats: emptyStats(), yearReturns: {}, lastMove, history,
   };
 };
 
