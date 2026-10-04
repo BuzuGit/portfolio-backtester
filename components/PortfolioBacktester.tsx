@@ -10244,6 +10244,18 @@ const PortfolioBacktester = () => {
                   : m, marketsPeriod)
               : null;
             const basket = m && marketsIsCountry ? currencyBasketMove(m, marketsPeriod) : null;
+            // Country page, Inflation tile: today's 1Y inflation rate vs the rate at the start of the
+            // selected period (same comparison as the "Now vs …" column of the Inflation 1Y rate row).
+            const inflRow = marketsIsCountry ? allRows.find(r => r.kind === 'cpiyoy') : undefined;
+            const inflWk = inflRow?.working[marketsPeriod] ?? null;
+            const inflDiff = inflWk ? inflWk.end.result - inflWk.start.result : null;
+            // Country page, Policy rate tile: the LAST decision of the reference rate (a RATE_ row; the
+            // 10Y yield is a market rate, not policy) — whatever the period buttons say.
+            const policyRow = marketsIsCountry
+              ? (allRows.find(r => r.kind === 'rate' && /^RATE/i.test(r.ticker)) ?? allRows.find(r => r.kind === 'rate' && !/^10Y/i.test(r.ticker)))
+              : undefined;
+            const policyMove = policyRow?.lastMove ?? null;
+            const policyBp = policyMove ? Math.round((policyMove.to - policyMove.from) * 100) : null;
             // A row's level: exchange rates to 4 decimals, share prices through the app-wide formatPrice.
             const fmtLevel = (isFx: boolean, v: number) => (isFx ? formatFxRate(v) : formatPrice(v));
             // Hover text for a return cell: which prices, FX rates and dates produced the number.
@@ -10558,8 +10570,43 @@ const PortfolioBacktester = () => {
                                   : '',
                               }
                             : { label: `Dispersion · ${marketsPeriod}`, value: summary?.dispersion != null ? `${summary.dispersion.toFixed(1)} pp` : '–', name: '', sub: 'best − worst', cls: 'text-gray-800' },
-                          { label: `Positive · ${marketsPeriod}`, value: summary ? `${summary.positive}/${summary.total}` : '–', name: '', sub: 'assets above 0', cls: 'text-gray-800' },
-                          { label: 'Trend · 10M SMA', value: summary ? `${summary.buy}/${summary.signalTotal}` : '–', name: '', sub: 'on BUY signal', cls: 'text-gray-800' },
+                          ...(marketsIsCountry ? [
+                            // Inflation: Accelerating (red) / Easing (green) vs the selected period, in pp.
+                            (() => {
+                              const flat = inflDiff !== null && Math.abs(inflDiff) < 0.05;
+                              const up = inflDiff !== null && !flat && inflDiff > 0;
+                              const cls = inflDiff === null || flat ? 'text-gray-900' : up ? 'text-red-700' : 'text-green-700';
+                              return {
+                                label: `Inflation · ${marketsPeriod}`,
+                                value: inflDiff === null ? '–' : flat ? '0.0 pp' : `${up ? '+' : '−'}${Math.abs(inflDiff).toFixed(1)} pp`,
+                                name: inflDiff === null ? 'No data' : flat ? 'Unchanged' : up ? 'Accelerating' : 'Easing',
+                                nameCls: cls, sub: '', cls,
+                                title: inflWk && inflRow
+                                  ? `${inflRow.name}: 1Y inflation now ${inflWk.end.result.toFixed(2)}% (${monthLabel(inflWk.endDate)})\n`
+                                    + `vs ${inflWk.start.result.toFixed(2)}% (${monthLabel(inflWk.startDate)}) at the start of the ${marketsPeriod} period`
+                                  : 'No inflation row tagged for this country',
+                              };
+                            })(),
+                            // Policy rate: the last decision, Hiking (red) / Cutting (green), in bp.
+                            (() => {
+                              const up = policyBp !== null && policyBp > 0;
+                              const cls = policyBp === null || policyBp === 0 ? 'text-gray-900' : up ? 'text-red-700' : 'text-green-700';
+                              return {
+                                label: 'Policy rate · last move',
+                                value: policyBp === null ? '–' : `${up ? '+' : '−'}${Math.abs(policyBp)} bp`,
+                                name: !policyMove ? (policyRow ? 'No change' : 'No data') : `${up ? 'Hiking' : 'Cutting'} · ${monthLabel(policyMove.date)}`,
+                                nameCls: cls, sub: '', cls,
+                                title: policyMove && policyRow
+                                  ? `${policyRow.name}: last decision in ${monthLabel(policyMove.date)}, `
+                                    + `${policyMove.from.toFixed(2)}% → ${policyMove.to.toFixed(2)}% (${up ? '+' : '−'}${Math.abs(policyBp ?? 0)} bp)\n`
+                                    + `Now ${policyRow.price !== null ? fmtPct(policyRow.price) : "–"}. (Month-end data: a decision shows in the month it took effect.)`
+                                  : 'No reference rate tagged for this country',
+                              };
+                            })(),
+                          ] : [
+                            { label: `Positive · ${marketsPeriod}`, value: summary ? `${summary.positive}/${summary.total}` : '–', name: '', sub: 'assets above 0', cls: 'text-gray-800' },
+                            { label: 'Trend · 10M SMA', value: summary ? `${summary.buy}/${summary.signalTotal}` : '–', name: '', sub: 'on BUY signal', cls: 'text-gray-800' },
+                          ]),
                         ].map(t => (
                           <div
                             key={t.label}
