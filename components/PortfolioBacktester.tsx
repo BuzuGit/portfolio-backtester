@@ -22,7 +22,7 @@ import { RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
-import { buildReturnMatrix, summariseMatrix, MARKETS_PERIODS, MarketsCurrency, MarketsPeriod } from '@/lib/markets';
+import { buildReturnMatrix, summariseMatrix, snapshotCategories, MARKETS_PERIODS, MarketsCurrency, MarketsPeriod } from '@/lib/markets';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -1660,7 +1660,9 @@ const PortfolioBacktester = () => {
   // Markets tab state: which currency the returns are shown in, and which period the bar
   // chart and the summary tiles focus on. Separate from the Portfolio tab's currency on
   // purpose, so switching one tab never quietly changes the other.
-  const [marketsCurrency, setMarketsCurrency] = useState<MarketsCurrency>('PLN');
+  const [marketsCurrency, setMarketsCurrency] = useState<MarketsCurrency>('Original');
+  // Which SnapshotCategory the table shows ("Assets", "Factor", ...). '' = the first one in the sheet.
+  const [marketsCategory, setMarketsCategory] = useState<string>('');
   const [marketsPeriod, setMarketsPeriod] = useState<MarketsPeriod>('YTD');
   // Which year the "Profit Breakdown by Asset" table shows.
   // null = default to the latest available year in yearsData (computed at render time).
@@ -4781,9 +4783,14 @@ const PortfolioBacktester = () => {
   // Markets tab: the whole Return matrix for the selected currency (see lib/markets.ts).
   // Recomputed only when the data or the currency changes — switching the period button just
   // re-reads it, because every period's figure is already in there.
+  // The Category buttons come straight from the sheet, so a new category needs no code change.
+  // If the remembered choice disappears from the sheet (renamed or removed), fall back to the first.
+  const marketsCategories = useMemo(() => snapshotCategories(assetLookup), [assetLookup]);
+  const activeMarketsCategory =
+    marketsCategories.find(c => c.toLowerCase() === marketsCategory.toLowerCase()) ?? marketsCategories[0] ?? 'Assets';
   const marketsMatrix = useMemo(
-    () => buildReturnMatrix(assetData, assetLookup, marketsCurrency),
-    [assetData, assetLookup, marketsCurrency],
+    () => buildReturnMatrix(assetData, assetLookup, marketsCurrency, activeMarketsCategory),
+    [assetData, assetLookup, marketsCurrency, activeMarketsCategory],
   );
 
   // Calendar-year returns of the xxxPLN exchange rates, for the Return Map's currency buttons.
@@ -10152,11 +10159,12 @@ const PortfolioBacktester = () => {
 
             return (
               <div className="mt-2">
-                {/* Page-level filters: currency for every return figure, period for the bars and tiles */}
+                {/* Page-level filters: currency for every return figure, period for the bars and tiles, */}
+                {/* category for which Lookup rows the table shows. "Original" = no conversion. */}
                 <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
-                    {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
+                    {(['Original', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
                       <button
                         key={c}
                         onClick={() => setMarketsCurrency(c)}
@@ -10178,6 +10186,18 @@ const PortfolioBacktester = () => {
                       >{p}</button>
                     ))}
                   </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-gray-500 mr-1">Category:</span>
+                    {marketsCategories.map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setMarketsCategory(c)}
+                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                          activeMarketsCategory === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >{c}</button>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
@@ -10186,7 +10206,7 @@ const PortfolioBacktester = () => {
                     <div>
                       <h3 className="text-md font-semibold text-gray-800 inline">Return matrix</h3>
                       <span className="text-xs text-gray-500 ml-2 uppercase tracking-wide">
-                        Asset × horizon · total return in {marketsCurrency}
+                        {activeMarketsCategory} · total return in {marketsCurrency === 'Original' ? "each asset's own currency" : marketsCurrency}
                       </span>
                     </div>
                     {m && (
@@ -10198,7 +10218,7 @@ const PortfolioBacktester = () => {
 
                   {!m || allRows.length === 0 ? (
                     <p className="text-sm text-gray-500 py-6 text-center">
-                      No rows have SnapshotCategory = &quot;Assets&quot; in the Lookup tab yet.
+                      No rows have SnapshotCategory = &quot;{activeMarketsCategory}&quot; in the Lookup tab yet.
                     </p>
                   ) : (
                     <>
@@ -10342,7 +10362,9 @@ const PortfolioBacktester = () => {
                       </div>
 
                       <p className="text-[11px] text-gray-500 mt-3">
-                        Total return (adjusted-close prices) in {marketsCurrency}, converted at each month-end&apos;s exchange rate ·
+                        {marketsCurrency === 'Original'
+                          ? <>Total return (adjusted-close prices) in each asset&apos;s own currency, no FX conversion · </>
+                          : <>Total return (adjusted-close prices) in {marketsCurrency}, converted at each month-end&apos;s exchange rate · </>}
                         every period ends at the latest price · 3Y/5Y/10Y are cumulative (c), not annualised ·
                         colour scaled within each column · price in the asset&apos;s own currency, red if below last month-end ·
                         Curr DD and Signal use the asset&apos;s own currency, like the Annual and Monthly tabs · – = not enough history
