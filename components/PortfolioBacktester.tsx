@@ -7674,22 +7674,51 @@ const PortfolioBacktester = () => {
   ];
   // The list of view buttons, shared by the sidebar and the drawer. Choosing one also closes
   // the drawer (harmless on wide screens, where it is never open).
+  // While Markets is open, its categories (Assets, Equities, Macro... straight from the sheet's
+  // SnapshotCategory column) are listed indented underneath it: the left panel is for moving
+  // between pages and sections, the top of each page for filtering what is on it.
   const navList = (
     <div className="flex flex-col gap-1">
       {NAV_VIEWS.map(({ view, label }) => (
-        <button
-          key={view}
-          type="button"
-          onClick={() => { setActiveView(view); setNavOpen(false); }}
-          className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-            activeView === view ? 'bg-slate-800 text-white' : 'text-gray-600 hover:bg-gray-100'
-          }`}
-        >
-          {label}
-        </button>
+        <React.Fragment key={view}>
+          <button
+            type="button"
+            onClick={() => { setActiveView(view); setNavOpen(false); }}
+            className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeView === view ? 'bg-slate-800 text-white' : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            {label}
+          </button>
+          {view === 'markets' && activeView === 'markets' && marketsCategories.length > 0 && (
+            <div className="flex flex-col gap-0.5 ml-3 pl-2 border-l border-gray-200 mb-1">
+              {marketsCategories.map(c => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => { setMarketsCategory(c); setNavOpen(false); }}
+                  className={`w-full text-left px-2 py-1 rounded-md text-xs transition-colors ${
+                    activeMarketsCategory === c
+                      ? 'bg-gray-100 text-gray-900 font-semibold'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          )}
+        </React.Fragment>
       ))}
     </div>
   );
+
+  // Refresh button + load status. Lives at the top of the sidebar on wide screens; narrow
+  // screens keep the original "Data" bar above the page instead (they have no sidebar).
+  const loadStatusClass =
+    loadingMessage.includes('Loaded') ? 'text-gray-500' :
+    loadingMessage.includes('Error') ? 'text-red-600' :
+    'text-gray-500';
 
   // Page background: flat, neutral light grey so the white cards stand out cleanly.
   //
@@ -7704,16 +7733,32 @@ const PortfolioBacktester = () => {
       <div className="mx-auto max-w-6xl min-[1368px]:max-w-[1336px] min-[1368px]:flex min-[1368px]:items-start min-[1368px]:gap-4">
       {/* Sidebar (wide screens): pinned to the top of the window while the page scrolls */}
       <nav className="hidden min-[1368px]:block w-[168px] shrink-0 sticky top-4 bg-white rounded-xl border border-gray-200 shadow-sm p-2">
-        {isConnected && assetData
-          ? navList
-          : <div className="px-3 py-2 text-xs text-gray-400">Loading data…</div>}
+        {/* Data controls: full-width Refresh button, then the load status in small print */}
+        <button
+          type="button"
+          onClick={loadDataFromSheet}
+          disabled={isLoading}
+          className="w-full px-3 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 font-semibold flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
+        >
+          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          {isLoading ? 'Loading...' : 'Refresh Data'}
+        </button>
+        <div className={`px-1 pt-1.5 pb-2 text-[11px] leading-snug text-center ${loadStatusClass}`}>
+          {loadingMessage || 'Ready'}
+        </div>
+        <div className="border-t border-gray-100 pt-2">
+          {isConnected && assetData
+            ? navList
+            : <div className="px-3 py-2 text-xs text-gray-400">Loading data…</div>}
+        </div>
       </nav>
       <div className="min-w-0 min-[1368px]:w-[1152px] min-[1368px]:shrink-0">
         {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy) */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4">
 
-          {/* Data Status Section - compact single row */}
-          <div className="mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
+          {/* Data Status Section - compact single row. Narrow screens only: wide screens show
+              the same Refresh button and status at the top of the sidebar instead. */}
+          <div className="mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between min-[1368px]:hidden">
             <div className="flex items-center gap-3">
               <h2 className="text-lg font-semibold text-gray-700">Data</h2>
               <span className={`text-sm ${
@@ -10229,8 +10274,8 @@ const PortfolioBacktester = () => {
 
             return (
               <div className="mt-2">
-                {/* Page-level filters: currency for every return figure, period for the bars and tiles, */}
-                {/* category for which Lookup rows the table shows. "Original" = no conversion. */}
+                {/* Page-level filters: currency for every return figure, period for the bars and tiles. */}
+                {/* "Original" = no conversion. Which category is shown is chosen in the left panel. */}
                 <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
@@ -10259,18 +10304,7 @@ const PortfolioBacktester = () => {
                       >{p}</button>
                     ))}
                   </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs text-gray-500 mr-1">Category:</span>
-                    {marketsCategories.map(c => (
-                      <button
-                        key={c}
-                        onClick={() => setMarketsCategory(c)}
-                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                          activeMarketsCategory === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
-                      >{c}</button>
-                    ))}
-                  </div>
+                  {/* (The Category choice lives in the left panel, under "Markets".) */}
                 </div>
 
                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
