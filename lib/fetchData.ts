@@ -580,6 +580,20 @@ function parseLookupTable(csvText: string): AssetLookup[] {
   // Auto-detect delimiter
   const delimiter = lines[0].includes('\t') ? '\t' : ',';
 
+  // The Markets columns (7-11) are found by their HEADER NAME, so inserting a column elsewhere
+  // in the sheet can't silently shift them into the wrong field; the usual position is only the
+  // fallback if a header is missing or renamed. (Columns 1-6 keep their fixed positions.)
+  const headers = parseCSVLine(lines[0].trim(), delimiter).map(h => h.trim().toLowerCase());
+  const colOf = (name: string, fallback: number) => {
+    const i = headers.indexOf(name.toLowerCase());
+    return i >= 0 ? i : fallback;
+  };
+  const COL_SNAP_CATEGORY = colOf('SnapshotCategory', 6);
+  const COL_SNAP_SUBCATEGORY = colOf('SnapshotSubCategory', 7);
+  const COL_SNAP_ORDER = colOf('SnapshotSubCategoryOrder', 8);
+  const COL_SNAP_COUNTRY = colOf('SnapshotCountry', 9);
+  const COL_SNAP_COUNTRY_ORDER = colOf('SnapshotCountryOrder', 10);
+
   const lookup: AssetLookup[] = [];
 
   // Skip header row (line 0), parse data rows
@@ -605,9 +619,9 @@ function parseLookupTable(csvText: string): AssetLookup[] {
     // SnapshotPlacement). A "-" means "not included", so it is treated exactly like a blank.
     const snapList = (i: number): string[] =>
       (values.length > i ? values[i] : '').split(',').map(v => v.trim()).map(v => (v === '-' ? '' : v));
-    const categories = snapList(6);
-    const subcategories = snapList(7);
-    const orders = snapList(8);
+    const categories = snapList(COL_SNAP_CATEGORY);
+    const subcategories = snapList(COL_SNAP_SUBCATEGORY);
+    const orders = snapList(COL_SNAP_ORDER);
     const snapshots: SnapshotPlacement[] = [];
     categories.forEach((category, k) => {
       if (!category) return; // a blank slot in the list places the row nowhere
@@ -620,9 +634,9 @@ function parseLookupTable(csvText: string): AssetLookup[] {
     });
 
     // Column 10, SnapshotCountry: a single currency code; "-" counts as blank.
-    const snapshotCountry = (snapList(9)[0] || '').toUpperCase();
+    const snapshotCountry = (snapList(COL_SNAP_COUNTRY)[0] || '').toUpperCase();
     // Column 11, SnapshotCountryOrder: a single number; blank or "-" = no order given.
-    const countryOrderNum = parseFloat(snapList(10)[0] || '');
+    const countryOrderNum = parseFloat(snapList(COL_SNAP_COUNTRY_ORDER)[0] || '');
     const snapshotCountryOrder = isNaN(countryOrderNum) ? null : countryOrderNum;
 
     if (ticker && name) {

@@ -1614,6 +1614,13 @@ const PortfolioBacktester = () => {
   const [activeView, setActiveView] = useState<'backtest' | 'markets' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'graphs' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'positions'>('backtest');
   // Narrow screens only: is the slide-in navigation drawer open? (Wide screens show the sidebar.)
   const [navOpen, setNavOpen] = useState(false);
+  // Escape closes the drawer, as it would any pop-over. The listener only exists while it's open.
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNavOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [navOpen]);
 
   // The year selected for the "Best To Worst" ranking view
   // Defaults to null, and will be set to the most recent year when data loads
@@ -4800,7 +4807,11 @@ const PortfolioBacktester = () => {
   // If the remembered choice disappears from the sheet (renamed or removed), fall back to the first.
   // "Country" is always added at the end: it isn't a SnapshotCategory but a page built from the
   // SnapshotCountry column (see buildCountryMatrix).
-  const marketsCategories = useMemo(() => [...snapshotCategories(assetLookup), MARKETS_COUNTRY], [assetLookup]);
+  // (A sheet category that happens to be called "Country" is skipped, so it can't clash with it.)
+  const marketsCategories = useMemo(
+    () => [...snapshotCategories(assetLookup).filter(c => c.toLowerCase() !== MARKETS_COUNTRY.toLowerCase()), MARKETS_COUNTRY],
+    [assetLookup],
+  );
   const activeMarketsCategory =
     marketsCategories.find(c => c.toLowerCase() === marketsCategory.toLowerCase()) ?? marketsCategories[0] ?? 'Assets';
   const marketsIsCountry = activeMarketsCategory === MARKETS_COUNTRY;
@@ -10150,8 +10161,9 @@ const PortfolioBacktester = () => {
             </div>
           )}
 
-          {/* Markets tab — a one-screen overview. Section 1 is the Return matrix: every Lookup row */}
-          {/* marked "Assets", grouped by SnapshotSubCategory. All the arithmetic is in lib/markets.ts. */}
+          {/* Markets tab — a one-screen overview: the Return matrix for the category chosen in the */}
+          {/* left panel (Assets, Equities, Macro... from the sheet's SnapshotCategory column, plus the */}
+          {/* Country page), in Returns or Stats view. All the arithmetic is in lib/markets.ts. */}
           {isConnected && assetData && activeView === 'markets' && (() => {
             const m = marketsMatrix;
             const allRows = m ? m.sections.flatMap(s => s.rows) : [];
@@ -10212,8 +10224,8 @@ const PortfolioBacktester = () => {
             // Medium shades of the same green/red the cells use, so bars and cells read as one palette.
             const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
 
-            // The sparkline shows the last N years of each row's (up to 10-year) history: N years of
-            // monthly steps = 12N + 1 month-end points.
+            // The sparkline shows the last N years of each row's full history: N years of monthly
+            // steps = 12N + 1 month-end points (all of it on "Max").
             const trendPoints = { '1Y': 13, '3Y': 37, '5Y': 61, '10Y': 121, 'Max': Infinity }[marketsTrendPeriod]; // Max = whole history
 
             // Trend line drawn as a tiny SVG: green if it ends above where it started, red if
@@ -10233,7 +10245,10 @@ const PortfolioBacktester = () => {
             };
 
             // "Oct 2026", flagged as month-to-date when the latest row is the current calendar month.
-            const monthLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleString('en-GB', { month: 'short', year: 'numeric' });
+            // Fixed English month names rather than the browser's locale, which writes "Sept" in
+            // British English — so every label on the page reads the same way ("Sep 2026").
+            const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const monthLabel = (d: string) => `${MONTHS[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`;
             const isMtd = !!m && m.endDate.slice(0, 7) === new Date().toISOString().slice(0, 7);
             // KPI tiles. On the Country page Leader/Laggard/Positive/Trend look at the ASSETS only
             // (an FX cross or a rate isn't an investment to rank), and the Currency tile replaces
@@ -10244,6 +10259,14 @@ const PortfolioBacktester = () => {
                   : m, marketsPeriod)
               : null;
             const basket = m && marketsIsCountry ? currencyBasketMove(m, marketsPeriod) : null;
+            // One KPI tile. `name` set = Leader/Laggard layout (figure on the label line, name as the
+            // headline); otherwise figure + `sub` text. Passing the list through kpiTiles() gives
+            // every tile this exact shape, so a misspelt or missing field is a compile error.
+            type KpiTile = {
+              label: string; value: string; name: string; sub: string; cls: string;
+              nameCls?: string; nameSuffix?: string; title?: string;
+            };
+            const kpiTiles = (tiles: KpiTile[]) => tiles;
             // Country page, Inflation tile: today's 1Y inflation rate vs the rate at the start of the
             // selected period (same comparison as the "Now vs …" column of the Inflation 1Y rate row).
             const inflRow = marketsIsCountry ? allRows.find(r => r.kind === 'cpiyoy') : undefined;
@@ -10263,7 +10286,7 @@ const PortfolioBacktester = () => {
             //   Start 31 Dec 2025: 820.1 USD × 3.5918 (USDPLN) ÷ 4.2166 (EURPLN) = 698.6 EUR
             //   End 31 Oct 2026 (month to date): 833.8 USD × 3.8958 (USDPLN) ÷ 4.3884 (EURPLN) = 740.2 EUR
             //   Return = end ÷ start − 1
-            const dayLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+            const dayLabel = (d: string) => `${Number(d.slice(8, 10))} ${monthLabel(d)}`; // "30 Sep 2026"
             const fmtWorking = (r: MarketRow, w: ValueWorking): string => {
               const first = r.isFx
                 ? (w.firstLabel ? `${w.firstLabel} ${formatFxRate(w.first)}` : formatFxRate(w.first))
@@ -10293,7 +10316,8 @@ const PortfolioBacktester = () => {
                 const head = `${r.name} · 1Y inflation rate ${when}: ${v.toFixed(2)}%`;
                 if (!w) return head;
                 const diff = w.end.result - w.start.result;
-                const trend = Math.abs(diff) < 0.005 ? 'unchanged' : diff > 0 ? 'accelerating' : 'decelerating';
+                // Same words and the same 0.05 pp "unchanged" band as the column and the KPI tile.
+                const trend = Math.abs(diff) < 0.05 ? 'unchanged' : diff > 0 ? 'accelerating' : 'easing';
                 return `${head}\n`
                   + `${monthLabel(w.startDate)}: ${w.start.result.toFixed(2)}% year-on-year\n`
                   + `Now (${monthLabel(w.endDate)}, last CPI print): ${w.end.result.toFixed(2)}%\n`
@@ -10367,7 +10391,7 @@ const PortfolioBacktester = () => {
             // a Max DD bar, CAGR, 2x time, Vol, Sharpe, Max DD, Longest DD, Curr DD, the trend line,
             // then the calendar-year returns for the stress years (STATS_YEARS: 2018, 2020, 2022).
             const isStatsSection = (s: { rows: MarketRow[] }) =>
-              marketsView === 'stats' && s.rows.length > 0 && s.rows.every(r => r.kind === 'asset' || r.kind === 'fx'); // FX is shown as an asset here, so it gets Stats too
+              marketsView === 'stats' && s.rows.length > 0 && s.rows.every(r => r.kind === 'asset' || r.kind === 'fx');
             const statsRows = m ? m.sections.filter(isStatsSection).flatMap(s => s.rows) : [];
             const maxAbs = (vals: (number | null | undefined)[]) =>
               Math.max(1e-9, ...vals.filter((v): v is number => v !== null && v !== undefined).map(Math.abs));
@@ -10435,7 +10459,9 @@ const PortfolioBacktester = () => {
                       {STATS_YEARS.map(y => (
                         <React.Fragment key={y}>
                           {heatCell(r.yearReturns[y] ?? null, yearCaps[y], r.yearReturns[y] != null ? fmtRet(r.yearReturns[y] as number) : '',
-                            `${y} calendar-year return in ${viewCurrency === 'Native' ? r.priceCurrency : viewCurrency} (Dec ${y - 1} → Dec ${y})`)}
+                            r.isFx
+                              ? `${y}: change in ${r.name} (Dec ${y - 1} → Dec ${y}); + = ${r.name.split('/')[0]} strengthened`
+                              : `${y} calendar-year return in ${viewCurrency === 'Native' ? r.priceCurrency : viewCurrency} (Dec ${y - 1} → Dec ${y})`)}
                         </React.Fragment>
                       ))}
                     </tr>
@@ -10550,7 +10576,7 @@ const PortfolioBacktester = () => {
                       {/* Leader and Laggard get wider tiles (1.3 shares each vs 1) because they hold */}
                       {/* the only long text — an asset name — and that name must fit on one line. */}
                       {!isMacroTable && <div className="grid grid-cols-2 md:grid-cols-[1.3fr_1.3fr_1fr_1fr_1fr] gap-2 mb-4">
-                        {[
+                        {kpiTiles([
                           { label: `Leader · ${marketsPeriod}`, value: summary?.leader ? fmtRet(summary.leader.value) : '–', name: summary?.leader?.name ?? '', sub: '', cls: 'text-green-700' },
                           { label: `Laggard · ${marketsPeriod}`, value: summary?.laggard ? fmtRet(summary.laggard.value) : '–', name: summary?.laggard?.name ?? '', sub: '', cls: 'text-red-700' },
                           marketsIsCountry
@@ -10590,17 +10616,17 @@ const PortfolioBacktester = () => {
                             // Policy rate: the last decision, Hiking (red) / Cutting (green), in bp.
                             (() => {
                               const up = policyBp !== null && policyBp > 0;
-                              const cls = policyBp === null || policyBp === 0 ? 'text-gray-900' : up ? 'text-red-700' : 'text-green-700';
+                              // A move that rounds to 0 bp (only possible for sub-0.5 bp changes) is no move.
+                              const moved = policyMove !== null && policyBp !== null && policyBp !== 0;
+                              const cls = !moved ? 'text-gray-900' : up ? 'text-red-700' : 'text-green-700';
                               return {
                                 // Short label so it stays on ONE line in the narrow tile (a wrapped label
                                 // made the whole row of tiles taller); the decision month sits after the
                                 // verdict in small print, e.g. "Cutting  Mar 26".
                                 label: 'Policy rate',
-                                value: policyBp === null ? '–' : `${up ? '+' : '−'}${Math.abs(policyBp)} bp`,
-                                name: !policyMove ? (policyRow ? 'No change' : 'No data') : (up ? 'Hiking' : 'Cutting'),
-                                nameSuffix: policyMove
-                                  ? `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(policyMove.date.slice(5, 7)) - 1]} ${policyMove.date.slice(2, 4)}`
-                                  : '',
+                                value: !moved ? '–' : `${up ? '+' : '−'}${Math.abs(policyBp ?? 0)} bp`,
+                                name: !moved ? (policyRow ? 'No change' : 'No data') : (up ? 'Hiking' : 'Cutting'),
+                                nameSuffix: moved && policyMove ? `${MONTHS[Number(policyMove.date.slice(5, 7)) - 1]} ${policyMove.date.slice(2, 4)}` : '',
                                 nameCls: cls, sub: '', cls,
                                 title: policyMove && policyRow
                                   ? `${policyRow.name}: last decision in ${monthLabel(policyMove.date)}, `
@@ -10613,11 +10639,11 @@ const PortfolioBacktester = () => {
                             { label: `Positive · ${marketsPeriod}`, value: summary ? `${summary.positive}/${summary.total}` : '–', name: '', sub: 'assets above 0', cls: 'text-gray-800' },
                             { label: 'Trend · 10M SMA', value: summary ? `${summary.buy}/${summary.signalTotal}` : '–', name: '', sub: 'on BUY signal', cls: 'text-gray-800' },
                           ]),
-                        ].map(t => (
+                        ]).map(t => (
                           <div
                             key={t.label}
-                            title={(t as { title?: string }).title || undefined}
-                            className={`rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0 ${(t as { title?: string }).title ? 'cursor-help' : ''}`}
+                            title={t.title || undefined}
+                            className={`rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0 ${t.title ? 'cursor-help' : ''}`}
                           >
                             {t.name ? (
                               <>
@@ -10627,11 +10653,11 @@ const PortfolioBacktester = () => {
                                   <span className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</span>
                                   <span className={`text-sm font-bold tabular-nums ${t.cls}`}>{t.value}</span>
                                 </div>
-                                <div className={`text-sm leading-5 font-semibold whitespace-nowrap truncate ${(t as { nameCls?: string }).nameCls ?? 'text-gray-900'}`} title={t.name}>
+                                <div className={`text-sm leading-5 font-semibold whitespace-nowrap truncate ${t.nameCls ?? 'text-gray-900'}`} title={t.name}>
                                   {t.name}
                                   {/* optional small print after the name, e.g. the policy decision month */}
-                                  {(t as { nameSuffix?: string }).nameSuffix && (
-                                    <span className="text-[10px] leading-none font-normal text-gray-500 ml-1.5">{(t as { nameSuffix?: string }).nameSuffix}</span>
+                                  {t.nameSuffix && (
+                                    <span className="text-[10px] leading-none font-normal text-gray-500 ml-1.5">{t.nameSuffix}</span>
                                   )}
                                 </div>
                               </>
@@ -19827,7 +19853,7 @@ const PortfolioBacktester = () => {
       {/* Slide-in navigation drawer (narrow screens), opened by the "Menu" button. Tapping the
           dimmed backdrop, the close button, or any view closes it. */}
       {navOpen && (
-        <div className="fixed inset-0 z-50 min-[1368px]:hidden">
+        <div className="fixed inset-0 z-50 min-[1368px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
           <div className="absolute inset-0 bg-black/30" onClick={() => setNavOpen(false)} />
           <nav className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-white shadow-xl p-3 overflow-y-auto">
             <div className="flex items-center justify-between mb-2 px-1">
