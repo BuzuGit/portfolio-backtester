@@ -10792,10 +10792,11 @@ const PortfolioBacktester = () => {
                       {/* In Stats view the Stats sections and the sections that keep their Returns columns */}
                       {/* (FX, macro) go in two separate tables: one table has ONE set of column widths, and */}
                       {/* the two layouts don't line up column for column, so sharing would stretch both. */}
-                      {(marketsView === 'stats'
-                        ? [m.sections.filter(isStatsSection), m.sections.filter(s => !isStatsSection(s))]
-                        : [m.sections]
-                      ).filter(g => g.length > 0).map((group, gi) => (
+                      {/* The same goes for price sections (Price second) and macro sections (Value at the */}
+                      {/* end) on the Country page, which has both: one table per layout, in page order. */}
+                      {(['stats', 'price', 'macro'] as const)
+                        .map(kind => m.sections.filter(s => (isStatsSection(s) ? 'stats' : isMacroSection(s.rows) ? 'macro' : 'price') === kind))
+                        .filter(g => g.length > 0).map((group, gi) => (
                       <div key={gi} className={`overflow-x-auto ${gi > 0 ? 'mt-4' : ''}`}>
                         <table className="w-full text-sm border-collapse">
                           <tbody>
@@ -10808,6 +10809,8 @@ const PortfolioBacktester = () => {
                                 {/* category name (e.g. "EQUITIES") in the first cell instead of "Asset". */}
                                 <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
                                   <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name}</th>
+                                  {/* Price/asset sections show the Price second, right after the name */}
+                                  {!isMacroSection(s.rows) && <th className="text-right font-medium px-2 py-2">Price</th>}
                                   {/* The fixed-width div is what holds this column open: a table ignores min-width */}
                                   {/* on cells, and the bars inside are absolutely positioned so they claim no width. */}
                                   <th className="text-left font-medium px-3 py-2">
@@ -10836,7 +10839,6 @@ const PortfolioBacktester = () => {
                                     </>
                                   ) : (
                                     <>
-                                      <th className="text-right font-medium px-2 py-2">Price</th>
                                       <th className="text-right font-medium px-2 py-2 whitespace-nowrap" title="Current drawdown: how far the latest price is below its all-time high (asset's own currency)">Curr DD</th>
                                       <th className="text-center font-medium px-2 py-2 cursor-help" title={SIGNAL_RULE}>Signal</th>
                                     </>
@@ -10867,6 +10869,20 @@ const PortfolioBacktester = () => {
                                             : r.name}
                                         </button>
                                       </td>
+
+                                      {/* Price/asset sections: latest price second, right after the name, in the asset's */}
+                                      {/* own currency — red if below last month-end, black otherwise. */}
+                                      {!isMacroSection(s.rows) && (
+                                        <td className="px-2 py-1 text-right text-xs whitespace-nowrap tabular-nums">
+                                          {r.price === null ? <span className="text-gray-300">–</span> : (
+                                            <>
+                                              <span className={r.priceUp === false ? 'text-red-600' : 'text-gray-900'}>{fmtLevel(r.isFx, r.price)}</span>
+                                              <span className="text-[9px] text-gray-400 ml-0.5">{r.priceCurrency}</span>
+                                              {stale && <span className="text-[10px] text-amber-600 ml-1" title={`Latest price is from ${r.priceDate}`}>({monthLabel(r.priceDate)})</span>}
+                                            </>
+                                          )}
+                                        </td>
+                                      )}
 
                                       {/* Horizontal bar for the focused period; label sits just past the bar's end. */}
                                       {/* Inflation 1Y rate rows show a verdict instead: today's rate vs the rate at the */}
@@ -10951,17 +10967,7 @@ const PortfolioBacktester = () => {
                                           </td>
                                         </>
                                       ) : (<>
-                                      {/* Latest price in the asset's own currency: red if below last month-end, black otherwise */}
-                                      <td className="px-2 py-1 text-right text-xs whitespace-nowrap tabular-nums">
-                                        {r.price === null ? <span className="text-gray-300">–</span> : (
-                                          <>
-                                            <span className={r.priceUp === false ? 'text-red-600' : 'text-gray-900'}>{fmtLevel(r.isFx, r.price)}</span>
-                                            <span className="text-[9px] text-gray-400 ml-0.5">{r.priceCurrency}</span>
-                                            {stale && <span className="text-[10px] text-amber-600 ml-1" title={`Latest price is from ${r.priceDate}`}>({monthLabel(r.priceDate)})</span>}
-                                          </>
-                                        )}
-                                      </td>
-
+                                      {/* (Price sits second, right after the name — see above.) */}
                                       {/* Current drawdown from the all-time high — same look as the Annual tab's "Curr DD" */}
                                       {r.drawdown === null ? (
                                         <td className="px-2 py-1 text-right text-xs text-gray-300">–</td>
