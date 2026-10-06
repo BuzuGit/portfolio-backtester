@@ -90,7 +90,10 @@ portfolio-backtester/
 │
 ├── lib/
 │   ├── fetchData.ts             # Handles fetching & parsing CSV from Google
-│   └── positions.ts             # Replays the transaction ledger into positions
+│   ├── positions.ts             # Replays the transaction ledger into positions
+│   ├── cash.ts                  # Reads the same ledger as double-entry: cash balances
+│   ├── markets.ts               # The Markets tab's return matrix and stats
+│   └── holdings.ts              # The Markets tab's Holdings page: what you own, in one currency
 │
 ├── package.json                 # Project dependencies (like a shopping list)
 ├── next.config.js               # Next.js settings
@@ -113,6 +116,12 @@ portfolio-backtester/
 sold, and which dividend belongs to which shares (FIFO lot matching). Both the Positions tab and the
 Portfolio tab's yearly breakdown are built from what it returns. Added Aug 2026, when the
 hand-maintained "Open" and "Exit" sheet tabs were deleted.
+
+**`lib/holdings.ts`** - The arithmetic behind the Markets tab's **Holdings** page (Oct 2026): takes
+the open positions from `lib/positions.ts` and the cash balances from `lib/cash.ts`, converts every
+amount into one display currency (or keeps each in its own, on "Native"), and works out weights,
+section subtotals, XIRR and Curr DD. It does no drawing at all — the component draws what it
+returns — which is what made it possible to time it and test it on its own (see Lesson 33).
 
 **`lib/fetchData.ts`** - A helper that:
 - Fetches CSV text from your Google Sheet URL (5 sheets in parallel: prices, lookup, years, daily NAV, transactions ledger)
@@ -389,6 +398,61 @@ holdings share one bar instead of splitting into "IB ETF" and "Interactive Broke
 crypto bought with DBS money rolls up under DBS, even though the coins live at Gemini. Accurate
 as "who paid", wrong as "where is it custodied" — a known, accepted trade-off.
 
+### Why Holdings is a page inside Markets, built from the ledger
+
+**Decision (Oct 2026):** Add "Holdings" to the Markets tab's left-panel list (after Country), showing
+only what you own — open positions plus cash — in the Markets tab's look.
+
+The Markets tab was the owner's favourite screen, so the new page borrows all of its pieces: the
+pinned row of currency buttons, the KPI tiles, grey section headers that repeat the column names,
+heat-coloured % cells, and horizontal bars from a shared zero line. But its *numbers* come from
+somewhere else entirely. The other Markets pages read prices from the Lookup tab's assets; Holdings
+reads the **same open positions the Positions tab replays from the ledger**. That was the point:
+the two screens can never disagree. On the first run all 14 holdings matched the Open Positions
+table to the unit, in PLN, across Invested, Value and PnL.
+
+Clicking a name jumps to that holding in the Positions tab — its purchase lots and chart — because
+"show me the detail" already existed there and building a second copy would mean two places to fix.
+
+### Why asset classes for your portfolio come from a sheet column, not code
+
+**Decision (Oct 2026):** A `PortfolioClass` column in the Lookup tab decides which section a holding
+appears in on Holdings, and on Positions while "Group M&C" is on. Blank = use the standard Asset Class.
+
+It took three tries to get here, and the first two are the lesson. First the code said "class
+*Other* or *Crypto* → Metals & Crypto". Then gold sat in Alternatives (the sheet says so), so the
+code learned "anything with *Gold* or *Silver* in its name → Metals & Crypto". That works today, and
+it's a trap tomorrow: a fund called "Goldman Sachs Income" would quietly be filed with bitcoin.
+Every special case written in code is a rule the spreadsheet's owner can't see and can't change.
+
+The owner proposed the better design: **say it in the data.** One column, ten cells filled in, and
+both pages read it. If a holding is ever in the wrong group, the fix is typing in a cell — no code
+change, no deploy. The general principle: when you notice yourself adding the third exception to
+a rule, the rule probably wants to be data.
+
+### Why "Native" still adds up in US dollars
+
+**Decision (Oct 2026):** On the Holdings page's "Native" view, each row shows its money in its own
+currency (REIT Singapore in SGD, DBMF in USD), but every subtotal, total, weight and tile is in USD,
+and labelled "in USD".
+
+You can't add 8,692 SGD to 25,677 USD and get a meaningful number — it's like adding 3 metres to
+4 feet and writing "7". So every row carries **two** sets of figures: the ones you see (its own
+currency) and the ones used for adding up (USD). Weights, subtotals and sorting all use the second
+set; the cells show the first.
+
+### Why returns under a year aren't annualised
+
+**Decision (Oct 2026):** XIRR (everywhere on Positions and Holdings) and the per-purchase CAGR
+columns show the **plain total return** when something has been held for less than a year.
+
+Annualising asks "if this carried on for a full year, what would it be?" For a holding of ten weeks
+that question blows small moves up into silly numbers: DFA Global SCV was down 5.8% after ten
+weeks, which annualises to **−32% a year**. Nobody should make a decision on that number. Below a
+year the honest figure is simply what happened. The rule lives in one place for XIRR
+(`calculateXIRR`), so every table and tile that shows XIRR follows it automatically; hovering any
+XIRR or CAGR heading explains it.
+
 ### Why use 'use client' for the main component?
 
 **Decision:** Mark PortfolioBacktester as a client component.
@@ -461,6 +525,9 @@ This is a fundamental Next.js concept: some things must run in the browser, othe
 **Implementation:** Uses the Newton-Raphson method — an iterative algorithm that starts with a guess and refines it until it converges. Each buy is a negative cash flow on its date; each sale is a positive cash flow on its date.
 
 **Edge case:** Sometimes Newton-Raphson doesn't converge (e.g., very unusual cash flow patterns). The app shows "N/A" instead of crashing.
+
+**Update (Oct 2026):** held for less than a year, XIRR now shows the plain total return instead of
+annualising it — see "Why returns under a year aren't annualised" in the Decision Log.
 
 ### 7. TypeScript's downlevelIteration Trap
 
@@ -1014,6 +1081,65 @@ Two habits worth keeping: when you widen a value's range (positive → can-be-ne
 every consumer that quietly assumed the old range; and clamp values feeding a layout, because a
 chart that can't represent your number will not tell you so.
 
+### 31. The Drawdown That Charged Shares for a Fall They Never Had
+
+The Holdings page has a **Curr DD** column: "how much has this holding given back from its best?"
+It sounds like one obvious formula. It took three.
+
+**Version 1:** take the best price since your first purchase, compare it with today's price, and
+multiply by the shares you hold today. For REIT Asia ex-JP that gave **−27,159 SGD**. The owner
+noticed it didn't sit well next to the Positions chart and asked why.
+
+The answer was in the purchase history. The best price, 0.899, was in January 2020 — when the
+position was **7,700 shares**. The other 157,300 shares were bought later, all below that peak,
+and 47,400 of them were bought *that very morning*. The formula was charging them for a fall that
+happened years before they existed. Imagine billing a new tenant for damage done before they moved in.
+
+**Version 2:** do it purchase by purchase — each lot only counts the best price *since it was
+bought*. That gave −11,360 SGD: honest, but it still couldn't be checked against anything the owner
+could see.
+
+**Version 3, the one that stuck:** follow the profit/loss line the Positions tab already charts
+(value + dividends − money put in, month by month) and measure how far today sits below its best
+point: +6,443 in February 2026, −722 today, so **−7,164**. Buying more never looks like a gain
+(the money put in rises with the value), dividends cushion the fall, and it matched that chart on
+**all 13 holdings**.
+
+Two lessons. A formula that's fine for a position bought once can be badly wrong for one built up
+over years — **test it on your most built-up holding first**, not the tidiest one. And when you
+invent a number, make it agree with a number already on screen: people check new figures against
+the ones they trust, and "these two measure different things" is a much weaker answer than "these
+two match".
+
+### 32. The Bar That Pointed the Wrong Way
+
+On the Native view, REIT Asia ex-JP showed a return of **−722 SGD** with a cheerful **green bar
+pointing right**. Both were "correct": the bar was sized from the USD figure, and in USD the
+holding *had* made money — the Singapore dollar strengthened while it was held, turning a small
+SGD loss into a USD gain.
+
+Correct and contradictory is still a bug. Whatever a bar is sized on, its **direction and colour
+must agree with the number printed next to it** — the eye reads the bar first and the number
+second. The fix keeps each bar comparable across currencies (sized at today's rate) but always on
+the side of the figure it labels.
+
+### 33. The Same Question Asked a Thousand Times
+
+Every purchase and dividend needs "what was the exchange rate that month?", which means finding its
+month in a price history 200 rows long. The Holdings code asked that question for the same date
+again and again — for the cost, again for the XIRR cash flows, again for the drawdown line, and
+twice over on Native.
+
+It was never slow enough to notice by eye, so it was measured instead: the calculation file was
+compiled on its own and run against made-up data bigger than the real portfolio (30 holdings, 30
+purchases each, 20 years of prices). **46 milliseconds per click.** Then one change: remember each
+date's answer the first time it's looked up — a *cache*, like writing a phone number on a sticky
+note instead of searching the phone book every time. **18 milliseconds**, identical results.
+
+The habit worth keeping is the method, not the speed-up: when you can't see a performance problem,
+**build a test big enough to see it**, measure, change one thing, and measure again — and check the
+answers didn't change while you were at it.
+
 ## How Good Engineers Think
 
 ### 1. Separation of Concerns
@@ -1107,6 +1233,12 @@ That's it! Vercel automatically:
 **CAGR (Compound Annual Growth Rate):** The smoothed annual return. If you invested $100 and ended with $200 after 10 years, CAGR tells you the equivalent yearly return that would get you there.
 
 **Drawdown:** How far the portfolio has fallen from its peak. A -20% drawdown means you're 20% below your highest value.
+
+**Curr DD (on the Holdings page):** a drawdown in money, not %: how much profit a holding has given back since the best month-end of its profit/loss line. "Peak" means it is at its best today. See Lesson 31 for why it is measured this way.
+
+**PortfolioClass:** a column in the Lookup tab saying which section an asset belongs to in *your* portfolio views (e.g. "Metals & Crypto" for gold and bitcoin), overriding the standard Asset Class. Blank = use the Asset Class.
+
+**Native (currency view):** each holding shown in the currency it is priced in, with no conversion. Anything that adds holdings together is still in one currency (USD on Holdings), because you can't add dollars to Singapore dollars.
 
 **Sharpe Ratio:** Return divided by volatility. Higher is better - means more return per unit of risk.
 
