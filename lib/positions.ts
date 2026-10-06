@@ -346,10 +346,13 @@ export function toClosedPositionRows(model: PositionsModel): ClosedPositionRow[]
   return model.roundTrips.map(t => {
     const years = t.holdingDays / 365.25;
     const finalNetValue = t.proceeds + t.dividends;
-    // CAGR is meaningless for a position held a few days, and explodes toward infinity
-    // as the holding period approaches zero — so only compute it past one month.
-    const cagr = years > 0.08 && t.cost > 0
-      ? (Math.pow(finalNetValue / t.cost, 1 / years) - 1) * 100
+    const totalReturnPct = t.cost > 0 ? (t.pnl / t.cost) * 100 : 0;
+    // CAGR is meaningless for a short holding: annualising a few months blows small moves up
+    // into silly numbers, and it explodes toward infinity as the holding period approaches zero.
+    // So under a year it is the plain total return instead — the same rule as XIRR (see
+    // calculateXIRR in the component).
+    const cagr = years < 1 ? totalReturnPct
+      : t.cost > 0 ? (Math.pow(finalNetValue / t.cost, 1 / years) - 1) * 100
       : 0;
     return {
       invDate: t.buyDate, divDate: t.sellDate,
@@ -370,7 +373,7 @@ export function toClosedPositionRows(model: PositionsModel): ClosedPositionRow[]
       proceedsFromSale: t.proceeds,
       finalNetValue,
       totalReturn: t.pnl,
-      totalReturnPct: t.cost > 0 ? (t.pnl / t.cost) * 100 : 0,
+      totalReturnPct,
       cagr,
     };
   });

@@ -1428,11 +1428,19 @@ const returnHeatColor = (ret: number): string => {
   return `#${mix.map(c => c.toString(16).padStart(2, '0')).join('')}`;
 };
 
-// "Group Metals & Crypto" feature: assets whose raw asset class is 'Other' (Gold + Crypto in this
-// portfolio's Google Sheet) can be displayed as a unified "Metals & Crypto" asset class AND as a
+// "Group Metals & Crypto" feature (Positions tab): while on, assets take the class in the Lookup
+// tab's PortfolioClass column (gold, silver and crypto: "Metals & Crypto"), and those also get a
 // separate "M&C" pseudo-currency in the By Currency bar chart so they don't inflate fiat buckets.
 const METALS_CRYPTO_LABEL = 'Metals & Crypto'; // display label for the grouped asset class
 const METALS_CRYPTO_CCY   = 'M&C';             // pseudo-currency code shown in the bar chart
+
+// Hover text for XIRR on the Positions tab: what the figure is, and the under-a-year rule in
+// calculateXIRR (the Markets Holdings page says the same in its own tooltips).
+const XIRR_HINT = 'XIRR: money-weighted return per year, each purchase, dividend and sale on its own date.\n'
+  + 'Held less than a year: the plain total return instead (not annualised).';
+// Same rule for the per-purchase CAGR columns in the Positions detail tables.
+const CAGR_LOT_HINT = 'CAGR: this purchase\'s return per year.\n'
+  + 'Held less than a year: the plain Return % instead (not annualised).';
 
 // Currency symbols for display formatting
 const CURRENCY_SYMBOLS: { [key: string]: string } = {
@@ -17055,7 +17063,8 @@ const PortfolioBacktester = () => {
                   'Cash': -1,
                   'Fixed Income': 0, 'Crypto': 1, 'Other': 1, 'Metals & Crypto': 1, 'Alternatives': 2, 'Equities': 3,
                 };
-                openSummaryData.sort((a, b) => (assetClassOrder[a.assetClass] ?? 99) - (assetClassOrder[b.assetClass] ?? 99));
+                // (The sort itself runs below, once effectiveClass exists: rows are ordered by the
+                // class they are SHOWN under, which follows the "Group M&C" toggle.)
 
                 // --- Shared display helpers ---
                 // When no Ccy filter is active, default all breakdown values to PLN.
@@ -17076,6 +17085,11 @@ const PortfolioBacktester = () => {
                 //   their value is excluded from real fiat bars (e.g. USD) in the By Currency chart.
                 const effectiveCurrency = (row: { nativeCurrency: string; assetClass: string; portfolioClass: string }): string =>
                   (groupMetalsCrypto && portfolioClassOf(row) === METALS_CRYPTO_LABEL ? METALS_CRYPTO_CCY : row.nativeCurrency);
+
+                // Sort open positions by the class each is shown under (Cash → Fixed Income → M&C →
+                // Alternatives → Equities): with "Group M&C" on that is the PortfolioClass column, so
+                // gold and crypto sit together under Metals & Crypto rather than among Alternatives.
+                openSummaryData.sort((a, b) => (assetClassOrder[effectiveClass(a)] ?? 99) - (assetClassOrder[effectiveClass(b)] ?? 99));
 
                 // --- Build a map of ticker → set of accounts (from Purchase of Asset transactions only) ---
                 // Used to filter the portfolio by account — a ticker is "in" an account if it has
@@ -17910,7 +17924,7 @@ const PortfolioBacktester = () => {
                                 <SortableTh col="invested" {...sortPropsFor('positionsOpen')}>Total Invested</SortableTh>
                                 <SortableTh col="currentValue" {...sortPropsFor('positionsOpen')}>Current Value</SortableTh>
                                 <SortableTh col="pnl" {...sortPropsFor('positionsOpen')}>Total PnL</SortableTh>
-                                <SortableTh col="xirr" {...sortPropsFor('positionsOpen')}>XIRR</SortableTh>
+                                <SortableTh col="xirr" {...sortPropsFor('positionsOpen')} title={XIRR_HINT}>XIRR</SortableTh>
                                 <SortableTh col="weight" {...sortPropsFor('positionsOpen')} style={{ width: 70 }}>Weight</SortableTh>
                                 {positionsCurrency && <SortableTh col="investedConverted" {...sortPropsFor('positionsOpen')}>Invested {posCcyLabel}</SortableTh>}
                                 {positionsCurrency && <SortableTh col="currentConverted" {...sortPropsFor('positionsOpen')}>Current {posCcyLabel}</SortableTh>}
@@ -18043,7 +18057,7 @@ const PortfolioBacktester = () => {
                                 <SortableTh col="finalValue" {...sortPropsFor('positionsClosed')}>Total Final Value</SortableTh>
                                 <SortableTh col="pnl" {...sortPropsFor('positionsClosed')}>Total PnL</SortableTh>
                                 <SortableTh col="pnlPct" {...sortPropsFor('positionsClosed')}>PnL %</SortableTh>
-                                <SortableTh col="xirr" {...sortPropsFor('positionsClosed')}>XIRR</SortableTh>
+                                <SortableTh col="xirr" {...sortPropsFor('positionsClosed')} title={XIRR_HINT}>XIRR</SortableTh>
                               </tr>
                             </thead>
                             <tbody>
@@ -18676,7 +18690,7 @@ const PortfolioBacktester = () => {
                               <th className="text-right py-1.5 px-2 bg-gray-50">Cum. Div</th>
                               <th className="text-right py-1.5 px-2 bg-gray-100">Total Return</th>
                               <th className="text-right py-1.5 px-2 bg-gray-100">Return %</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-100">CAGR</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-100 cursor-help" title={CAGR_LOT_HINT}>CAGR</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -18712,9 +18726,13 @@ const PortfolioBacktester = () => {
                               const currentVal = t.qty * currentPrice;
                               const totalReturn = currentVal - t.amount;
                               const returnPct = t.amount > 0 ? (totalReturn / t.amount) * 100 : 0;
-                              const cagr = holdYears > 0 && t.amount > 0 && currentVal > 0
-                                ? (Math.pow(currentVal / t.amount, 1 / holdYears) - 1) * 100
-                                : 0;
+                              // Held less than a year: the plain Return % instead of annualising it
+                              // (a few months blown up to a yearly rate gives silly numbers) — the
+                              // same rule as XIRR, see calculateXIRR.
+                              const cagr = holdYears < 1 ? returnPct
+                                : t.amount > 0 && currentVal > 0
+                                  ? (Math.pow(currentVal / t.amount, 1 / holdYears) - 1) * 100
+                                  : 0;
 
                               return (
                                 <tr key={`buy-${purchaseIdx}`} className={`border-b border-gray-50 ${!isIncluded ? 'opacity-40' : purchaseIdx % 2 === 0 ? '' : 'bg-gray-25'}`}>
@@ -18929,7 +18947,7 @@ const PortfolioBacktester = () => {
                             <div className="text-sm font-semibold text-gray-800">
                               {stats.holdingYears.toFixed(1)} yrs ({stats.holdingDays.toLocaleString()} days)
                               <span className="text-gray-300 mx-1">&middot;</span>
-                              <span className={(stats.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}>
+                              <span className={`cursor-help ${(stats.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`} title={XIRR_HINT}>
                                 {stats.xirr !== null ? `XIRR ${stats.xirr >= 0 ? '+' : ''}${stats.xirr.toFixed(1)}%` : 'XIRR N/A'}
                               </span>
                             </div>
@@ -19429,7 +19447,7 @@ const PortfolioBacktester = () => {
                               <th className="text-right py-1.5 px-2 bg-gray-50">Final Net Value</th>
                               <th className="text-right py-1.5 px-2 bg-gray-100">Total Return</th>
                               <th className="text-right py-1.5 px-2 bg-gray-100">Return %</th>
-                              <th className="text-right py-1.5 px-2 bg-gray-100">CAGR</th>
+                              <th className="text-right py-1.5 px-2 bg-gray-100 cursor-help" title={CAGR_LOT_HINT}>CAGR</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -19744,7 +19762,7 @@ const PortfolioBacktester = () => {
                             <div className="text-sm font-semibold text-gray-800">
                               {stats.holdingYears.toFixed(1)} yrs ({stats.holdingDays.toLocaleString()} days)
                               <span className="text-gray-300 mx-1">&middot;</span>
-                              <span className={(stats.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}>
+                              <span className={`cursor-help ${(stats.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`} title={XIRR_HINT}>
                                 {stats.xirr !== null
                                   ? `XIRR ${stats.xirr >= 0 ? '+' : ''}${stats.xirr.toFixed(1)}%`
                                   : 'XIRR N/A'}

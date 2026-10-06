@@ -192,7 +192,7 @@ export interface ClosedPositionRow {
   // Computed fields (calculated during parsing):
   totalReturn: number;          // finalNetValue - initialCost (profit/loss in currency)
   totalReturnPct: number;       // (totalReturn / initialCost) × 100
-  cagr: number;                 // Compound annual growth rate (%)
+  cagr: number;                 // Compound annual growth rate (%); held under a year = plain total return %
 }
 
 // Flow type constants — the three kinds of transactions in the "Data" sheet
