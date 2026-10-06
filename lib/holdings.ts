@@ -43,18 +43,25 @@ export const NATIVE_TOTALS_CURRENCY = 'USD';
 export interface CashFlow { date: Date; amount: number }
 
 /**
- * How far a holding sits below its own best month-end, as an AMOUNT.
+ * How far a holding sits below the highs its shares have actually seen, as an AMOUNT.
  *
- * Measured per share so that buying more never counts as a "gain": the peak is the
- * highest month-end value of ONE share (in the row's currency) since the first buy,
- * and the drop is (today's value of a share − that peak) × the shares held today.
+ * Worked out LOT BY LOT: each purchase only counts the best month-end price (in the row's
+ * currency) from its OWN purchase month onwards, so a peak reached before those shares were
+ * bought never counts, and buying more is never a "gain". The drop is
+ *   Σ over lots of  shares × (today's price − best price since that lot was bought).
+ * (A first version used the best price since the FIRST buy × today's share count, which charged
+ * shares bought later for a peak they never saw: REIT Asia read −27,159 instead of −11,301.)
  */
 export interface HoldingDrawdown {
-  amount: number;          // <= 0; 0 = at its peak today
-  peakPerShare: number;    // best month-end value of one share, row currency
-  peakDate: string;        // when that was
+  amount: number;          // <= 0; 0 = every lot at its own best today
+  peakValue: number;       // the shares held today, each at its best month-end since bought
+  nowValue: number;        // the same shares at today's price
   nowPerShare: number;     // today's value of one share, row currency
-  sinceDate: string;       // first buy, i.e. where the search for the peak starts
+  // The highest of the lots' peaks, for the tooltip: when, at what price, for which purchase.
+  topPerShare: number;
+  topDate: string;
+  topLotDate: string;
+  topLotQty: number;
 }
 
 export interface HoldingRow {
@@ -205,18 +212,28 @@ export const buildHoldings = (args: {
         { date: now, amount: value },
       ].sort((a, b) => a.date.getTime() - b.date.getTime());
 
-      // Drawdown from the holding's own peak: every month-end from the month of the first buy.
+      // Drawdown, lot by lot (see HoldingDrawdown): each lot's best month-end from its own
+      // purchase month onwards, today's price counting as a candidate too.
       let dd: HoldingDrawdown | null = null;
-      if (price > 0 && firstBuyDate) {
-        let peakPerShare = nowPerShare, peakDate = endIdx >= 0 ? String(data[endIdx].date) : '';
-        for (const row of data) {
-          if (String(row.date).slice(0, 7) < firstBuyDate.slice(0, 7)) continue;
-          const p = priceOn(pos.ticker, row);
-          if (p === 0) continue;
-          const v = p * conv(nat, to, row);
-          if (v > peakPerShare) { peakPerShare = v; peakDate = String(row.date); }
+      if (price > 0 && pos.lots.length > 0) {
+        // Value of one share at each month-end, in the target currency (oldest first).
+        const series = data
+          .map(row => ({ ym: String(row.date).slice(0, 7), date: String(row.date), v: priceOn(pos.ticker, row) * conv(nat, to, row) }))
+          .filter(s => s.v > 0);
+        let peakValue = 0, top = { perShare: 0, date: '', lotDate: '', lotQty: 0 };
+        for (const lot of pos.lots) {
+          let best = nowPerShare, bestDate = endIdx >= 0 ? String(data[endIdx].date) : '';
+          for (const s of series) {
+            if (s.ym >= lot.date.slice(0, 7) && s.v > best) { best = s.v; bestDate = s.date; }
+          }
+          peakValue += best * lot.qty;
+          if (best > top.perShare) top = { perShare: best, date: bestDate, lotDate: lot.date, lotQty: lot.qty };
         }
-        dd = { amount: (nowPerShare - peakPerShare) * qty, peakPerShare, peakDate, nowPerShare, sinceDate: firstBuyDate };
+        const nowValue = nowPerShare * qty;
+        dd = {
+          amount: nowValue - peakValue, peakValue, nowValue, nowPerShare,
+          topPerShare: top.perShare, topDate: top.date, topLotDate: top.lotDate, topLotQty: top.lotQty,
+        };
       }
       return { invested, income, value, ret: value + income - invested, flows, dd };
     };
