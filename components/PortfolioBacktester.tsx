@@ -11142,12 +11142,12 @@ const PortfolioBacktester = () => {
               );
             };
             const weightCell = (w: number, bold = false) => (
-              <td className="px-2 py-1" title={`${w.toFixed(2)}% of everything held (cash included)`}>
-                <div className="flex items-center gap-1.5 justify-end">
-                  <div className="w-14 h-2.5 bg-gray-100 rounded-sm overflow-hidden">
-                    <div className="h-full rounded-sm" style={{ width: `${Math.max(0, w / maxWeight) * 100}%`, background: 'rgb(156, 163, 175)' }} />
-                  </div>
-                  <span className={`text-xs tabular-nums w-11 text-right ${w < 0 ? 'text-red-600' : 'text-gray-800'} ${bold ? 'font-semibold' : ''}`}>{w.toFixed(1)}%</span>
+              <td className="px-1 py-1" title={`${w.toFixed(2)}% of everything held (cash included)`}>
+                {/* One compact box: the bar fills it from the left (largest holding = full width; the */}
+                {/* subtotal and total rows simply fill it), and the figure sits inside, right-aligned. */}
+                <div className="relative w-14 h-5 ml-auto bg-gray-100 rounded-sm overflow-hidden">
+                  <div className="absolute inset-y-0 left-0" style={{ width: `${Math.min(1, Math.max(0, w / maxWeight)) * 100}%`, background: 'rgb(209, 213, 219)' }} />
+                  <span className={`relative block pr-1 text-right text-xs leading-5 tabular-nums ${w < 0 ? 'text-red-600' : 'text-gray-800'} ${bold ? 'font-semibold' : ''}`}>{w.toFixed(1)}%</span>
                 </div>
               </td>
             );
