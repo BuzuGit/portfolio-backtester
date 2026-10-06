@@ -51,11 +51,8 @@ export interface CashFlow { date: Date; amount: number }
  * with today as the last point. The drop is today's figure minus the line's best (<= 0).
  * Buying more never counts as a gain (money put in rises with the value), and dividends cushion
  * the fall. In the holding's own currency it reproduces that chart exactly (REIT Asia ex-JP:
- * best +6,443 in Feb 2026, today −721, so −7,164).
- *
- * (Two earlier versions measured a fall in PRICE instead — first from the best price since the
- * first buy × today's shares, which overstated it badly, then lot by lot — and neither matched
- * what the user sees on the Positions chart.)
+ * best +6,443 in Feb 2026, today −721, so −7,164). Deliberately NOT a fall in price: a price
+ * peak reached before later purchases would charge those shares for a drop they never had.
  */
 export interface HoldingDrawdown {
   amount: number;          // <= 0; 0 = the line is at its best today
@@ -120,8 +117,6 @@ export interface HoldingsModel {
     ret: number;
     retPct: number | null;
     xirr: number | null;   // across the investments only — cash has no dated flows
-    cash: number;
-    cashPct: number | null;
     holdings: number;      // number of asset rows
   };
 }
@@ -177,7 +172,15 @@ export const buildHoldings = (args: {
     (from === to ? 1 : toPLN(from, row) / toPLN(to, row));
   // A dated transaction uses its own month's rate: the first month-end on or after it
   // (a 15 Jan purchase takes the 31 Jan rate), exactly as the Positions tab does.
-  const rowOn = (date: string): AssetRow => data.find(r => String(r.date) >= date) ?? last;
+  // Remembered per date: every purchase and dividend is looked up several times per build
+  // (cost, cash-flow list, drawdown line, and again for the totals currency on Native), and each
+  // lookup would otherwise scan the whole price history.
+  const rowCache = new Map<string, AssetRow>();
+  const rowOn = (date: string): AssetRow => {
+    let r = rowCache.get(date);
+    if (!r) { r = data.find(x => String(x.date) >= date) ?? last; rowCache.set(date, r); }
+    return r;
+  };
   const priceOn = (ticker: string, row: AssetRow): number => {
     const p = Number(row[ticker]);
     return p > 0 ? p : 0;
@@ -309,7 +312,6 @@ export const buildHoldings = (args: {
 
   const invested = rows.reduce((s, r) => s + r.agg.invested, 0);
   const ret = rows.reduce((s, r) => s + r.agg.ret, 0);
-  const cashValue = rows.filter(r => r.kind === 'cash').reduce((s, r) => s + r.agg.value, 0);
   return {
     currency,
     totalsCurrency,
@@ -319,8 +321,6 @@ export const buildHoldings = (args: {
       invested, value: totalValue, ret,
       retPct: invested > 0 ? (ret / invested) * 100 : null,
       xirr: pooledXirr(rows.filter(r => r.kind === 'asset')),
-      cash: cashValue,
-      cashPct: totalValue !== 0 ? (cashValue / totalValue) * 100 : null,
       holdings: rows.filter(r => r.kind === 'asset').length,
     },
   };
