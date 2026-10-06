@@ -11376,9 +11376,9 @@ const PortfolioBacktester = () => {
                                   const isCashSection = s.rows.every(r => r.kind === 'cash');
                                   return (
                                     <tr className="border-b border-gray-200 text-xs font-semibold text-gray-700">
-                                      <td className="px-3 py-1.5 text-gray-500">
-                                        Subtotal · {s.rows.length} {isCashSection ? (s.rows.length === 1 ? 'account' : 'accounts') : (s.rows.length === 1 ? 'holding' : 'holdings')}
-                                        {native && <> · in {ccy}</>}
+                                      {/* Kept short so it stays on one line (no row count) */}
+                                      <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">
+                                        Subtotal{native && <> · in {ccy}</>}
                                       </td>
                                       <td /><td />
                                       <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{isCashSection ? '' : <>{fmtMoney(s.invested)}{totTag}</>}</td>
