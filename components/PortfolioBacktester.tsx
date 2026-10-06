@@ -11399,7 +11399,8 @@ const PortfolioBacktester = () => {
                             {/* Grand total: same light grey as the headers, set apart by the thick top border */}
                             <tr><td colSpan={colCount} className="h-4" /></tr>
                             <tr className="border-t-2 border-gray-300 bg-gray-100 text-xs font-semibold text-gray-800">
-                              <td className="px-3 py-2">Total · {h.totals.holdings} holdings + cash{native && <> · in {ccy}</>}</td>
+                              {/* Kept short so it stays on one line, like the Subtotal rows */}
+                              <td className="px-3 py-2 whitespace-nowrap">Total{native && <> · in {ccy}</>}</td>
                               <td /><td />
                               <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap" title="Cash counts at its balance">{fmtMoney(h.totals.invested)}{totTag}</td>
                               <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">{fmtMoney(h.totals.value)}{totTag}</td>
