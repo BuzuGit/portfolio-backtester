@@ -11106,8 +11106,13 @@ const PortfolioBacktester = () => {
 
             // Money is whole units with thousands separators, like the Positions tab; returns carry a sign.
             const fmtMoney = (v: number) => v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-            const fmtSigned = (v: number) => `${Math.round(v) > 0 ? '+' : ''}${fmtMoney(v)}`;
-            const fmtPctSigned = (v: number) => `${v > 0.05 ? '+' : ''}${v.toFixed(1)}%`;
+            // Anything that would print as zero prints as a plain zero, so a −0.3 never shows as "-0"
+            // (or −0.04% as "-0.0%"), like the Markets pages. Other values keep the app's usual
+            // rounding (toLocaleString / toFixed), so they match the Positions tab to the unit.
+            const fmtSigned = (v: number) =>
+              (Math.abs(v) < 0.5 ? '0' : `${v > 0 ? '+' : ''}${fmtMoney(v)}`);
+            const fmtPctSigned = (v: number) =>
+              (Math.abs(v) < 0.05 ? '0.0%' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`);
             // Share counts: whole shares need no decimals, a fraction of a bitcoin needs four.
             const fmtQty = (v: number) => v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: Math.abs(v) < 1 ? 4 : 2 });
 
