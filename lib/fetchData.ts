@@ -104,6 +104,11 @@ export interface AssetLookup {
   snapshotCountry?: string;
   // Column 11, SnapshotCountryOrder: row order on that country page (smaller first). null = not given.
   snapshotCountryOrder?: number | null;
+  // "PortfolioClass" column (found by header, wherever it sits): the class this asset is shown
+  // under in YOUR portfolio views — the Markets Holdings page, and the Positions tab while its
+  // "Group M&C" toggle is on — e.g. "Metals & Crypto" for gold, silver and crypto, which the
+  // standard Asset Class files elsewhere. '' (blank or "-") = use Asset Class.
+  portfolioClass?: string;
 }
 
 // Where one Lookup row appears in the Markets tab. A row can appear in several sections: the
@@ -593,6 +598,8 @@ function parseLookupTable(csvText: string): AssetLookup[] {
   const COL_SNAP_ORDER = colOf('SnapshotSubCategoryOrder', 8);
   const COL_SNAP_COUNTRY = colOf('SnapshotCountry', 9);
   const COL_SNAP_COUNTRY_ORDER = colOf('SnapshotCountryOrder', 10);
+  // No fallback position: if the sheet has no PortfolioClass column, every row uses Asset Class.
+  const COL_PORTFOLIO_CLASS = colOf('PortfolioClass', -1);
 
   const lookup: AssetLookup[] = [];
 
@@ -638,9 +645,11 @@ function parseLookupTable(csvText: string): AssetLookup[] {
     // Column 11, SnapshotCountryOrder: a single number; blank or "-" = no order given.
     const countryOrderNum = parseFloat(snapList(COL_SNAP_COUNTRY_ORDER)[0] || '');
     const snapshotCountryOrder = isNaN(countryOrderNum) ? null : countryOrderNum;
+    // PortfolioClass: a single class name; blank or "-" = fall back to Asset Class.
+    const portfolioClass = COL_PORTFOLIO_CLASS >= 0 ? (snapList(COL_PORTFOLIO_CLASS)[0] || '') : '';
 
     if (ticker && name) {
-      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshots, snapshotCountry, snapshotCountryOrder });
+      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshots, snapshotCountry, snapshotCountryOrder, portfolioClass });
     }
   }
 

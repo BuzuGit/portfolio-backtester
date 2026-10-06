@@ -123,18 +123,18 @@ export const HOLDINGS_MIX_ABBR: Record<string, string> = {
 };
 
 /**
- * Gold and silver count as Metals & Crypto on this page and in the Positions tab's "Group M&C"
- * grouping, even though the Lookup tab files them under "Alternatives" (GLDM, GSD, SLV).
- * Matched on the asset NAME as a whole word, so "Gold SGD" and "Silver" qualify while
- * "Industrial Metals" deliberately does not. The sheet itself is left as it is.
+ * The class an asset is shown under in the portfolio views: this page, and the Positions tab
+ * while its "Group M&C" toggle is on. It is the Lookup tab's PortfolioClass column when filled
+ * (e.g. "Metals & Crypto" for gold, silver and crypto), otherwise the standard Asset Class.
+ * No rules live in the code any more — the sheet says where each asset goes.
+ *
+ * A name that matches one of the standard sections apart from upper/lower case is written the
+ * standard way, so "metals & crypto" typed in the sheet still lands in the right section.
  */
-export const isPreciousMetal = (name: string): boolean => /\b(gold|silver)\b/i.test(name);
-
-// Bitcoin ETF carries the class "Other" in the sheet and the crypto rows "Crypto"; the
-// Positions tab's "Group M&C" toggle calls them Metals & Crypto, and so does this page —
-// plus gold and silver, by name (see isPreciousMetal).
-const sectionOf = (assetClass: string, name: string): string =>
-  !assetClass || assetClass === 'Other' || assetClass === 'Crypto' || isPreciousMetal(name) ? 'Metals & Crypto' : assetClass;
+export const portfolioClassOf = (a: { portfolioClass?: string; assetClass: string }): string => {
+  const raw = (a.portfolioClass || a.assetClass || 'Other').trim();
+  return SECTION_ORDER.find(s => s.toLowerCase() === raw.toLowerCase()) ?? raw;
+};
 
 const MS_PER_YEAR = 365.25 * 86400000;
 
@@ -222,7 +222,7 @@ export const buildHoldings = (args: {
 
     rows.push({
       kind: 'asset', key: pos.ticker, ticker: pos.ticker, name: info.name || pos.asset,
-      section: sectionOf(info.assetClass, info.name || pos.asset), nativeCurrency: nat, ccy: native ? nat : currency,
+      section: portfolioClassOf(info), nativeCurrency: nat, ccy: native ? nat : currency,
       price: price > 0 ? price : null,
       priceUp: price > 0 && prev > 0 ? price >= prev : null,
       priceDate: endIdx >= 0 ? String(data[endIdx].date) : '',
