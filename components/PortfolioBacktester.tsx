@@ -11284,7 +11284,7 @@ const PortfolioBacktester = () => {
                                     title={'Money-weighted return per year (XIRR), in ' + (native ? "each holding's own currency" : ccy) + '.\nHeld less than a year: the plain total return instead (not annualised).'}>XIRR</th>
                                   <th className="text-right font-medium px-2 py-2">Qty</th>
                                   <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help"
-                                    title={'How much the holding has given back from the best month-ends its shares have seen since each was bought, in ' + (native ? "its own currency" : ccy) + '.\nHover a figure for the working.'}>Curr DD</th>
+                                    title={'Profit given back since the holding\'s best month-end (its profit/loss line, dividends included), in ' + (native ? "its own currency" : ccy) + '.\nHover a figure for the working.'}>Curr DD</th>
                                   <th className="text-right font-medium px-2 py-2">Weight</th>
                                 </tr>
                                 {s.rows.map(r => {
@@ -11354,18 +11354,16 @@ const PortfolioBacktester = () => {
                                       {/* Curr DD as an amount, from the holding's own peak (see lib/holdings.ts) */}
                                       <td className={`px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap ${r.dd ? 'cursor-help' : ''} ${ddFlat ? 'text-green-700 font-semibold' : 'text-orange-700'}`}
                                         title={r.dd
-                                          ? `Drop from the highs your shares have actually seen, in ${r.ccy}.\n`
-                                            + 'Answers: how much value have I given back from the best month-ends reached while I held these shares?\n\n'
-                                            // The sum is shown in money totals (exact), not in per-share prices,
-                                            // which formatPrice rounds and would make the arithmetic look off.
-                                            + `Each purchase at its best month-end since it was bought: ${fmtMoney(r.dd.peakValue)} ${r.ccy}\n`
-                                            + `Today: ${formatPrice(r.dd.nowPerShare)} ${r.ccy} a share → ${fmtMoney(r.dd.nowValue)} ${r.ccy}\n`
-                                            + `Given back: ${fmtMoney(r.dd.nowValue)} − ${fmtMoney(r.dd.peakValue)} = ${fmtSigned(r.dd.amount)} ${r.ccy}\n`
-                                            + `Highest of those peaks: ${formatPrice(r.dd.topPerShare)} ${r.ccy} a share (${monthLabel(r.dd.topDate)}), `
-                                            + `seen by the ${fmtQty(r.dd.topLotQty)} shares bought ${dayLabel(r.dd.topLotDate)}\n\n`
-                                            + 'Each purchase counts only from its own date, so a peak before you bought never counts,\n'
-                                            + 'and buying more is never a gain. Month-end prices from the sheet (adjusted close).'
-                                            + (r.ccy !== r.nativeCurrency ? `\nIncludes FX moves: the asset is priced in ${r.nativeCurrency}, shown here in ${r.ccy}.` : '')
+                                          ? `Profit given back since this holding's best month-end, in ${r.ccy}.\n`
+                                            + 'Profit/loss = shares\' value + dividends & interest received − money put in, at each month-end\n'
+                                            + '(the line charted for this holding on the Positions tab).\n\n'
+                                            + `Best: ${fmtSigned(r.dd.peakPnl)} ${r.ccy} (${monthLabel(r.dd.peakDate)})\n`
+                                            + `Today: ${fmtSigned(r.dd.nowPnl)} ${r.ccy}\n`
+                                            + `Given back: ${fmtSigned(r.dd.nowPnl)} − (${fmtSigned(r.dd.peakPnl)}) = ${fmtSigned(r.dd.amount)} ${r.ccy}\n\n`
+                                            + 'Buying more never counts as a gain: the money put in rises with the value.'
+                                            + (r.ccy !== r.nativeCurrency
+                                              ? `\nIncludes FX moves: priced in ${r.nativeCurrency}, shown here in ${r.ccy} (the Positions chart is in ${r.nativeCurrency}).`
+                                              : '')
                                           : ''}>
                                         {!r.dd ? <span className="text-gray-300">–</span> : ddFlat ? 'Peak' : <>{fmtSigned(r.dd.amount)}{tag}</>}
                                       </td>
@@ -11427,7 +11425,7 @@ const PortfolioBacktester = () => {
                         invested and each dividend converted at their own month&apos;s exchange rate, value at today&apos;s, so FX moves are part of the return ·
                         total return = value + dividends &amp; interest − invested · XIRR = money-weighted return per year in {native ? 'the row’s currency' : ccy},
                         or the plain total return when held less than a year ·
-                        Curr DD = drop from the best month-end each purchase has seen since it was bought, × its shares, summed ·
+                        Curr DD = profit given back since the best month-end of the holding&apos;s profit/loss line (value + dividends − money put in, as charted on the Positions tab) ·
                         weight = share of everything held, cash included · price in the asset&apos;s own currency, red if below last month-end ·
                         click a name to open it in the Positions tab
                       </p>

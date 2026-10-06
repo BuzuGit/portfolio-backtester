@@ -43,25 +43,25 @@ export const NATIVE_TOTALS_CURRENCY = 'USD';
 export interface CashFlow { date: Date; amount: number }
 
 /**
- * How far a holding sits below the highs its shares have actually seen, as an AMOUNT.
+ * How much PROFIT a holding has given back since its best month-end, as an AMOUNT.
  *
- * Worked out LOT BY LOT: each purchase only counts the best month-end price (in the row's
- * currency) from its OWN purchase month onwards, so a peak reached before those shares were
- * bought never counts, and buying more is never a "gain". The drop is
- *   Σ over lots of  shares × (today's price − best price since that lot was bought).
- * (A first version used the best price since the FIRST buy × today's share count, which charged
- * shares bought later for a peak they never saw: REIT Asia read −27,159 instead of −11,301.)
+ * It follows the profit/loss line the Positions tab charts for the same holding ("Unrealized
+ * Profit / Loss Over Time"): at each month-end since the first buy,
+ *   shares held then × price  +  dividends & interest received so far  −  money put in so far,
+ * with today as the last point. The drop is today's figure minus the line's best (<= 0).
+ * Buying more never counts as a gain (money put in rises with the value), and dividends cushion
+ * the fall. In the holding's own currency it reproduces that chart exactly (REIT Asia ex-JP:
+ * best +6,443 in Feb 2026, today −721, so −7,164).
+ *
+ * (Two earlier versions measured a fall in PRICE instead — first from the best price since the
+ * first buy × today's shares, which overstated it badly, then lot by lot — and neither matched
+ * what the user sees on the Positions chart.)
  */
 export interface HoldingDrawdown {
-  amount: number;          // <= 0; 0 = every lot at its own best today
-  peakValue: number;       // the shares held today, each at its best month-end since bought
-  nowValue: number;        // the same shares at today's price
-  nowPerShare: number;     // today's value of one share, row currency
-  // The highest of the lots' peaks, for the tooltip: when, at what price, for which purchase.
-  topPerShare: number;
-  topDate: string;
-  topLotDate: string;
-  topLotQty: number;
+  amount: number;          // <= 0; 0 = the line is at its best today
+  peakPnl: number;         // the line's best month-end
+  peakDate: string;        // when that was
+  nowPnl: number;          // today's profit/loss (= the row's total return)
 }
 
 export interface HoldingRow {
@@ -212,30 +212,33 @@ export const buildHoldings = (args: {
         { date: now, amount: value },
       ].sort((a, b) => a.date.getTime() - b.date.getTime());
 
-      // Drawdown, lot by lot (see HoldingDrawdown): each lot's best month-end from its own
-      // purchase month onwards, today's price counting as a candidate too.
+      const ret = value + income - invested;
+
+      // Drawdown of the profit/loss line (see HoldingDrawdown). Built the way the Positions chart
+      // builds it: a purchase or dividend counts from the month-end of the month it happened in,
+      // and only months with a price are points on the line. Money put in and dividends use the
+      // rate of their own month (as `invested` and `income` above); the shares' value uses each
+      // month-end's rate.
       let dd: HoldingDrawdown | null = null;
       if (price > 0 && pos.lots.length > 0) {
-        // Value of one share at each month-end, in the target currency (oldest first).
-        const series = data
-          .map(row => ({ ym: String(row.date).slice(0, 7), date: String(row.date), v: priceOn(pos.ticker, row) * conv(nat, to, row) }))
-          .filter(s => s.v > 0);
-        let peakValue = 0, top = { perShare: 0, date: '', lotDate: '', lotQty: 0 };
-        for (const lot of pos.lots) {
-          let best = nowPerShare, bestDate = endIdx >= 0 ? String(data[endIdx].date) : '';
-          for (const s of series) {
-            if (s.ym >= lot.date.slice(0, 7) && s.v > best) { best = s.v; bestDate = s.date; }
-          }
-          peakValue += best * lot.qty;
-          if (best > top.perShare) top = { perShare: best, date: bestDate, lotDate: lot.date, lotQty: lot.qty };
+        const ym = (d: string) => d.slice(0, 7);
+        const buys = pos.lots.map(l => ({ ym: ym(l.date), qty: l.qty, cost: l.cost * conv(nat, to, rowOn(l.date)) }));
+        const divs = pos.incomeEvents.map(e => ({ ym: ym(e.date), amount: e.amount * conv(nat, to, rowOn(e.date)) }));
+        const firstYm = buys.reduce((m, b) => (b.ym < m ? b.ym : m), buys[0].ym);
+        let peakPnl = ret, peakDate = endIdx >= 0 ? String(data[endIdx].date) : '';   // today is a point too
+        for (const row of data) {
+          const rowYm = ym(String(row.date));
+          const p = priceOn(pos.ticker, row);
+          if (rowYm < firstYm || p === 0) continue;
+          let shares = 0, putIn = 0, received = 0;
+          for (const b of buys) if (b.ym <= rowYm) { shares += b.qty; putIn += b.cost; }
+          for (const d of divs) if (d.ym <= rowYm) received += d.amount;
+          const pnl = shares * p * conv(nat, to, row) + received - putIn;
+          if (pnl > peakPnl) { peakPnl = pnl; peakDate = String(row.date); }
         }
-        const nowValue = nowPerShare * qty;
-        dd = {
-          amount: nowValue - peakValue, peakValue, nowValue, nowPerShare,
-          topPerShare: top.perShare, topDate: top.date, topLotDate: top.lotDate, topLotQty: top.lotQty,
-        };
+        dd = { amount: ret - peakPnl, peakPnl, peakDate, nowPnl: ret };
       }
-      return { invested, income, value, ret: value + income - invested, flows, dd };
+      return { invested, income, value, ret, flows, dd };
     };
 
     const own = measure(native ? nat : currency);              // what the row shows
