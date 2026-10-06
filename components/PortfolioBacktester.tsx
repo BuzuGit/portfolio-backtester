@@ -23,7 +23,7 @@ import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, Tra
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
-import { buildHoldings, isPreciousMetal, MARKETS_HOLDINGS, HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, HoldingsCurrency, HoldingRow } from '@/lib/holdings';
+import { buildHoldings, portfolioClassOf, MARKETS_HOLDINGS, HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, HoldingsCurrency, HoldingRow } from '@/lib/holdings';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -16934,8 +16934,8 @@ const PortfolioBacktester = () => {
                       : 'bg-white text-gray-500 border-gray-300 hover:border-amber-600 hover:text-amber-700'
                   }`}
                   title={groupMetalsCrypto
-                    ? 'Gold, silver and crypto are grouped as Metals & Crypto, their own class and currency — click to ungroup'
-                    : 'Each asset shows the class from the Lookup tab (gold and silver: Alternatives) — click to group gold, silver and crypto as Metals & Crypto'}
+                    ? 'Showing the Lookup tab\'s PortfolioClass (blank = Asset Class); Metals & Crypto also get their own currency bar — click for the standard Asset Class'
+                    : 'Showing the standard Asset Class from the Lookup tab — click to use PortfolioClass (e.g. Metals & Crypto)'}
                 >
                   <span>{groupMetalsCrypto ? '●' : '○'}</span>
                   Group M&amp;C
@@ -17030,6 +17030,7 @@ const PortfolioBacktester = () => {
 
                   return {
                     ticker, name: assetInfo?.name || '', assetClass: assetInfo?.assetClass || '',
+                    portfolioClass: assetInfo?.portfolioClass || '', // used while "Group M&C" is on
                     nativeCurrency,
                     numTransactions: purchases.length,
                     firstBuyDate, lastValuation: today, timeHeldYears,
@@ -17058,21 +17059,15 @@ const PortfolioBacktester = () => {
                 };
 
                 // Helpers for the "Group Metals & Crypto" toggle:
-                // effectiveClass — when toggle is on, any asset whose raw class is 'Other' (or missing)
-                //   becomes 'Metals & Crypto'; otherwise returns the class as-is, defaulting to 'Other'.
-                //   Gold and silver join it too (by name — the sheet files them under Alternatives;
-                //   see isPreciousMetal in lib/holdings.ts, shared with the Markets Holdings page).
-                //   With the toggle off, every asset shows the sheet's own class, gold included.
-                const effectiveClass = (rawCls: string, name = ''): string => {
-                  const cls = rawCls || 'Other';
-                  return groupMetalsCrypto && (cls === 'Other' || isPreciousMetal(name)) ? METALS_CRYPTO_LABEL : cls;
-                };
+                // effectiveClass — toggle ON: the Lookup tab's PortfolioClass (blank = Asset Class), the
+                //   same rule as the Markets Holdings page (portfolioClassOf in lib/holdings.ts).
+                //   Toggle OFF: the standard Asset Class. Missing either way = 'Other'.
+                const effectiveClass = (row: { assetClass: string; portfolioClass: string }): string =>
+                  (groupMetalsCrypto ? portfolioClassOf(row) : (row.assetClass || 'Other'));
                 // effectiveCurrency — when toggle is on, M&C assets get a pseudo-currency 'M&C' so
                 //   their value is excluded from real fiat bars (e.g. USD) in the By Currency chart.
-                const effectiveCurrency = (row: { nativeCurrency: string; assetClass: string; name?: string }): string => {
-                  const cls = row.assetClass || 'Other';
-                  return groupMetalsCrypto && (cls === 'Other' || isPreciousMetal(row.name ?? '')) ? METALS_CRYPTO_CCY : row.nativeCurrency;
-                };
+                const effectiveCurrency = (row: { nativeCurrency: string; assetClass: string; portfolioClass: string }): string =>
+                  (groupMetalsCrypto && portfolioClassOf(row) === METALS_CRYPTO_LABEL ? METALS_CRYPTO_CCY : row.nativeCurrency);
 
                 // --- Build a map of ticker → set of accounts (from Purchase of Asset transactions only) ---
                 // Used to filter the portfolio by account — a ticker is "in" an account if it has
@@ -17163,7 +17158,7 @@ const PortfolioBacktester = () => {
                 // native totals stored on each row (avoids re-fetching transactions).
                 const acRollupMap: Record<string, { invested: number; currentValue: number; pnl: number }> = {};
                 for (const row of currencyFilteredData) {
-                  const cls = effectiveClass(row.assetClass, row.name); // remaps 'Other' → 'Metals & Crypto' when toggle is on
+                  const cls = effectiveClass(row); // remaps 'Other' → 'Metals & Crypto' when toggle is on
                   if (!acRollupMap[cls]) acRollupMap[cls] = { invested: 0, currentValue: 0, pnl: 0 };
                   let investedEff: number, currentValueEff: number, pnlEff: number;
                   if (positionsCurrency) {
@@ -17208,7 +17203,7 @@ const PortfolioBacktester = () => {
                 // Clicking a sub-row also sets openCurrencyFilter so all three sections sync.
                 const acCurrencyBreakdown: Record<string, Record<string, { invested: number; currentValue: number; pnl: number }>> = {};
                 for (const row of currencyFilteredData) {
-                  const cls = effectiveClass(row.assetClass, row.name);   // e.g. 'Other' → 'Metals & Crypto'
+                  const cls = effectiveClass(row);   // e.g. 'Other' → 'Metals & Crypto'
                   const ccy = effectiveCurrency(row);            // e.g. 'USD' → 'M&C' for gold/crypto
                   if (!acCurrencyBreakdown[cls]) acCurrencyBreakdown[cls] = {};
                   if (!acCurrencyBreakdown[cls][ccy]) acCurrencyBreakdown[cls][ccy] = { invested: 0, currentValue: 0, pnl: 0 };
@@ -17287,7 +17282,7 @@ const PortfolioBacktester = () => {
                   .map((row, idx) => ({ ...row, _weight: openWeights[idx] }))
                   .filter(row =>
                     (!openCurrencyFilter  || effectiveCurrency(row) === openCurrencyFilter) &&
-                    (!openAssetClassFilter || effectiveClass(row.assetClass, row.name) === openAssetClassFilter) &&
+                    (!openAssetClassFilter || effectiveClass(row) === openAssetClassFilter) &&
                     (!openAccountFilter   || tickerPurchaseAccounts[row.ticker]?.has(openAccountFilter))
                   );
 
@@ -17546,7 +17541,7 @@ const PortfolioBacktester = () => {
                       // (not by account itself — otherwise clicking an account would hide the other bars).
                       const acctBarSource = openSummaryData.filter(row =>
                         (!openCurrencyFilter  || effectiveCurrency(row) === openCurrencyFilter) &&
-                        (!openAssetClassFilter || effectiveClass(row.assetClass, row.name) === openAssetClassFilter)
+                        (!openAssetClassFilter || effectiveClass(row) === openAssetClassFilter)
                       );
 
                       // For each ticker in the filtered set, allocate its current value to each account
