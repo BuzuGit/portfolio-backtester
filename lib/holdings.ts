@@ -117,15 +117,24 @@ export interface HoldingsModel {
 
 // Sections in page order: cash, then bonds, equities, alternatives, metals & crypto.
 const SECTION_ORDER = ['Cash', 'Fixed Income', 'Equities', 'Alternatives', 'Metals & Crypto'];
-// Bitcoin ETF carries the class "Other" in the sheet and the crypto rows "Crypto"; the
-// Positions tab's "Group M&C" toggle calls them Metals & Crypto, and so does this page.
-// (Anything the sheet calls "Alternatives" — the gold rows included — stays there.)
 /** Short names for the "Asset mix" tile; any other section shows its first three letters. */
 export const HOLDINGS_MIX_ABBR: Record<string, string> = {
   'Cash': 'Cash', 'Fixed Income': 'FI', 'Equities': 'EQ', 'Alternatives': 'ALT', 'Metals & Crypto': 'OTH',
 };
-const sectionOf = (assetClass: string): string =>
-  !assetClass || assetClass === 'Other' || assetClass === 'Crypto' ? 'Metals & Crypto' : assetClass;
+
+/**
+ * Gold and silver count as Metals & Crypto on this page and in the Positions tab's "Group M&C"
+ * grouping, even though the Lookup tab files them under "Alternatives" (GLDM, GSD, SLV).
+ * Matched on the asset NAME as a whole word, so "Gold SGD" and "Silver" qualify while
+ * "Industrial Metals" deliberately does not. The sheet itself is left as it is.
+ */
+export const isPreciousMetal = (name: string): boolean => /\b(gold|silver)\b/i.test(name);
+
+// Bitcoin ETF carries the class "Other" in the sheet and the crypto rows "Crypto"; the
+// Positions tab's "Group M&C" toggle calls them Metals & Crypto, and so does this page —
+// plus gold and silver, by name (see isPreciousMetal).
+const sectionOf = (assetClass: string, name: string): string =>
+  !assetClass || assetClass === 'Other' || assetClass === 'Crypto' || isPreciousMetal(name) ? 'Metals & Crypto' : assetClass;
 
 const MS_PER_YEAR = 365.25 * 86400000;
 
@@ -213,7 +222,7 @@ export const buildHoldings = (args: {
 
     rows.push({
       kind: 'asset', key: pos.ticker, ticker: pos.ticker, name: info.name || pos.asset,
-      section: sectionOf(info.assetClass), nativeCurrency: nat, ccy: native ? nat : currency,
+      section: sectionOf(info.assetClass, info.name || pos.asset), nativeCurrency: nat, ccy: native ? nat : currency,
       price: price > 0 ? price : null,
       priceUp: price > 0 && prev > 0 ? price >= prev : null,
       priceDate: endIdx >= 0 ? String(data[endIdx].date) : '',
