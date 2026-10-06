@@ -23,6 +23,7 @@ import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, Tra
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
+import { buildHoldings, MARKETS_HOLDINGS, HOLDINGS_CURRENCIES, HoldingsCurrency, HoldingRow } from '@/lib/holdings';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -1692,6 +1693,9 @@ const PortfolioBacktester = () => {
   // Each view remembers its own period: Stats opens on 5Y (a year or more is what its CAGR / Vol /
   // Sharpe need), Returns keeps whatever was last chosen there. Switching view swaps them over.
   const marketsSavedPeriod = useRef<Record<'returns' | 'stats', MarketsPeriod>>({ returns: 'YTD', stats: '5Y' });
+  // Markets "Holdings" page: the one currency every money figure on it is converted into.
+  // Its own setting (USD by default), so it never moves the Positions tab's currency.
+  const [holdingsCurrency, setHoldingsCurrency] = useState<HoldingsCurrency>('USD');
   // Which year the "Profit Breakdown by Asset" table shows.
   // null = default to the latest available year in yearsData (computed at render time).
   const [breakdownYear, setBreakdownYear] = useState<number | null>(null);
@@ -4816,18 +4820,36 @@ const PortfolioBacktester = () => {
   // "Country" is always added at the end: it isn't a SnapshotCategory but a page built from the
   // SnapshotCountry column (see buildCountryMatrix).
   // (A sheet category that happens to be called "Country" is skipped, so it can't clash with it.)
+  // "Holdings" follows Country the same way: a page of what you own, built from the
+  // Transactions ledger rather than from the Lookup tab (see lib/holdings.ts).
   const marketsCategories = useMemo(
-    () => [...snapshotCategories(assetLookup).filter(c => c.toLowerCase() !== MARKETS_COUNTRY.toLowerCase()), MARKETS_COUNTRY],
+    () => [
+      ...snapshotCategories(assetLookup).filter(c => ![MARKETS_COUNTRY, MARKETS_HOLDINGS].some(x => x.toLowerCase() === c.toLowerCase())),
+      MARKETS_COUNTRY, MARKETS_HOLDINGS,
+    ],
     [assetLookup],
   );
   const activeMarketsCategory =
     marketsCategories.find(c => c.toLowerCase() === marketsCategory.toLowerCase()) ?? marketsCategories[0] ?? 'Assets';
   const marketsIsCountry = activeMarketsCategory === MARKETS_COUNTRY;
+  const marketsIsHoldings = activeMarketsCategory === MARKETS_HOLDINGS;
   const marketsMatrix = useMemo(
-    () => (marketsIsCountry
+    () => (marketsIsHoldings ? null : marketsIsCountry
       ? buildCountryMatrix(assetData, assetLookup, marketsCountry)
       : buildReturnMatrix(assetData, assetLookup, marketsCurrency, activeMarketsCategory)),
-    [assetData, assetLookup, marketsCurrency, activeMarketsCategory, marketsIsCountry, marketsCountry],
+    [assetData, assetLookup, marketsCurrency, activeMarketsCategory, marketsIsCountry, marketsIsHoldings, marketsCountry],
+  );
+  // Markets "Holdings" page: open positions + cash in one currency. Only worked out while that
+  // page is on screen; the arithmetic is in lib/holdings.ts.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const holdingsModel = useMemo(
+    () => (activeView === 'markets' && marketsIsHoldings && assetData && positionsModel
+      ? buildHoldings({
+          open: positionsModel.open, lookup: assetLookup, data: assetData, cash: cashAccounts,
+          currency: holdingsCurrency, fxTickerMap: FX_TICKER_MAP, xirr: calculateXIRR,
+        })
+      : null),
+    [activeView, marketsIsHoldings, assetData, positionsModel, assetLookup, cashAccounts, holdingsCurrency],
   );
 
   // Calendar-year returns of the xxxPLN exchange rates, for the Return Map's currency buttons.
@@ -10172,7 +10194,8 @@ const PortfolioBacktester = () => {
           {/* Markets tab — a one-screen overview: the Return matrix for the category chosen in the */}
           {/* left panel (Assets, Equities, Macro... from the sheet's SnapshotCategory column, plus the */}
           {/* Country page), in Returns or Stats view. All the arithmetic is in lib/markets.ts. */}
-          {isConnected && assetData && activeView === 'markets' && (() => {
+          {/* (The Holdings page is drawn by its own block below, so this one stands aside for it.) */}
+          {isConnected && assetData && activeView === 'markets' && !marketsIsHoldings && (() => {
             const m = marketsMatrix;
             const allRows = m ? m.sections.flatMap(s => s.rows) : [];
 
@@ -11044,6 +11067,322 @@ const PortfolioBacktester = () => {
                         vs peak = ATH − Value in pp · colours reversed: rising = red{marketsIsCountry ? '' : ' · the currency button does not apply'} · – = not enough history
                       </p>
                       )}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Markets tab, Holdings page — what you own today, in the Markets look: open positions */}
+          {/* (shares still held, as in Positions › Open Positions) plus cash, grouped by asset class, */}
+          {/* every money figure in one currency. The arithmetic is in lib/holdings.ts. */}
+          {isConnected && assetData && activeView === 'markets' && marketsIsHoldings && (() => {
+            const h = holdingsModel;
+            const ccy = holdingsCurrency;
+            const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const monthLabel = (d: string) => `${MONTHS[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`; // "Oct 2026"
+            const dayLabel = (d: string) => `${Number(d.slice(8, 10))} ${monthLabel(d)}`;               // "15 Mar 2021"
+            const isMtd = !!h && h.endDate.slice(0, 7) === new Date().toISOString().slice(0, 7);
+
+            // Money is whole units with thousands separators, like the Positions tab; returns carry a sign.
+            const fmtMoney = (v: number) => v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+            const fmtSigned = (v: number) => `${Math.round(v) > 0 ? '+' : ''}${fmtMoney(v)}`;
+            const fmtPctSigned = (v: number) => `${v > 0.05 ? '+' : ''}${v.toFixed(1)}%`;
+            // Share counts: whole shares need no decimals, a fraction of a bitcoin needs four.
+            const fmtQty = (v: number) => v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: Math.abs(v) < 1 ? 4 : 2 });
+
+            const assetRows = h ? h.sections.flatMap(s => s.rows).filter(r => r.kind === 'asset') : [];
+            const allRows = h ? h.sections.flatMap(s => s.rows) : [];
+
+            // Total-return bars: one scale for every holding, from the biggest loss to the biggest
+            // gain and always including zero, so every bar starts from the same zero line.
+            const retLo = Math.min(0, ...assetRows.map(r => r.ret));
+            const retHi = Math.max(0, ...assetRows.map(r => r.ret));
+            const retSpan = (retHi - retLo) || 1;
+            const zeroPct = (-retLo / retSpan) * 100;
+            const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
+            // Heat colours for Return % and XIRR, each column on its own scale (as on the Markets pages).
+            const cap = (vals: (number | null)[]) => Math.max(1e-9, ...vals.filter((v): v is number => v !== null).map(Math.abs));
+            const pctCap = cap(assetRows.map(r => r.retPct));
+            const xirrCap = cap(assetRows.map(r => r.xirr));
+            const maxWeight = Math.max(1e-9, ...allRows.map(r => r.weight));
+
+            const heatCell = (v: number | null, capV: number, title: string, bold = false) => {
+              if (v === null) return <td className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
+              const bg = returnHeatColor(Math.max(-1, Math.min(1, v / capV)) * 40);
+              return (
+                <td className="px-px py-0.5" title={title}>
+                  <div className={`rounded px-1 py-1 cursor-help text-center text-xs tabular-nums ${bold ? 'font-semibold' : ''}`}
+                    style={{ background: bg, color: readableTextOn(bg) }}>{fmtPctSigned(v)}</div>
+                </td>
+              );
+            };
+            const weightCell = (w: number, bold = false) => (
+              <td className="px-2 py-1" title={`${w.toFixed(2)}% of everything held (cash included)`}>
+                <div className="flex items-center gap-1.5 justify-end">
+                  <div className="w-14 h-2.5 bg-gray-100 rounded-sm overflow-hidden">
+                    <div className="h-full rounded-sm" style={{ width: `${Math.max(0, w / maxWeight) * 100}%`, background: 'rgb(156, 163, 175)' }} />
+                  </div>
+                  <span className={`text-xs tabular-nums w-11 text-right ${w < 0 ? 'text-red-600' : 'text-gray-800'} ${bold ? 'font-semibold' : ''}`}>{w.toFixed(1)}%</span>
+                </div>
+              </td>
+            );
+
+            // Clicking a name opens it in the Positions tab: an investment's detail panel (lots,
+            // dividends, chart) or a cash account's statement. That tab's own filters are left as
+            // they were — its detail panels show whatever is selected regardless of them. The
+            // chart settings reset exactly as a click in the Open Positions table resets them.
+            const openInPositions = (r: HoldingRow) => {
+              setClosedSelectedTicker('');
+              if (r.kind === 'cash') {
+                setOpenSelectedTicker('');
+                setCashSelected(r.key);
+                setCashCategory('');
+              } else {
+                setCashSelected('');
+                setOpenSelectedTicker(r.ticker);
+                setOpenIncludedTxns(null);
+                setOpenInvestedInto('');
+                setOpenInvestedFrom('');
+                setOpenGraphStarts('');
+                setOpenGraphEnds('');
+                setOpenSinceInvested(true);
+                setOpenShowAvgBuy(true);
+                setOpenShowMinMax(false);
+              }
+              setActiveView('positions');
+              window.scrollTo({ top: 0 });
+            };
+
+            // Asset + Price + Held + Invested + Value + Return bar + Return % + XIRR + Qty + Curr DD + Weight
+            const colCount = 11;
+
+            return (
+              <div className="mt-2">
+                {/* Page-level filter: the one currency every money figure is converted into. */}
+                {/* (No Native here: weights and totals need a common currency.) */}
+                <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                    {HOLDINGS_CURRENCIES.map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setHoldingsCurrency(c)}
+                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                          holdingsCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >{c}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+                  {/* Card header */}
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+                    <div>
+                      <h3 className="text-md font-semibold text-gray-800 inline">Holdings</h3>
+                      <span className="text-xs text-gray-500 ml-2 uppercase tracking-wide">
+                        open positions + cash · values in {ccy}
+                      </span>
+                    </div>
+                    {h && (
+                      <span className="text-xs text-gray-500 border border-gray-200 rounded px-2 py-0.5">
+                        Data as of {monthLabel(h.endDate)}{isMtd ? ' (month to date)' : ''}
+                      </span>
+                    )}
+                  </div>
+
+                  {!h || allRows.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-6 text-center">
+                      {!positionsModel ? 'Loading the Transactions ledger…' : 'No open positions or cash balances found in the Transactions ledger.'}
+                    </p>
+                  ) : (
+                    <>
+                      {/* Summary tiles: what it is all worth, what it has made, how much is idle cash. */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4">
+                        {[
+                          {
+                            label: 'Total value', value: `${fmtMoney(h.totals.value)} ${ccy}`, cls: 'text-gray-800',
+                            sub: `${h.totals.holdings} holdings + cash`, title: '',
+                          },
+                          {
+                            label: 'Total return', value: `${fmtSigned(h.totals.ret)} ${ccy}`,
+                            cls: h.totals.ret >= 0 ? 'text-green-700' : 'text-red-700',
+                            sub: h.totals.retPct !== null ? `${fmtPctSigned(h.totals.retPct)} · incl. dividends & interest` : 'incl. dividends & interest',
+                            title: `Value ${fmtMoney(h.totals.value)} + dividends & interest − invested ${fmtMoney(h.totals.invested)} (${ccy}).\n`
+                              + 'Shares still held only; gains on shares already sold are in Positions › Closed Positions.\n'
+                              + 'The % is on everything invested INCLUDING cash, so idle cash pulls it down.',
+                          },
+                          {
+                            label: 'Cash', value: h.totals.cashPct !== null ? `${h.totals.cashPct.toFixed(1)}%` : '–', cls: 'text-gray-800',
+                            sub: `${fmtMoney(h.totals.cash)} ${ccy} of all assets`, title: '',
+                          },
+                        ].map(t => (
+                          <div key={t.label} title={t.title || undefined}
+                            className={`rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0 ${t.title ? 'cursor-help' : ''}`}>
+                            <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
+                            <div className="text-sm whitespace-nowrap truncate">
+                              <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
+                              <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm border-collapse">
+                          <tbody>
+                            {h.sections.map((s, si) => (
+                              <React.Fragment key={s.name}>
+                                {/* A little air between one section's subtotal and the next header */}
+                                {si > 0 && <tr><td colSpan={colCount} className="h-4" /></tr>}
+                                {/* Each section carries its own copy of the column headers, with the */}
+                                {/* section name (e.g. "EQUITIES") in the first cell, as on the Markets pages. */}
+                                <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
+                                  <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name}</th>
+                                  <th className="text-right font-medium px-2 py-2">Price</th>
+                                  <th className="text-right font-medium px-2 py-2 whitespace-nowrap" title="Years since the first purchase of the shares still held">Held</th>
+                                  <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Invested</th>
+                                  <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Value</th>
+                                  {/* The fixed-width div holds the bar column open (the bars claim no width). */}
+                                  <th className="text-left font-medium px-3 py-2">
+                                    <div className="w-[220px]"><span className="text-gray-800 font-semibold">Total return · {ccy}</span></div>
+                                  </th>
+                                  <th className="text-center font-medium px-0.5 py-2 w-16 whitespace-nowrap">Return %</th>
+                                  <th className="text-center font-medium px-0.5 py-2 w-16 cursor-help" title="Money-weighted return per year (XIRR), in the display currency">XIRR</th>
+                                  <th className="text-right font-medium px-2 py-2">Qty</th>
+                                  <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help"
+                                    title={'How much the holding has given back from its own best month-end since the first buy, in ' + ccy + '.\nHover a figure for the working.'}>Curr DD</th>
+                                  <th className="text-right font-medium px-2 py-2">Weight</th>
+                                </tr>
+                                {s.rows.map(r => {
+                                  const isCash = r.kind === 'cash';
+                                  const w = (Math.abs(r.ret) / retSpan) * 100;
+                                  const stale = !!r.priceDate && r.priceDate.slice(0, 7) !== h.endDate.slice(0, 7);
+                                  const ddFlat = r.dd !== null && Math.abs(r.dd.amount) < 0.5;
+                                  return (
+                                    <tr key={r.key} className="border-b border-gray-100 hover:bg-gray-50">
+                                      <td className="px-3 py-1 whitespace-nowrap">
+                                        <button
+                                          type="button"
+                                          onClick={() => openInPositions(r)}
+                                          className="text-gray-800 hover:text-slate-900 hover:underline underline-offset-2 text-left"
+                                          title={isCash ? `${r.name} — open its statement in the Positions tab` : `${r.ticker} — open its purchases and chart in the Positions tab`}
+                                        >{r.name}</button>
+                                      </td>
+
+                                      {/* Latest price in the asset's own currency, red if below last month-end */}
+                                      <td className="px-2 py-1 text-right text-xs whitespace-nowrap tabular-nums">
+                                        {r.price === null ? <span className="text-gray-300">–</span> : (
+                                          <>
+                                            <span className={r.priceUp === false ? 'text-red-600' : 'text-gray-900'}>{formatPrice(r.price)}</span>
+                                            <span className="text-[9px] text-gray-400 ml-0.5">{r.nativeCurrency}</span>
+                                            {stale && <span className="text-[10px] text-amber-600 ml-1" title={`Latest price is from ${r.priceDate}`}>({monthLabel(r.priceDate)})</span>}
+                                          </>
+                                        )}
+                                      </td>
+
+                                      <td className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap cursor-help"
+                                        title={r.firstBuyDate ? `First buy: ${dayLabel(r.firstBuyDate)}` : ''}>
+                                        {r.yearsHeld === null ? <span className="text-gray-300">–</span> : `${r.yearsHeld.toFixed(1)}y`}
+                                      </td>
+                                      <td className="px-2 py-1 text-right text-xs tabular-nums text-gray-700">{isCash ? <span className="text-gray-300">–</span> : fmtMoney(r.invested)}</td>
+                                      <td className={`px-2 py-1 text-right text-xs tabular-nums ${r.value < 0 ? 'text-red-600' : 'text-gray-900'}`}>{fmtMoney(r.value)}</td>
+
+                                      {/* Total return as an amount: a bar from the shared zero line, the figure */}
+                                      {/* just past its end. Cash earns no return here, so it gets a dash. */}
+                                      <td className="px-3 py-1">
+                                        {isCash ? <span className="text-gray-300 text-xs">–</span> : (
+                                          <div className="relative h-4 mx-14 cursor-help"
+                                            title={`Value ${fmtMoney(r.value)} + dividends & interest ${fmtMoney(r.income)} − invested ${fmtMoney(r.invested)} = ${fmtSigned(r.ret)} ${ccy}`}>
+                                            <div className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: `${zeroPct}%` }} />
+                                            <div className="absolute top-0.5 bottom-0.5 rounded-sm"
+                                              style={{ left: `${r.ret >= 0 ? zeroPct : zeroPct - w}%`, width: `${w}%`, background: r.ret >= 0 ? BAR_UP : BAR_DOWN }} />
+                                            <span className="absolute top-1/2 -translate-y-1/2 text-xs tabular-nums text-gray-700 whitespace-nowrap"
+                                              style={r.ret >= 0 ? { left: `calc(${zeroPct + w}% + 4px)` } : { right: `calc(${100 - zeroPct + w}% + 4px)` }}
+                                            >{fmtSigned(r.ret)}</span>
+                                          </div>
+                                        )}
+                                      </td>
+
+                                      {heatCell(r.retPct, pctCap, r.retPct === null ? '' : `Total return ÷ invested = ${fmtSigned(r.ret)} ÷ ${fmtMoney(r.invested)} ${ccy}`)}
+                                      {heatCell(r.xirr, xirrCap, 'Money-weighted return per year in ' + ccy + ': each purchase and dividend on its own date,\ntoday\'s value as the final inflow')}
+
+                                      <td className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap text-gray-700">
+                                        {fmtQty(r.qty)}
+                                        {isCash && <span className="text-[9px] text-gray-400 ml-0.5">{r.nativeCurrency}</span>}
+                                      </td>
+
+                                      {/* Curr DD as an amount, from the holding's own peak (see lib/holdings.ts) */}
+                                      <td className={`px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap ${r.dd ? 'cursor-help' : ''} ${ddFlat ? 'text-green-700 font-semibold' : 'text-orange-700'}`}
+                                        title={r.dd
+                                          ? `Drop from this holding's own peak, in ${ccy}.\n`
+                                            + 'Answers: how much of its value have I given back since its best month-end while I held it?\n\n'
+                                            // The sum is shown in money totals (exact), not in per-share prices,
+                                            // which formatPrice rounds and would make the arithmetic look off.
+                                            + `Best month-end since the first buy (${dayLabel(r.dd.sinceDate)}): ${monthLabel(r.dd.peakDate)}, ${formatPrice(r.dd.peakPerShare)} ${ccy} a share\n`
+                                            + `Your ${fmtQty(r.qty)} shares at that price: ${fmtMoney(r.dd.peakPerShare * r.qty)} ${ccy}\n`
+                                            + `Today: ${formatPrice(r.dd.nowPerShare)} ${ccy} a share → ${fmtMoney(r.value)} ${ccy}\n`
+                                            + `Given back: ${fmtMoney(r.value)} − ${fmtMoney(r.dd.peakPerShare * r.qty)} = ${fmtSigned(r.dd.amount)} ${ccy}\n\n`
+                                            + 'Measured per share, so buying more never counts as a gain. Includes FX moves when the\n'
+                                            + `asset is not priced in ${ccy}. Dividends are not added back.`
+                                          : ''}>
+                                        {!r.dd ? <span className="text-gray-300">–</span> : ddFlat ? 'Peak' : fmtSigned(r.dd.amount)}
+                                      </td>
+
+                                      {weightCell(r.weight)}
+                                    </tr>
+                                  );
+                                })}
+                                {/* Section subtotal: the class's slice of the portfolio */}
+                                {(() => {
+                                  const isCashSection = s.rows.every(r => r.kind === 'cash');
+                                  return (
+                                    <tr className="border-b border-gray-200 text-xs font-semibold text-gray-700">
+                                      <td className="px-3 py-1.5 text-gray-500">Subtotal · {s.rows.length} {isCashSection ? (s.rows.length === 1 ? 'account' : 'accounts') : (s.rows.length === 1 ? 'holding' : 'holdings')}</td>
+                                      <td /><td />
+                                      <td className="px-2 py-1.5 text-right tabular-nums">{isCashSection ? '' : fmtMoney(s.invested)}</td>
+                                      <td className="px-2 py-1.5 text-right tabular-nums">{fmtMoney(s.value)}</td>
+                                      <td className={`px-3 py-1.5 tabular-nums ${s.ret >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                        {isCashSection ? '' : <span className="ml-14">{fmtSigned(s.ret)}</span>}
+                                      </td>
+                                      {heatCell(s.retPct, pctCap, s.retPct === null ? '' : `${s.name}: total return ÷ invested = ${fmtSigned(s.ret)} ÷ ${fmtMoney(s.invested)} ${ccy}`, true)}
+                                      {heatCell(s.xirr, xirrCap, `${s.name}: money-weighted return per year, all its purchases and dividends on one timeline`, true)}
+                                      <td /><td />
+                                      {weightCell(s.weight, true)}
+                                    </tr>
+                                  );
+                                })()}
+                              </React.Fragment>
+                            ))}
+                            {/* Grand total: same light grey as the headers, set apart by the thick top border */}
+                            <tr><td colSpan={colCount} className="h-4" /></tr>
+                            <tr className="border-t-2 border-gray-300 bg-gray-100 text-xs font-semibold text-gray-800">
+                              <td className="px-3 py-2">Total · {h.totals.holdings} holdings + cash</td>
+                              <td /><td />
+                              <td className="px-2 py-2 text-right tabular-nums" title="Cash counts at its balance">{fmtMoney(h.totals.invested)}</td>
+                              <td className="px-2 py-2 text-right tabular-nums">{fmtMoney(h.totals.value)}</td>
+                              <td className={`px-3 py-2 tabular-nums ${h.totals.ret >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                <span className="ml-14">{fmtSigned(h.totals.ret)}</span>
+                              </td>
+                              {heatCell(h.totals.retPct, pctCap, 'Total return ÷ everything invested, cash included', true)}
+                              {heatCell(h.totals.xirr, xirrCap, 'Money-weighted return per year of all the investments together (cash has no dated flows, so it is left out)', true)}
+                              <td /><td />
+                              {weightCell(100, true)}
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <p className="text-[11px] text-gray-500 mt-3">
+                        Shares still held, as in Positions › Open Positions (oldest shares sold first); gains on shares already sold are in Closed Positions ·
+                        invested and each dividend converted at their own month&apos;s exchange rate, value at today&apos;s, so FX moves are part of the return ·
+                        total return = value + dividends &amp; interest − invested · XIRR = money-weighted return per year in {ccy} ·
+                        Curr DD = drop from the holding&apos;s own best month-end since the first buy, per share × shares held ·
+                        weight = share of everything held, cash included · price in the asset&apos;s own currency, red if below last month-end ·
+                        click a name to open it in the Positions tab
+                      </p>
                     </>
                   )}
                 </div>
