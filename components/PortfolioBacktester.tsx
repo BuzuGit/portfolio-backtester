@@ -11116,10 +11116,12 @@ const PortfolioBacktester = () => {
 
             // Total-return bars: one scale for every holding, from the biggest loss to the biggest
             // gain and always including zero, so every bar starts from the same zero line.
-            // Bar LENGTHS use the one-currency figure (agg), so on "Native" a USD bar and an SGD bar
-            // are still comparable; the label next to each bar is in the row's own currency.
-            const retLo = Math.min(0, ...assetRows.map(r => r.agg.ret));
-            const retHi = Math.max(0, ...assetRows.map(r => r.agg.ret));
+            // Each bar is the row's OWN return (the figure printed next to it), so side and colour
+            // always match that figure. On "Native" it is sized at today's rate into USD (fxNow), so a
+            // USD bar and an SGD bar are still comparable; elsewhere fxNow is 1.
+            const barVal = (r: HoldingRow) => r.ret * r.fxNow;
+            const retLo = Math.min(0, ...assetRows.map(barVal));
+            const retHi = Math.max(0, ...assetRows.map(barVal));
             const retSpan = (retHi - retLo) || 1;
             const zeroPct = (-retLo / retSpan) * 100;
             const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
@@ -11287,7 +11289,8 @@ const PortfolioBacktester = () => {
                                 </tr>
                                 {s.rows.map(r => {
                                   const isCash = r.kind === 'cash';
-                                  const w = (Math.abs(r.agg.ret) / retSpan) * 100;
+                                  const bv = barVal(r);
+                                  const w = (Math.abs(bv) / retSpan) * 100;
                                   // On Native, a small currency tag after the row's amounts says which one they are in.
                                   const tag = native ? <span className="text-[9px] text-gray-400 font-normal ml-0.5">{r.ccy}</span> : null;
                                   const stale = !!r.priceDate && r.priceDate.slice(0, 7) !== h.endDate.slice(0, 7);
@@ -11327,14 +11330,12 @@ const PortfolioBacktester = () => {
                                         {isCash ? <span className="text-gray-300 text-xs">–</span> : (
                                           <div className="relative h-4 mx-14 cursor-help"
                                             title={`Value ${fmtMoney(r.value)} + dividends & interest ${fmtMoney(r.income)} − invested ${fmtMoney(r.invested)} = ${fmtSigned(r.ret)} ${r.ccy}`
-                                              + (native ? `\n(bar length compares holdings in ${ccy}: ${fmtSigned(r.agg.ret)} ${ccy})` : '')}>
+                                              + (native && r.ccy !== ccy ? `\n(bar sized at today's rate: ${fmtSigned(bv)} ${ccy}, so bars compare across currencies)` : '')}>
                                             <div className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: `${zeroPct}%` }} />
-                                            {/* Side and colour follow the bar's own (comparable) figure; on Native the */}
-                                            {/* label can occasionally disagree in sign, when FX turned a gain into a loss. */}
                                             <div className="absolute top-0.5 bottom-0.5 rounded-sm"
-                                              style={{ left: `${r.agg.ret >= 0 ? zeroPct : zeroPct - w}%`, width: `${w}%`, background: r.agg.ret >= 0 ? BAR_UP : BAR_DOWN }} />
+                                              style={{ left: `${bv >= 0 ? zeroPct : zeroPct - w}%`, width: `${w}%`, background: bv >= 0 ? BAR_UP : BAR_DOWN }} />
                                             <span className="absolute top-1/2 -translate-y-1/2 text-xs tabular-nums text-gray-700 whitespace-nowrap"
-                                              style={r.agg.ret >= 0 ? { left: `calc(${zeroPct + w}% + 4px)` } : { right: `calc(${100 - zeroPct + w}% + 4px)` }}
+                                              style={bv >= 0 ? { left: `calc(${zeroPct + w}% + 4px)` } : { right: `calc(${100 - zeroPct + w}% + 4px)` }}
                                             >{fmtSigned(r.ret)}{tag}</span>
                                           </div>
                                         )}
@@ -11417,7 +11418,8 @@ const PortfolioBacktester = () => {
                       <p className="text-[11px] text-gray-500 mt-3">
                         Shares still held, as in Positions › Open Positions (oldest shares sold first); gains on shares already sold are in Closed Positions ·
                         {native
-                          ? <>Native: each holding in its own currency, no FX; subtotals, totals, weights, tiles and the bar lengths in {ccy} (converted as below) · </>
+                          ? <>Native: each holding in its own currency, no FX; subtotals, totals, weights and tiles in {ccy} (converted as below);
+                            each return bar is the holding&apos;s own return, sized at today&apos;s rate into {ccy} so bars compare across currencies · </>
                           : null}
                         invested and each dividend converted at their own month&apos;s exchange rate, value at today&apos;s, so FX moves are part of the return ·
                         total return = value + dividends &amp; interest − invested · XIRR = money-weighted return per year in {native ? 'the row’s currency' : ccy},

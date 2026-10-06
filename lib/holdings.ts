@@ -82,6 +82,10 @@ export interface HoldingRow {
   dd: HoldingDrawdown | null;
   // --- in the model's totalsCurrency: what gets added up across rows ---
   agg: { invested: number; value: number; ret: number };
+  // Today's rate from `ccy` to totalsCurrency (1 unless on Native). Lets the page size a row's
+  // own figure on a common scale without changing it: on Native, the return bar is the NATIVE
+  // return at today's rate, so it keeps the native sign (agg.ret, with historical FX, may not).
+  fxNow: number;
   weight: number;          // % of everything held, cash included
   flows: CashFlow[];       // dated money in/out in totalsCurrency (section XIRRs pool these)
 }
@@ -233,6 +237,7 @@ export const buildHoldings = (args: {
       xirr: xirr(own.flows),
       dd: own.dd,
       agg: { invested: sum.invested, value: sum.value, ret: sum.ret },
+      fxNow: conv(native ? nat : currency, totalsCurrency, last),
       weight: 0, flows: sum.flows,
     });
   }
@@ -246,7 +251,8 @@ export const buildHoldings = (args: {
       section: 'Cash', nativeCurrency: c.currency, ccy: native ? c.currency : currency,
       price: null, priceUp: null, priceDate: '', firstBuyDate: '', yearsHeld: null,
       qty: c.balance, invested: shown, value: shown, income: 0, ret: 0, retPct: null, xirr: null,
-      dd: null, agg: { invested: added, value: added, ret: 0 }, weight: 0, flows: [],
+      dd: null, agg: { invested: added, value: added, ret: 0 },
+      fxNow: conv(native ? c.currency : currency, totalsCurrency, last), weight: 0, flows: [],
     });
   }
 
