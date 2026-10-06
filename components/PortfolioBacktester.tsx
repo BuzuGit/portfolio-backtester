@@ -23,7 +23,7 @@ import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, Tra
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
-import { buildHoldings, MARKETS_HOLDINGS, HOLDINGS_CURRENCIES, HoldingsCurrency, HoldingRow } from '@/lib/holdings';
+import { buildHoldings, MARKETS_HOLDINGS, HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, HoldingsCurrency, HoldingRow } from '@/lib/holdings';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -2315,6 +2315,19 @@ const PortfolioBacktester = () => {
 
     const d0 = cashFlows[0].date.getTime();
     const MS_PER_YEAR = 365.25 * 86400000; // milliseconds in a year
+
+    // Held for LESS THAN A YEAR: report the plain total return instead of annualising it.
+    // Annualising a few months blows small moves up into silly numbers (−5.8% over ten weeks
+    // "becomes" −32% a year). Total return here = everything that came back (sale proceeds or
+    // today's value, plus dividends) vs everything paid in — the same figure as the PnL %.
+    // Measured from the first flow to the last: first buy -> today (open) or -> the sale (closed).
+    // Every caller is on the Positions tab or the Markets Holdings page, so this applies to all.
+    const spanMs = Math.max(...cashFlows.map(cf => cf.date.getTime())) - Math.min(...cashFlows.map(cf => cf.date.getTime()));
+    if (spanMs < MS_PER_YEAR) {
+      const paidIn = cashFlows.reduce((s, cf) => s + (cf.amount < 0 ? -cf.amount : 0), 0);
+      const gotBack = cashFlows.reduce((s, cf) => s + (cf.amount > 0 ? cf.amount : 0), 0);
+      return paidIn > 0 ? ((gotBack - paidIn) / paidIn) * 100 : null;
+    }
 
     // NPV (Net Present Value) at a given rate
     // If NPV = 0, we found the correct rate (that's what XIRR solves for)
@@ -11079,7 +11092,13 @@ const PortfolioBacktester = () => {
           {/* every money figure in one currency. The arithmetic is in lib/holdings.ts. */}
           {isConnected && assetData && activeView === 'markets' && marketsIsHoldings && (() => {
             const h = holdingsModel;
-            const ccy = holdingsCurrency;
+            // On "Native" each row is in its own currency (r.ccy) and only the figures that add
+            // rows together — subtotals, totals, weights, tiles — are in one currency (USD).
+            // `ccy` is that adding-up currency; row-level text uses r.ccy.
+            const native = holdingsCurrency === 'Native';
+            const ccy = h?.totalsCurrency ?? (native ? 'USD' : holdingsCurrency);
+            // On Native, the subtotal and total amounts carry a small "USD" so they can't be read as native.
+            const totTag = native ? <span className="text-[9px] text-gray-400 font-normal ml-0.5">{ccy}</span> : null;
             const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
             const monthLabel = (d: string) => `${MONTHS[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`; // "Oct 2026"
             const dayLabel = (d: string) => `${Number(d.slice(8, 10))} ${monthLabel(d)}`;               // "15 Mar 2021"
@@ -11097,8 +11116,10 @@ const PortfolioBacktester = () => {
 
             // Total-return bars: one scale for every holding, from the biggest loss to the biggest
             // gain and always including zero, so every bar starts from the same zero line.
-            const retLo = Math.min(0, ...assetRows.map(r => r.ret));
-            const retHi = Math.max(0, ...assetRows.map(r => r.ret));
+            // Bar LENGTHS use the one-currency figure (agg), so on "Native" a USD bar and an SGD bar
+            // are still comparable; the label next to each bar is in the row's own currency.
+            const retLo = Math.min(0, ...assetRows.map(r => r.agg.ret));
+            const retHi = Math.max(0, ...assetRows.map(r => r.agg.ret));
             const retSpan = (retHi - retLo) || 1;
             const zeroPct = (-retLo / retSpan) * 100;
             const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
@@ -11160,8 +11181,8 @@ const PortfolioBacktester = () => {
 
             return (
               <div className="mt-2">
-                {/* Page-level filter: the one currency every money figure is converted into. */}
-                {/* (No Native here: weights and totals need a common currency.) */}
+                {/* Page-level filter: the one currency every money figure is converted into, or */}
+                {/* Native (each row in its own currency; totals, weights and tiles then in USD). */}
                 <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
@@ -11183,7 +11204,9 @@ const PortfolioBacktester = () => {
                     <div>
                       <h3 className="text-md font-semibold text-gray-800 inline">Holdings</h3>
                       <span className="text-xs text-gray-500 ml-2 uppercase tracking-wide">
-                        open positions + cash · values in {ccy}
+                        {native
+                          ? <>open positions + cash · each holding in its own currency · totals in {ccy}</>
+                          : <>open positions + cash · values in {ccy}</>}
                       </span>
                     </div>
                     {h && (
@@ -11199,8 +11222,10 @@ const PortfolioBacktester = () => {
                     </p>
                   ) : (
                     <>
-                      {/* Summary tiles: what it is all worth, what it has made, how much is idle cash. */}
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4">
+                      {/* Summary tiles: what it is all worth, what it has made, and how it is split */}
+                      {/* across the sections. The mix tile is wider: its five figures need ~350px on one */}
+                      {/* line, so below the lg breakpoint it takes a whole row of its own. */}
+                      <div className="grid grid-cols-2 lg:grid-cols-[1fr_1fr_2fr] gap-2 mb-4">
                         {[
                           {
                             label: 'Total value', value: `${fmtMoney(h.totals.value)} ${ccy}`, cls: 'text-gray-800',
@@ -11215,12 +11240,15 @@ const PortfolioBacktester = () => {
                               + 'The % is on everything invested INCLUDING cash, so idle cash pulls it down.',
                           },
                           {
-                            label: 'Cash', value: h.totals.cashPct !== null ? `${h.totals.cashPct.toFixed(1)}%` : '–', cls: 'text-gray-800',
-                            sub: `${fmtMoney(h.totals.cash)} ${ccy} of all assets`, title: '',
+                            // "Cash 6.7% | FI 12.0% | EQ 34.9% | ALT 39.3% | OTH 7.1%" — each section's weight,
+                            // in page order. OTH = Metals & Crypto. Hover for full names and amounts.
+                            label: 'Asset mix', cls: 'text-gray-800', sub: '',
+                            value: h.sections.map(s => `${HOLDINGS_MIX_ABBR[s.name] ?? s.name.slice(0, 3).toUpperCase()} ${s.weight.toFixed(1)}%`).join(' | '),
+                            title: h.sections.map(s => `${s.name}: ${s.weight.toFixed(1)}% · ${fmtMoney(s.value)} ${ccy}`).join('\n'),
                           },
                         ].map(t => (
                           <div key={t.label} title={t.title || undefined}
-                            className={`rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0 ${t.title ? 'cursor-help' : ''}`}>
+                            className={`rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0 ${t.title ? 'cursor-help' : ''} ${t.label === 'Asset mix' ? 'col-span-2 lg:col-span-1' : ''}`}>
                             <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
                             <div className="text-sm whitespace-nowrap truncate">
                               <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
@@ -11247,18 +11275,21 @@ const PortfolioBacktester = () => {
                                   <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Value</th>
                                   {/* The fixed-width div holds the bar column open (the bars claim no width). */}
                                   <th className="text-left font-medium px-3 py-2">
-                                    <div className="w-[220px]"><span className="text-gray-800 font-semibold">Total return · {ccy}</span></div>
+                                    <div className="w-[220px]"><span className="text-gray-800 font-semibold">Total return · {native ? 'own currency' : ccy}</span></div>
                                   </th>
                                   <th className="text-center font-medium px-0.5 py-2 w-16 whitespace-nowrap">Return %</th>
-                                  <th className="text-center font-medium px-0.5 py-2 w-16 cursor-help" title="Money-weighted return per year (XIRR), in the display currency">XIRR</th>
+                                  <th className="text-center font-medium px-0.5 py-2 w-16 cursor-help"
+                                    title={'Money-weighted return per year (XIRR), in ' + (native ? "each holding's own currency" : ccy) + '.\nHeld less than a year: the plain total return instead (not annualised).'}>XIRR</th>
                                   <th className="text-right font-medium px-2 py-2">Qty</th>
                                   <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help"
-                                    title={'How much the holding has given back from its own best month-end since the first buy, in ' + ccy + '.\nHover a figure for the working.'}>Curr DD</th>
+                                    title={'How much the holding has given back from its own best month-end since the first buy, in ' + (native ? "its own currency" : ccy) + '.\nHover a figure for the working.'}>Curr DD</th>
                                   <th className="text-right font-medium px-2 py-2">Weight</th>
                                 </tr>
                                 {s.rows.map(r => {
                                   const isCash = r.kind === 'cash';
-                                  const w = (Math.abs(r.ret) / retSpan) * 100;
+                                  const w = (Math.abs(r.agg.ret) / retSpan) * 100;
+                                  // On Native, a small currency tag after the row's amounts says which one they are in.
+                                  const tag = native ? <span className="text-[9px] text-gray-400 font-normal ml-0.5">{r.ccy}</span> : null;
                                   const stale = !!r.priceDate && r.priceDate.slice(0, 7) !== h.endDate.slice(0, 7);
                                   const ddFlat = r.dd !== null && Math.abs(r.dd.amount) < 0.5;
                                   return (
@@ -11287,27 +11318,32 @@ const PortfolioBacktester = () => {
                                         title={r.firstBuyDate ? `First buy: ${dayLabel(r.firstBuyDate)}` : ''}>
                                         {r.yearsHeld === null ? <span className="text-gray-300">–</span> : `${r.yearsHeld.toFixed(1)}y`}
                                       </td>
-                                      <td className="px-2 py-1 text-right text-xs tabular-nums text-gray-700">{isCash ? <span className="text-gray-300">–</span> : fmtMoney(r.invested)}</td>
-                                      <td className={`px-2 py-1 text-right text-xs tabular-nums ${r.value < 0 ? 'text-red-600' : 'text-gray-900'}`}>{fmtMoney(r.value)}</td>
+                                      <td className="px-2 py-1 text-right text-xs tabular-nums text-gray-700 whitespace-nowrap">{isCash ? <span className="text-gray-300">–</span> : <>{fmtMoney(r.invested)}{tag}</>}</td>
+                                      <td className={`px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap ${r.value < 0 ? 'text-red-600' : 'text-gray-900'}`}>{fmtMoney(r.value)}{tag}</td>
 
                                       {/* Total return as an amount: a bar from the shared zero line, the figure */}
                                       {/* just past its end. Cash earns no return here, so it gets a dash. */}
                                       <td className="px-3 py-1">
                                         {isCash ? <span className="text-gray-300 text-xs">–</span> : (
                                           <div className="relative h-4 mx-14 cursor-help"
-                                            title={`Value ${fmtMoney(r.value)} + dividends & interest ${fmtMoney(r.income)} − invested ${fmtMoney(r.invested)} = ${fmtSigned(r.ret)} ${ccy}`}>
+                                            title={`Value ${fmtMoney(r.value)} + dividends & interest ${fmtMoney(r.income)} − invested ${fmtMoney(r.invested)} = ${fmtSigned(r.ret)} ${r.ccy}`
+                                              + (native ? `\n(bar length compares holdings in ${ccy}: ${fmtSigned(r.agg.ret)} ${ccy})` : '')}>
                                             <div className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: `${zeroPct}%` }} />
+                                            {/* Side and colour follow the bar's own (comparable) figure; on Native the */}
+                                            {/* label can occasionally disagree in sign, when FX turned a gain into a loss. */}
                                             <div className="absolute top-0.5 bottom-0.5 rounded-sm"
-                                              style={{ left: `${r.ret >= 0 ? zeroPct : zeroPct - w}%`, width: `${w}%`, background: r.ret >= 0 ? BAR_UP : BAR_DOWN }} />
+                                              style={{ left: `${r.agg.ret >= 0 ? zeroPct : zeroPct - w}%`, width: `${w}%`, background: r.agg.ret >= 0 ? BAR_UP : BAR_DOWN }} />
                                             <span className="absolute top-1/2 -translate-y-1/2 text-xs tabular-nums text-gray-700 whitespace-nowrap"
-                                              style={r.ret >= 0 ? { left: `calc(${zeroPct + w}% + 4px)` } : { right: `calc(${100 - zeroPct + w}% + 4px)` }}
-                                            >{fmtSigned(r.ret)}</span>
+                                              style={r.agg.ret >= 0 ? { left: `calc(${zeroPct + w}% + 4px)` } : { right: `calc(${100 - zeroPct + w}% + 4px)` }}
+                                            >{fmtSigned(r.ret)}{tag}</span>
                                           </div>
                                         )}
                                       </td>
 
-                                      {heatCell(r.retPct, pctCap, r.retPct === null ? '' : `Total return ÷ invested = ${fmtSigned(r.ret)} ÷ ${fmtMoney(r.invested)} ${ccy}`)}
-                                      {heatCell(r.xirr, xirrCap, 'Money-weighted return per year in ' + ccy + ': each purchase and dividend on its own date,\ntoday\'s value as the final inflow')}
+                                      {heatCell(r.retPct, pctCap, r.retPct === null ? '' : `Total return ÷ invested = ${fmtSigned(r.ret)} ÷ ${fmtMoney(r.invested)} ${r.ccy}`)}
+                                      {heatCell(r.xirr, xirrCap, r.yearsHeld !== null && r.yearsHeld < 1
+                                        ? `Held less than a year, so this is the plain total return in ${r.ccy}, not annualised`
+                                        : 'Money-weighted return per year in ' + r.ccy + ': each purchase and dividend on its own date,\ntoday\'s value as the final inflow')}
 
                                       <td className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap text-gray-700">
                                         {fmtQty(r.qty)}
@@ -11317,18 +11353,18 @@ const PortfolioBacktester = () => {
                                       {/* Curr DD as an amount, from the holding's own peak (see lib/holdings.ts) */}
                                       <td className={`px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap ${r.dd ? 'cursor-help' : ''} ${ddFlat ? 'text-green-700 font-semibold' : 'text-orange-700'}`}
                                         title={r.dd
-                                          ? `Drop from this holding's own peak, in ${ccy}.\n`
+                                          ? `Drop from this holding's own peak, in ${r.ccy}.\n`
                                             + 'Answers: how much of its value have I given back since its best month-end while I held it?\n\n'
                                             // The sum is shown in money totals (exact), not in per-share prices,
                                             // which formatPrice rounds and would make the arithmetic look off.
-                                            + `Best month-end since the first buy (${dayLabel(r.dd.sinceDate)}): ${monthLabel(r.dd.peakDate)}, ${formatPrice(r.dd.peakPerShare)} ${ccy} a share\n`
-                                            + `Your ${fmtQty(r.qty)} shares at that price: ${fmtMoney(r.dd.peakPerShare * r.qty)} ${ccy}\n`
-                                            + `Today: ${formatPrice(r.dd.nowPerShare)} ${ccy} a share → ${fmtMoney(r.value)} ${ccy}\n`
-                                            + `Given back: ${fmtMoney(r.value)} − ${fmtMoney(r.dd.peakPerShare * r.qty)} = ${fmtSigned(r.dd.amount)} ${ccy}\n\n`
-                                            + 'Measured per share, so buying more never counts as a gain. Includes FX moves when the\n'
-                                            + `asset is not priced in ${ccy}. Dividends are not added back.`
+                                            + `Best month-end since the first buy (${dayLabel(r.dd.sinceDate)}): ${monthLabel(r.dd.peakDate)}, ${formatPrice(r.dd.peakPerShare)} ${r.ccy} a share\n`
+                                            + `Your ${fmtQty(r.qty)} shares at that price: ${fmtMoney(r.dd.peakPerShare * r.qty)} ${r.ccy}\n`
+                                            + `Today: ${formatPrice(r.dd.nowPerShare)} ${r.ccy} a share → ${fmtMoney(r.value)} ${r.ccy}\n`
+                                            + `Given back: ${fmtMoney(r.value)} − ${fmtMoney(r.dd.peakPerShare * r.qty)} = ${fmtSigned(r.dd.amount)} ${r.ccy}\n\n`
+                                            + 'Measured per share, so buying more never counts as a gain. Dividends are not added back.'
+                                            + (r.ccy !== r.nativeCurrency ? `\nIncludes FX moves: the asset is priced in ${r.nativeCurrency}, shown here in ${r.ccy}.` : '')
                                           : ''}>
-                                        {!r.dd ? <span className="text-gray-300">–</span> : ddFlat ? 'Peak' : fmtSigned(r.dd.amount)}
+                                        {!r.dd ? <span className="text-gray-300">–</span> : ddFlat ? 'Peak' : <>{fmtSigned(r.dd.amount)}{tag}</>}
                                       </td>
 
                                       {weightCell(r.weight)}
@@ -11340,12 +11376,15 @@ const PortfolioBacktester = () => {
                                   const isCashSection = s.rows.every(r => r.kind === 'cash');
                                   return (
                                     <tr className="border-b border-gray-200 text-xs font-semibold text-gray-700">
-                                      <td className="px-3 py-1.5 text-gray-500">Subtotal · {s.rows.length} {isCashSection ? (s.rows.length === 1 ? 'account' : 'accounts') : (s.rows.length === 1 ? 'holding' : 'holdings')}</td>
+                                      <td className="px-3 py-1.5 text-gray-500">
+                                        Subtotal · {s.rows.length} {isCashSection ? (s.rows.length === 1 ? 'account' : 'accounts') : (s.rows.length === 1 ? 'holding' : 'holdings')}
+                                        {native && <> · in {ccy}</>}
+                                      </td>
                                       <td /><td />
-                                      <td className="px-2 py-1.5 text-right tabular-nums">{isCashSection ? '' : fmtMoney(s.invested)}</td>
-                                      <td className="px-2 py-1.5 text-right tabular-nums">{fmtMoney(s.value)}</td>
-                                      <td className={`px-3 py-1.5 tabular-nums ${s.ret >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                        {isCashSection ? '' : <span className="ml-14">{fmtSigned(s.ret)}</span>}
+                                      <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{isCashSection ? '' : <>{fmtMoney(s.invested)}{totTag}</>}</td>
+                                      <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{fmtMoney(s.value)}{totTag}</td>
+                                      <td className={`px-3 py-1.5 tabular-nums whitespace-nowrap ${s.ret >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                        {isCashSection ? '' : <span className="ml-14">{fmtSigned(s.ret)}{totTag}</span>}
                                       </td>
                                       {heatCell(s.retPct, pctCap, s.retPct === null ? '' : `${s.name}: total return ÷ invested = ${fmtSigned(s.ret)} ÷ ${fmtMoney(s.invested)} ${ccy}`, true)}
                                       {heatCell(s.xirr, xirrCap, `${s.name}: money-weighted return per year, all its purchases and dividends on one timeline`, true)}
@@ -11359,12 +11398,12 @@ const PortfolioBacktester = () => {
                             {/* Grand total: same light grey as the headers, set apart by the thick top border */}
                             <tr><td colSpan={colCount} className="h-4" /></tr>
                             <tr className="border-t-2 border-gray-300 bg-gray-100 text-xs font-semibold text-gray-800">
-                              <td className="px-3 py-2">Total · {h.totals.holdings} holdings + cash</td>
+                              <td className="px-3 py-2">Total · {h.totals.holdings} holdings + cash{native && <> · in {ccy}</>}</td>
                               <td /><td />
-                              <td className="px-2 py-2 text-right tabular-nums" title="Cash counts at its balance">{fmtMoney(h.totals.invested)}</td>
-                              <td className="px-2 py-2 text-right tabular-nums">{fmtMoney(h.totals.value)}</td>
-                              <td className={`px-3 py-2 tabular-nums ${h.totals.ret >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                <span className="ml-14">{fmtSigned(h.totals.ret)}</span>
+                              <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap" title="Cash counts at its balance">{fmtMoney(h.totals.invested)}{totTag}</td>
+                              <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">{fmtMoney(h.totals.value)}{totTag}</td>
+                              <td className={`px-3 py-2 tabular-nums whitespace-nowrap ${h.totals.ret >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                <span className="ml-14">{fmtSigned(h.totals.ret)}{totTag}</span>
                               </td>
                               {heatCell(h.totals.retPct, pctCap, 'Total return ÷ everything invested, cash included', true)}
                               {heatCell(h.totals.xirr, xirrCap, 'Money-weighted return per year of all the investments together (cash has no dated flows, so it is left out)', true)}
@@ -11377,8 +11416,12 @@ const PortfolioBacktester = () => {
 
                       <p className="text-[11px] text-gray-500 mt-3">
                         Shares still held, as in Positions › Open Positions (oldest shares sold first); gains on shares already sold are in Closed Positions ·
+                        {native
+                          ? <>Native: each holding in its own currency, no FX; subtotals, totals, weights, tiles and the bar lengths in {ccy} (converted as below) · </>
+                          : null}
                         invested and each dividend converted at their own month&apos;s exchange rate, value at today&apos;s, so FX moves are part of the return ·
-                        total return = value + dividends &amp; interest − invested · XIRR = money-weighted return per year in {ccy} ·
+                        total return = value + dividends &amp; interest − invested · XIRR = money-weighted return per year in {native ? 'the row’s currency' : ccy},
+                        or the plain total return when held less than a year ·
                         Curr DD = drop from the holding&apos;s own best month-end since the first buy, per share × shares held ·
                         weight = share of everything held, cash included · price in the asset&apos;s own currency, red if below last month-end ·
                         click a name to open it in the Positions tab
