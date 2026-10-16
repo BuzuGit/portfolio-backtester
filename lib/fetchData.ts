@@ -49,6 +49,9 @@ const DAILY_SHEET_URL = `${SHEET_BASE_URL}?gid=882618775&output=csv`;
 // built from now; open positions and closed round trips are DERIVED from it rather than
 // read from the hand-maintained Open/Exit tabs.
 const LEDGER_SHEET_URL = `${SHEET_BASE_URL}?gid=378728363&output=csv`;
+// gid=145431423 is the Portfolios tab — ready-made portfolios (name + assets + weights)
+// offered in the Backtest tab's "Preset" dropdown
+const PORTFOLIOS_SHEET_URL = `${SHEET_BASE_URL}?gid=145431423&output=csv`;
 
 // Type definitions - these describe the shape of our data
 // (TypeScript uses these to catch errors and provide autocomplete)
@@ -288,6 +291,14 @@ export interface ParsedData {
   yearsData: YearsRow[];      // Annual portfolio summary (from Years sheet)
   dailyData: DailyNavRow[];   // Daily NAV + inflation data (from Daily sheet)
   ledgerData: LedgerRow[];    // Full transaction ledger (from Transactions sheet)
+  presetPortfolios: PresetPortfolio[];  // Ready-made portfolios (from Portfolios sheet)
+}
+
+// One ready-made portfolio from the "Portfolios" sheet (gid=145431423),
+// e.g. "Global 60/40" = VWRA 60 + VDTA 40
+export interface PresetPortfolio {
+  name: string;                                  // "PortolioName" column
+  assets: { asset: string; weight: number }[];   // AssetName1/AssetWeight1, AssetName2/AssetWeight2, ...
 }
 
 /**
@@ -471,6 +482,8 @@ async function fetchSheet(url: string, label: string): Promise<Response> {
  * @throws Error if fetch fails or data is invalid
  */
 export async function fetchSheetData(): Promise<ParsedData> {
+  // The small Portfolios tab starts loading now, alongside the rest; it is awaited near the end
+  const presetsRequest = fetchSheet(PORTFOLIOS_SHEET_URL, 'Portfolios').catch(() => null);
   // Fetch all seven sheets in parallel for speed
   const [dataResponse, lookupResponse, yearsResponse, dailyResponse, ledgerResponse] = await Promise.all([
     fetchSheet(DATA_SHEET_URL, 'Price data'),
@@ -559,9 +572,74 @@ export async function fetchSheetData(): Promise<ParsedData> {
     console.warn('Failed to parse Transactions (ledger) sheet (non-fatal):', err);
   }
 
+  // Preset portfolios (Portfolios tab). Optional — its request was started at the top,
+  // in parallel with the others; if Google answered with its "Loading..." placeholder,
+  // ask again up to twice.
+  let presetPortfolios: PresetPortfolio[] = [];
+  try {
+    let presetsCsv = '';
+    let res = await presetsRequest;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (res && res.ok) presetsCsv = await res.text();
+      if (presetsCsv && presetsCsv.trim() !== 'Loading...') break;   // got the real sheet
+      if (attempt === 3) break;
+      await new Promise(r => setTimeout(r, 1000 * attempt));
+      res = await fetchSheet(PORTFOLIOS_SHEET_URL, 'Portfolios').catch(() => null);
+    }
+    if (presetsCsv && presetsCsv.trim() !== 'Loading...') {
+      presetPortfolios = parsePresetPortfolios(presetsCsv);
+      console.log(`Portfolios sheet: parsed ${presetPortfolios.length} preset(s)`);
+    } else {
+      console.warn('Portfolios sheet unavailable — the Preset dropdown will be empty');
+    }
+  } catch (err) {
+    console.warn('Failed to parse Portfolios sheet (non-fatal):', err);
+  }
+
   console.log(`Lookup table has ${lookup.length} assets: ${lookup.map(l => l.ticker).join(', ')}`);
 
-  return { data, assets, lookup, yearsData, dailyData, ledgerData };
+  return { data, assets, lookup, yearsData, dailyData, ledgerData, presetPortfolios };
+}
+
+/**
+ * Parses the "Portfolios" sheet (gid=145431423) into preset portfolios.
+ *
+ * Layout: one portfolio per row — a name column, then pairs of columns
+ * AssetName1, AssetWeight1, AssetName2, AssetWeight2, ... There can be any number of
+ * pairs: the parser keeps reading AssetName<n> while that column exists, so adding an
+ * AssetName6/AssetWeight6 pair to the sheet just works.
+ *
+ * A pair is skipped if it has no asset name or a zero/blank weight — so a stray weight
+ * typed next to an empty name cannot sneak into the portfolio.
+ */
+function parsePresetPortfolios(csvText: string): PresetPortfolio[] {
+  const lines = parseCSVRows(csvText.trim());
+  if (lines.length < 2) return [];
+
+  const headers = lines[0].map(h => h.replace(/\s+/g, ' ').trim());
+  // The sheet's header is spelled "PortolioName"; accept the correct spelling too,
+  // so fixing the typo in the sheet later doesn't break anything.
+  const nameCol = headers.findIndex(h => h === 'PortolioName' || h === 'PortfolioName');
+  if (nameCol < 0) {
+    console.warn('Portfolios sheet: no PortfolioName column found');
+    return [];
+  }
+
+  const presets: PresetPortfolio[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i];
+    const name = (values[nameCol] || '').trim();
+    if (!name) continue;   // blank row
+
+    const assets: { asset: string; weight: number }[] = [];
+    for (let n = 1; headers.includes(`AssetName${n}`); n++) {
+      const asset  = (values[headers.indexOf(`AssetName${n}`)] || '').trim();
+      const weight = parseFloat((values[headers.indexOf(`AssetWeight${n}`)] || '').replace(/[%\s]/g, '').replace(',', '.'));
+      if (asset && isFinite(weight) && weight !== 0) assets.push({ asset, weight });
+    }
+    if (assets.length > 0) presets.push({ name, assets });
+  }
+  return presets;
 }
 
 /**

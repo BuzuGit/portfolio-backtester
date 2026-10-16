@@ -19,7 +19,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
 import { RefreshCw, Plus, Trash2, Menu, X } from 'lucide-react';
-import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
+import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
@@ -788,6 +788,7 @@ interface Portfolio {
   nameManuallyEdited: boolean; // Track if user changed the name
   inflationAdj: string;        // CPI ticker for inflation adjustment (e.g., "CPIMPL") or empty for nominal
   baseCurrency: string;        // Target currency for all values ('' = no conversion, 'PLN', 'USD', 'SGD')
+  presetName?: string;         // Name of the preset (Portfolios sheet) last loaded into this card, if any
 }
 
 // Date range for backtesting
@@ -1605,6 +1606,7 @@ const PortfolioBacktester = () => {
   // The actual data
   const [assetData, setAssetData] = useState<AssetRow[] | null>(null);  // Historical price data
   const [availableAssets, setAvailableAssets] = useState<string[]>([]); // List of asset names
+  const [presetPortfolios, setPresetPortfolios] = useState<PresetPortfolio[]>([]); // Ready-made portfolios (Portfolios sheet)
   const [assetLookup, setAssetLookup] = useState<AssetLookup[]>([]);    // Lookup table (ticker -> name)
 
   // Cross-check the sheet's FX columns against each other. Recomputed only when the
@@ -2022,7 +2024,7 @@ const PortfolioBacktester = () => {
 
     try {
       // Fetch and parse the CSV data from all sheets
-      const { data, assets, lookup, yearsData: fetchedYearsData, dailyData: fetchedDailyData, ledgerData: fetchedLedgerData } = await fetchSheetData();
+      const { data, assets, lookup, yearsData: fetchedYearsData, dailyData: fetchedDailyData, ledgerData: fetchedLedgerData, presetPortfolios: fetchedPresets } = await fetchSheetData();
 
       // ---- Derive positions from the ledger -------------------------------
       // Replay the Transactions tab to work out what is still held, what was sold,
@@ -2066,6 +2068,7 @@ const PortfolioBacktester = () => {
       setClosedData(effectiveClosed);
       setTransactionData(effectiveTransactions);
       setDailyData(fetchedDailyData);
+      setPresetPortfolios(fetchedPresets);
       // Auto-select all position tickers (both open and closed) by default
       const closedTickers = new Set(effectiveClosed.map((row: ClosedPositionRow) => row.ticker));
       // Open tickers come from the ledger replay, which correctly keeps a position open
@@ -3454,14 +3457,15 @@ const PortfolioBacktester = () => {
    * Generates a portfolio name from its assets.
    * e.g., [SPY 60%, BND 40%] -> "SPY60-BND40"
    */
-  const generatePortfolioName = (assets: PortfolioAsset[], inflationAdj?: string, baseCurrency?: string): string => {
+  const generatePortfolioName = (assets: PortfolioAsset[], inflationAdj?: string, baseCurrency?: string, presetName?: string): string => {
     // Include shorts (negative weights) in the name too — only a zero weight is "not in the portfolio"
     const validAssets = assets.filter(a => a.asset && a.weight !== 0);
     if (validAssets.length === 0) return 'Portfolio';
     // If any leg is short, join with " / " instead of "-", otherwise "CSPX200-IB01-100" is unreadable
     // (you can't tell the separator from the minus sign). All-long portfolios keep the original "-" style.
     const hasShort = validAssets.some(a => a.weight < 0);
-    const baseName = validAssets.map(a => `${a.asset}${Math.round(a.weight)}`).join(hasShort ? ' / ' : '-');
+    // A card still holding an unedited preset is named after the preset ("Global 60/40")
+    const baseName = presetName || validAssets.map(a => `${a.asset}${Math.round(a.weight)}`).join(hasShort ? ' / ' : '-');
     // Build suffixes: currency (if set) and inflation adjustment (if set)
     const suffixes: string[] = [];
     if (baseCurrency) suffixes.push(baseCurrency);
@@ -3471,6 +3475,47 @@ const PortfolioBacktester = () => {
     }
     if (suffixes.length > 0) return `${baseName} (${suffixes.join(', ')})`;
     return baseName;
+  };
+
+  /**
+   * The preset a card is still showing, or undefined once it has been edited.
+   *
+   * A card remembers which preset was loaded into it (presetName), but it only still
+   * "is" that preset while its assets and weights match the sheet exactly, in the same
+   * order and with no carry costs added. Checking that here, instead of clearing the
+   * flag in every function that edits an asset, means no existing edit code had to
+   * change: edit a weight and the card simply stops matching.
+   */
+  const matchingPreset = (p: Portfolio): PresetPortfolio | undefined => {
+    if (!p.presetName) return undefined;
+    const preset = presetPortfolios.find(pp => pp.name === p.presetName);
+    if (!preset || preset.assets.length !== p.assets.length) return undefined;
+    const same = preset.assets.every((a, i) =>
+      p.assets[i].asset === a.asset && p.assets[i].weight === a.weight && !p.assets[i].costPct);
+    return same ? preset : undefined;
+  };
+
+  /**
+   * Loads a preset (from the Portfolios sheet) into a card: its assets and weights replace
+   * the card's, while the card's currency and inflation choices are kept.
+   */
+  const applyPreset = (portfolioId: number, presetName: string) => {
+    const preset = presetPortfolios.find(pp => pp.name === presetName);
+    if (!preset) return;
+    setNumDrafts({});   // half-typed numbers belong to the old rows — same reason as removeAsset
+    const updatedPortfolios = portfolios.map(p => {
+      if (p.id !== portfolioId) return p;
+      const newAssets: PortfolioAsset[] = preset.assets.map(a => ({ asset: a.asset, weight: a.weight }));
+      return {
+        ...p,
+        assets: newAssets,
+        presetName: preset.name,
+        nameManuallyEdited: false,   // picking a preset is a fresh start for the name too
+        name: generatePortfolioName(newAssets, p.inflationAdj, p.baseCurrency, preset.name),
+      };
+    });
+    setPortfolios(updatedPortfolios);
+    autoAdjustStartDate(updatedPortfolios);   // same as adding assets by hand
   };
 
   /**
@@ -8152,6 +8197,37 @@ const PortfolioBacktester = () => {
                           )}
                         </div>
 
+                        {/* Preset picker — fills the card from the Portfolios sheet. Shows the preset
+                            while the card still matches it, and "Custom" once anything is edited. */}
+                        {presetPortfolios.length > 0 && (() => {
+                          const current = matchingPreset(portfolio);
+                          // Preset tickers the asset dropdown can't show (not in the lookup table)
+                          const unknown = current ? current.assets.map(a => a.asset).filter(t => !availableAssetsFiltered.includes(t)) : [];
+                          return (
+                            <div className="mb-2">
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs text-gray-500 shrink-0">Preset:</span>
+                                <select
+                                  value={current?.name ?? ''}
+                                  onChange={(e) => applyPreset(portfolio.id, e.target.value)}
+                                  className="flex-1 min-w-0 px-1 py-0.5 text-xs border border-gray-300 rounded"
+                                  title="Load a ready-made portfolio from the Portfolios sheet. Replaces this card's assets and weights; currency and inflation stay as set."
+                                >
+                                  <option value="">Custom</option>
+                                  {presetPortfolios.map(pp => (
+                                    <option key={pp.name} value={pp.name}>{pp.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              {unknown.length > 0 && (
+                                <div className="text-[10px] text-red-600 mt-0.5">
+                                  Not in the asset list: {unknown.join(', ')} — check the ticker in the Portfolios sheet
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
                         {/* Asset List */}
                         <div className="space-y-2 mb-2">
                           {/* Column labels — only worth the space once there's at least one asset */}
@@ -8248,7 +8324,7 @@ const PortfolioBacktester = () => {
                                   const newCcy = e.target.value;
                                   setPortfolios(portfolios.map(p => {
                                     if (p.id === portfolio.id) {
-                                      const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(p.assets, p.inflationAdj, newCcy);
+                                      const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(p.assets, p.inflationAdj, newCcy, matchingPreset(p)?.name);
                                       return { ...p, baseCurrency: newCcy, name: newName };
                                     }
                                     return p;
@@ -8271,7 +8347,7 @@ const PortfolioBacktester = () => {
                                   const newInflAdj = e.target.value;
                                   setPortfolios(portfolios.map(p => {
                                     if (p.id === portfolio.id) {
-                                      const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(p.assets, newInflAdj, p.baseCurrency);
+                                      const newName = p.nameManuallyEdited ? p.name : generatePortfolioName(p.assets, newInflAdj, p.baseCurrency, matchingPreset(p)?.name);
                                       return { ...p, inflationAdj: newInflAdj, name: newName };
                                     }
                                     return p;
