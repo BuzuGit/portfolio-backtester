@@ -237,6 +237,10 @@ export interface DailyNavRow {
   ddPln: number;    // "NW DD"     — daily drawdown in PLN (0 to -100)
   ddUsd: number;    // "DD USD"    — daily drawdown in USD (0 to -100)
   ddSgd: number;    // "DD SGD"    — daily drawdown in SGD (0 to -100)
+  // CHF has no price/drawdown columns of its own in the sheet, so both are derived here
+  // from the PLN NAV and the sheet's daily CHFPLN rate. 0 = no CHFPLN rate for that day.
+  navChf: number;   // NW Price ÷ CHFPLN — NAV per share in CHF
+  ddChf: number;    // drawdown from the all-time CHF peak, in % (only meaningful when navChf > 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -942,6 +946,9 @@ function parseDailyData(csvText: string): DailyNavRow[] {
   const readStr = (values: string[], colName: string) => csvReadStr(colIndex, values, colName);
 
   const rows: DailyNavRow[] = [];
+  // Running all-time high of the CHF NAV, for its drawdown. Same definition the sheet uses
+  // for "DD USD" (checked: rebuilding DD USD this way matches the sheet to within rounding).
+  let chfPeak = 0;
 
   for (let i = 1; i < lines.length; i++) {
     const values = lines[i];
@@ -952,9 +959,18 @@ function parseDailyData(csvText: string): DailyNavRow[] {
     const navPln = readNum(values, 'NW Price');
     if (navPln <= 0) continue; // Skip rows with no valid PLN NAV
 
+    // CHF NAV = PLN NAV converted at that day's CHFPLN rate (the same way Price USD is the
+    // PLN NAV ÷ USDPLN). A blank rate leaves it at 0, which the charts treat as "no data".
+    const chfPln = readNum(values, 'CHFPLN');
+    const navChf = chfPln > 0 ? navPln / chfPln : 0;
+    if (navChf > chfPeak) chfPeak = navChf;
+    const ddChf  = navChf > 0 ? (navChf / chfPeak - 1) * 100 : 0;
+
     rows.push({
       date,
       navPln,
+      navChf,
+      ddChf,
       navUsd:  readNum(values, 'Price USD'),
       navSgd:  readNum(values, 'Price SGD'),
       inflPln: readNum(values, 'InflPLN'),
