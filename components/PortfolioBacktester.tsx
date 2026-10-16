@@ -1229,6 +1229,21 @@ const CURRENCY_CPI: Record<string, string> = {
   SGD: 'CPIMSG',   // Singapore CPI
 };
 
+// Benchmarks the Daily NAV chart can overlay on the portfolio. Each is a fixed-weight mix of
+// tickers from the monthly price sheet, rebalanced back to its weights at every month-end
+// (for a single-ticker mix that is just buy-and-hold). `note` is the line shown under the
+// chart while the benchmark is selected.
+const DAILY_NAV_BENCHMARKS: { id: '60/40' | 'World' | 'EQ-MF' | 'EQ-GLD'; mix: [string, number][]; note: string }[] = [
+  { id: '60/40',  mix: [['VWRA', 0.6], ['VDTA', 0.4]],
+    note: '60/40 is the classic balanced portfolio: 60% global equities (VWRA, FTSE All-World) and 40% US Treasuries (VDTA), rebalanced back to 60/40 every month-end. It is the standard yardstick for a diversified stock-and-bond portfolio.' },
+  { id: 'World',  mix: [['VWRA', 1]],
+    note: 'World is 100% VWRA (FTSE All-World): the global equity market on its own.' },
+  { id: 'EQ-MF',  mix: [['VWRA', 0.6], ['KMLMTR', 0.4]],
+    note: 'EQ-MF is 60% VWRA (global equities) and 40% KMLM (managed futures / trend following), rebalanced every month-end.' },
+  { id: 'EQ-GLD', mix: [['VWRA', 0.6], ['GLDM', 0.4]],
+    note: 'EQ-GLD is 60% VWRA (global equities) and 40% gold (GLDM), rebalanced every month-end.' },
+];
+
 /**
  * Picks a tight, tidy Y-axis scale for a chart.
  *
@@ -1788,11 +1803,14 @@ const PortfolioBacktester = () => {
   const [ledgerWarningDismissed, setLedgerWarningDismissed] = useState(false);  // hide for this session
   // ---- Daily NAV chart state ----
   const [dailyData, setDailyData] = useState<DailyNavRow[]>([]);
-  const [dailyNavCurrency, setDailyNavCurrency] = useState<'PLN' | 'USD' | 'SGD'>('PLN');
+  const [dailyNavCurrency, setDailyNavCurrency] = useState<'PLN' | 'USD' | 'SGD' | 'CHF'>('PLN');
   const [dailyNavPeriod, setDailyNavPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
+  // Which benchmark line is overlaid on the Daily NAV chart ('' = none, the default)
+  const [dailyNavBenchmark, setDailyNavBenchmark] = useState<'' | '60/40' | 'World' | 'EQ-MF' | 'EQ-GLD'>('');
   // ---- Daily NAV Drawdowns chart state ----
-  // Which currencies are shown on the drawdown chart (multi-select, all on by default)
-  const [ddSelectedCurrencies, setDdSelectedCurrencies] = useState<('PLN' | 'USD' | 'SGD')[]>(['PLN', 'USD', 'SGD']);
+  // Which currencies are shown on the drawdown chart (multi-select; CHF starts off so the
+  // chart opens exactly as it did before CHF was added)
+  const [ddSelectedCurrencies, setDdSelectedCurrencies] = useState<('PLN' | 'USD' | 'SGD' | 'CHF')[]>(['PLN', 'USD', 'SGD']);
   const [ddPeriod, setDdPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
   // Which open-position asset the user drilled into (empty string = showing summary list)
   const [openSelectedTicker, setOpenSelectedTicker] = useState<string>('');
@@ -16241,11 +16259,14 @@ const PortfolioBacktester = () => {
                                  : dailyNavPeriod === '5Y' ? new Date(today.getFullYear() - 5, today.getMonth(), today.getDate())
                                  : new Date('1900-01-01');
                     const cutoffStr = cutoff.toISOString().split('T')[0];
-                    const periodData = dailyData.filter(r => r.date >= cutoffStr);
-                    if (periodData.length < 2) return null;
-
                     // ---- 2. Pick the NAV column for the selected currency ----
-                    const navKey  = dailyNavCurrency === 'PLN' ? 'navPln'  : dailyNavCurrency === 'USD' ? 'navUsd'  : 'navSgd';
+                    const navKey  = dailyNavCurrency === 'PLN' ? 'navPln'  : dailyNavCurrency === 'USD' ? 'navUsd'  : dailyNavCurrency === 'CHF' ? 'navChf' : 'navSgd';
+
+                    // Days with no NAV in this currency are left out (only CHF has any: days where
+                    // the sheet's CHFPLN rate is blank). PLN/USD/SGD have a value every day, so for
+                    // them this keeps every row, exactly as before.
+                    const periodData = dailyData.filter(r => r.date >= cutoffStr && (r[navKey] as number) > 0);
+                    if (periodData.length < 2) return null;
 
                     // ---- 2b. Inflation comes from the MONTHLY CPI series, not the Daily sheet ----
                     // The Daily sheet carries its own InflPLN/InflUSD/InflSGD columns, but the rest
@@ -16260,7 +16281,9 @@ const PortfolioBacktester = () => {
                     // flat until the next one, which draws inflation as the staircase it actually
                     // is. Both lists are already in date order, so one walk down each is enough —
                     // no repeated searching per day.
-                    const cpiTicker = CURRENCY_CPI[dailyNavCurrency] || '';
+                    // CHF reads the Swiss CPI (CPIMCH) here. It is kept out of the shared
+                    // CURRENCY_CPI map on purpose, so no other tab's behaviour changes.
+                    const cpiTicker = (dailyNavCurrency === 'CHF' ? 'CPIMCH' : CURRENCY_CPI[dailyNavCurrency]) || '';
                     const cpiSeries = cpiTicker && assetData
                       ? assetData
                           .filter(r => Number(r[cpiTicker]) > 0)
@@ -16277,6 +16300,53 @@ const PortfolioBacktester = () => {
                     const firstInfl = cpiPerDay[0];
                     if (!firstNAV || !firstInfl) return null;
 
+                    // ---- 2c. Benchmark (optional) — built from MONTH-END prices ----
+                    // The benchmark ETFs only have month-end prices, so the line is drawn through
+                    // month-end points. It starts at 100 on the period's first day, using the last
+                    // month-end price on or before that day; each later month-end is placed on the
+                    // last day of the daily series that falls on or before it (for the month in
+                    // progress, that is simply the latest day).
+                    //
+                    // Every price is first converted into the chosen currency at that month-end's
+                    // FX rate, then the month's return is the weighted average of the components'
+                    // returns — which is exactly what rebalancing back to the weights each month-end
+                    // means.
+                    const benchDef = DAILY_NAV_BENCHMARKS.find(b => b.id === dailyNavBenchmark);
+                    const BENCH_COLOR = CHART_PALETTE.teal;   // distinct from the blue NAV and red inflation lines
+                    const benchPerDay: (number | null)[] = periodData.map(() => null);
+                    const benchMonthly: number[] = [];       // index level at each month-end point used
+                    const benchMonthReturns: number[] = [];  // the monthly returns between them
+                    if (benchDef && assetData) {
+                      // Month rows where every component has a price
+                      const months = assetData.filter(r => benchDef.mix.every(([t]) => Number(r[t]) > 0));
+                      const startDate = periodData[0].date;
+                      let anchor = -1;   // last month-end on or before the period start
+                      for (let m = 0; m < months.length && (months[m].date as string) <= startDate; m++) anchor = m;
+                      if (anchor >= 0) {
+                        // Component prices in the chosen currency for month m
+                        const priceIn = (m: number, t: string) =>
+                          Number(months[m][t]) * getConversionRate(months[m], getAssetCurrency(t), dailyNavCurrency);
+                        let level = 100;
+                        benchPerDay[0] = level;
+                        benchMonthly.push(level);
+                        let dayIdx = 0;
+                        for (let m = anchor + 1; m < months.length; m++) {
+                          const monthDate = months[m].date as string;
+                          // Last daily row on or before this month-end
+                          while (dayIdx + 1 < periodData.length && periodData[dayIdx + 1].date <= monthDate) dayIdx++;
+                          const ret = benchDef.mix.reduce((s, [t, w]) => s + w * (priceIn(m, t) / priceIn(m - 1, t) - 1), 0);
+                          level *= 1 + ret;
+                          benchMonthly.push(level);
+                          benchMonthReturns.push(ret);
+                          // Day 0 already holds the starting 100; a month-end that lands there
+                          // still compounds into the level, it just isn't drawn as its own point.
+                          if (dayIdx > 0) benchPerDay[dayIdx] = level;
+                          // A month-end beyond the last daily row has nowhere further right to go
+                          if (dayIdx === periodData.length - 1) break;
+                        }
+                      }
+                    }
+
                     // ---- 3. Index both series to 100 at period start ----
                     // cpiPerDay is only null before the very first CPI print, which the guard above
                     // has already ruled out for day one — and the pointer only ever moves forward,
@@ -16287,6 +16357,7 @@ const PortfolioBacktester = () => {
                       infl:    ((cpiPerDay[i] as number) / firstInfl) * 100,
                       rawNav:  r[navKey] as number,
                       rawInfl: cpiPerDay[i] as number,
+                      bench:   benchPerDay[i],   // null except on month-end points (and day one)
                     }));
 
                     const lastRow = chartData[chartData.length - 1];
@@ -16331,6 +16402,36 @@ const PortfolioBacktester = () => {
                     for (const v of navVals) { if (v > runPeak) runPeak = v; }
                     const currDD = ((navVals[navVals.length - 1] - runPeak) / runPeak) * 100;
 
+                    // ---- 4b. Benchmark statistics (monthly data) ----
+                    // CAGR uses the same span of years as the portfolio, so the two are directly
+                    // comparable. Volatility is from monthly returns × √12 (there are no daily
+                    // benchmark prices), and drawdowns are measured on month-end levels, so they
+                    // can only be shallower than a daily measurement would find. Longest DD is
+                    // left blank: counting days from monthly points would only pretend precision.
+                    let benchStats: { cagr: number; real: number; vol: number; sharpe: number; maxDD: number; currDD: number } | null = null;
+                    if (benchDef && benchMonthly.length >= 2) {
+                      const bLast = benchMonthly[benchMonthly.length - 1];
+                      const cagr  = years > 0 ? (Math.pow(bLast / 100, 1 / years) - 1) * 100 : 0;
+                      const mMean = benchMonthReturns.reduce((s, r) => s + r, 0) / benchMonthReturns.length;
+                      const mVar  = benchMonthReturns.reduce((s, r) => s + (r - mMean) ** 2, 0) / benchMonthReturns.length;
+                      const vol   = Math.sqrt(mVar) * Math.sqrt(12) * 100;
+                      let bPeak = benchMonthly[0];
+                      let bMaxDD = 0;
+                      for (const v of benchMonthly) {
+                        if (v > bPeak) bPeak = v;
+                        const dd = ((v - bPeak) / bPeak) * 100;
+                        if (dd < bMaxDD) bMaxDD = dd;
+                      }
+                      benchStats = {
+                        cagr,
+                        real:   ((1 + cagr / 100) / (1 + annInflation / 100) - 1) * 100,
+                        vol,
+                        sharpe: vol > 0 ? cagr / vol : 0,
+                        maxDD:  bMaxDD,
+                        currDD: ((bLast - bPeak) / bPeak) * 100,
+                      };
+                    }
+
                     // ---- 5. X-axis ticks: one per year (closest actual date to Jan 1) ----
                     const startYear = new Date(chartData[0].date).getFullYear();
                     const endYear   = new Date(lastRow.date).getFullYear();
@@ -16344,7 +16445,7 @@ const PortfolioBacktester = () => {
                     }
 
                     // ---- 6. Y-axis ticks: dynamic range based on actual data, step of 5 ----
-                    const allYValues = chartData.flatMap(r => [r.nav, r.infl]);
+                    const allYValues = chartData.flatMap(r => r.bench != null ? [r.nav, r.infl, r.bench] : [r.nav, r.infl]);
                     const yDataMin = Math.min(...allYValues);
                     const yDataMax = Math.max(...allYValues);
                     const yAxisMin = Math.floor(yDataMin / 5) * 5;
@@ -16367,6 +16468,10 @@ const PortfolioBacktester = () => {
                       { value: lastRow.nav,  color: '#1e40af', label: lastRow.nav.toFixed(2) },
                       { value: lastRow.infl, color: '#dc2626', label: lastRow.infl.toFixed(2) },
                     ];
+                    if (benchStats) {
+                      const bLast = benchMonthly[benchMonthly.length - 1];
+                      navBubbleDefs.push({ value: bLast, color: BENCH_COLOR, label: bLast.toFixed(2) });
+                    }
                     const DailyNavBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, navBubbleDefs);
 
                     // ---- 8. Render ----
@@ -16381,10 +16486,20 @@ const PortfolioBacktester = () => {
                         <div className="flex items-center gap-5 mb-4 flex-wrap">
                           <div className="flex items-center gap-1">
                             <span className="text-xs text-gray-500 mr-1">Currency:</span>
-                            {(['PLN', 'USD', 'SGD'] as const).map(c => (
+                            {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => (
                               <button key={c} onClick={() => setDailyNavCurrency(c)}
                                 className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                               >{c}</button>
+                            ))}
+                          </div>
+                          {/* Benchmark buttons — one at a time; clicking the active one hides it again */}
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-500 mr-1">Benchmark:</span>
+                            {DAILY_NAV_BENCHMARKS.map(b => (
+                              <button key={b.id} title={b.note}
+                                onClick={() => setDailyNavBenchmark(prev => prev === b.id ? '' : b.id)}
+                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavBenchmark === b.id ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                              >{b.id}</button>
                             ))}
                           </div>
                           <div className="flex items-center gap-1">
@@ -16408,20 +16523,40 @@ const PortfolioBacktester = () => {
                               borderRadius: 5, padding: '5px 10px', fontSize: 11, pointerEvents: 'none', lineHeight: 1.75,
                             }}>
                               <table style={{ borderCollapse: 'collapse' }}>
+                                {/* Column headings only appear when a benchmark adds a second column */}
+                                {benchStats && benchDef && (
+                                  <thead>
+                                    <tr>
+                                      <td></td>
+                                      <td style={{ color: '#1e40af', fontWeight: 600, paddingRight: 10 }}>Portfolio</td>
+                                      <td style={{ color: BENCH_COLOR, fontWeight: 600 }} title="From month-end prices: vol = monthly returns × √12, drawdowns on month-end levels">{benchDef.id}*</td>
+                                    </tr>
+                                  </thead>
+                                )}
                                 <tbody>
-                                  {[
-                                    ['CAGR',        `${nominalCAGR.toFixed(1)}%`,  nominalCAGR  >= 0 ? '#16a34a' : '#dc2626'],
-                                    ['Ann. Infl.',  `${annInflation.toFixed(1)}%`, '#6b7280'],
-                                    ['Real CAGR',   `${realCAGR.toFixed(1)}%`,     realCAGR     >= 0 ? '#16a34a' : '#dc2626'],
-                                    ['Ann. Vol.',   `${annVol.toFixed(1)}%`,       '#374151'],
-                                    ['Sharpe',      sharpe.toFixed(2),             '#374151'],
-                                    ['Max DD',      `${maxDD.toFixed(1)}%`,        '#dc2626'],
-                                    ['Curr DD',     `${currDD.toFixed(1)}%`,       currDD < -0.01 ? '#dc2626' : '#16a34a'],
-                                    ['Longest DD',  `${longestDD}d`,               '#374151'],
-                                  ].map(([label, val, color]) => (
+                                  {/* 4th/5th entries = the benchmark's value and colour (null = no benchmark figure) */}
+                                  {([
+                                    ['CAGR',        `${nominalCAGR.toFixed(1)}%`,  nominalCAGR  >= 0 ? '#16a34a' : '#dc2626',
+                                      benchStats && `${benchStats.cagr.toFixed(1)}%`, benchStats && (benchStats.cagr >= 0 ? '#16a34a' : '#dc2626')],
+                                    ['Ann. Infl.',  `${annInflation.toFixed(1)}%`, '#6b7280',
+                                      benchStats && `${annInflation.toFixed(1)}%`, '#6b7280'],
+                                    ['Real CAGR',   `${realCAGR.toFixed(1)}%`,     realCAGR     >= 0 ? '#16a34a' : '#dc2626',
+                                      benchStats && `${benchStats.real.toFixed(1)}%`, benchStats && (benchStats.real >= 0 ? '#16a34a' : '#dc2626')],
+                                    ['Ann. Vol.',   `${annVol.toFixed(1)}%`,       '#374151',
+                                      benchStats && `${benchStats.vol.toFixed(1)}%`, '#374151'],
+                                    ['Sharpe',      sharpe.toFixed(2),             '#374151',
+                                      benchStats && benchStats.sharpe.toFixed(2), '#374151'],
+                                    ['Max DD',      `${maxDD.toFixed(1)}%`,        '#dc2626',
+                                      benchStats && `${benchStats.maxDD.toFixed(1)}%`, '#dc2626'],
+                                    ['Curr DD',     `${currDD.toFixed(1)}%`,       currDD < -0.01 ? '#dc2626' : '#16a34a',
+                                      benchStats && `${benchStats.currDD.toFixed(1)}%`, benchStats && (benchStats.currDD < -0.01 ? '#dc2626' : '#16a34a')],
+                                    ['Longest DD',  `${longestDD}d`,               '#374151',
+                                      benchStats && '—', '#9ca3af'],
+                                  ] as [string, string, string, string | null, string | null][]).map(([label, val, color, bVal, bColor]) => (
                                     <tr key={label as string}>
                                       <td style={{ color: '#6b7280', paddingRight: 10 }}>{label}</td>
-                                      <td style={{ fontWeight: 600, color: color as string }}>{val}</td>
+                                      <td style={{ fontWeight: 600, color: color as string, ...(benchStats ? { paddingRight: 10 } : {}) }}>{val}</td>
+                                      {benchStats && <td style={{ fontWeight: 600, color: bColor || '#374151' }}>{bVal}</td>}
                                     </tr>
                                   ))}
                                 </tbody>
@@ -16452,6 +16587,7 @@ const PortfolioBacktester = () => {
                                   formatter={(value: number, name: string, item: { payload?: { rawNav: number; rawInfl: number } }) => {
                                     const row = item?.payload;
                                     const isNav = name.startsWith('NAV');
+                                    if (benchDef && name === `${benchDef.id} ${dailyNavCurrency}`) return [value.toFixed(2), name];  // benchmark: indexed value only
                                     const raw = row ? (isNav ? row.rawNav : row.rawInfl) : null;
                                     const suffix = raw == null ? ''
                                       : isNav ? `  (${raw.toFixed(2)} ${dailyNavCurrency})`
@@ -16484,9 +16620,27 @@ const PortfolioBacktester = () => {
                                   dot={false}
                                   connectNulls
                                 />
+                                {/* Benchmark line — straight segments joining its month-end points */}
+                                {benchStats && benchDef && (
+                                  <Line
+                                    type="linear"
+                                    dataKey="bench"
+                                    name={`${benchDef.id} ${dailyNavCurrency}`}
+                                    stroke={BENCH_COLOR}
+                                    strokeWidth={1.5}
+                                    dot={false}
+                                    connectNulls
+                                  />
+                                )}
                               </LineChart>
                             </ResponsiveContainer>
                           </div>
+                          {/* What the selected benchmark is, and how its line was built */}
+                          {benchStats && benchDef && (
+                            <p className="text-xs text-gray-500 mt-2">
+                              {benchDef.note} *Built from month-end prices converted to {dailyNavCurrency}, so its line joins month-end points and its volatility and drawdowns are monthly measures.
+                            </p>
+                          )}
                         </div>
                       </div>
                     );
@@ -16495,7 +16649,8 @@ const PortfolioBacktester = () => {
                   {/* ── Daily NAV Drawdowns chart ── */}
                   {(() => {
                     // Colors matching Returns by Year: PLN=black, USD=red, SGD=yellow
-                    const DD_COLORS: Record<string, string> = { PLN: '#000000', USD: '#ef4444', SGD: '#F5A623' };
+                    // (CHF = violet: the app's usual CHF terracotta sits too close to this chart's USD red)
+                    const DD_COLORS: Record<string, string> = { PLN: '#000000', USD: '#ef4444', SGD: '#F5A623', CHF: CHART_PALETTE.violet };
 
                     // Re-use the same period-cutoff logic as the Daily NAV chart
                     const today = new Date();
@@ -16516,14 +16671,16 @@ const PortfolioBacktester = () => {
                       PLN: ddSelectedCurrencies.includes('PLN') ? r.ddPln : undefined,
                       USD: ddSelectedCurrencies.includes('USD') ? r.ddUsd : undefined,
                       SGD: ddSelectedCurrencies.includes('SGD') ? r.ddSgd : undefined,
+                      // CHF is computed in the parser; days without a CHFPLN rate are left blank
+                      CHF: ddSelectedCurrencies.includes('CHF') && r.navChf > 0 ? r.ddChf : undefined,
                     }));
 
                     // Compute max drawdown per currency over the filtered period
                     const maxDdByCurrency: Record<string, number> = {};
-                    (['PLN', 'USD', 'SGD'] as const).forEach(c => {
+                    (['PLN', 'USD', 'SGD', 'CHF'] as const).forEach(c => {
                       if (ddSelectedCurrencies.includes(c)) {
-                        const key = c === 'PLN' ? 'ddPln' : c === 'USD' ? 'ddUsd' : 'ddSgd';
-                        const vals = ddFiltered.map(r => r[key]);
+                        const key = c === 'PLN' ? 'ddPln' : c === 'USD' ? 'ddUsd' : c === 'CHF' ? 'ddChf' : 'ddSgd';
+                        const vals = ddFiltered.filter(r => c !== 'CHF' || r.navChf > 0).map(r => r[key]);
                         maxDdByCurrency[c] = vals.length > 0 ? Math.min(...vals) : 0;
                       }
                     });
@@ -16531,7 +16688,7 @@ const PortfolioBacktester = () => {
                     // Y-axis: snap the bottom to the nearest 5% below the worst drawdown
                     // e.g. worst = -27% → yMin = -30%; worst = -11% → yMin = -15%
                     const allVals = ddChartData.flatMap(d =>
-                      (['PLN', 'USD', 'SGD'] as const)
+                      (['PLN', 'USD', 'SGD', 'CHF'] as const)
                         .filter(c => ddSelectedCurrencies.includes(c))
                         .map(c => d[c] ?? 0)
                     );
@@ -16559,7 +16716,7 @@ const PortfolioBacktester = () => {
                           {/* Currency mini-buttons — clicking toggles a currency on/off */}
                           <div className="flex items-center gap-1">
                             <span className="text-xs text-gray-500 mr-1">Currency:</span>
-                            {(['PLN', 'USD', 'SGD'] as const).map(c => {
+                            {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => {
                               const active = ddSelectedCurrencies.includes(c);
                               return (
                                 <button
@@ -16593,7 +16750,7 @@ const PortfolioBacktester = () => {
                           {ddSelectedCurrencies.length > 0 && (
                             <div className="flex items-center gap-2 text-xs font-medium">
                               <span className="text-gray-400">Max DD:</span>
-                              {(['PLN', 'USD', 'SGD'] as const)
+                              {(['PLN', 'USD', 'SGD', 'CHF'] as const)
                                 .filter(c => ddSelectedCurrencies.includes(c))
                                 .map((c, i, arr) => (
                                   <span key={c}>
@@ -16612,7 +16769,7 @@ const PortfolioBacktester = () => {
                           <ResponsiveContainer width="100%" height={280}>
                             <AreaChart data={ddChartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
                               <defs>
-                                {(['PLN', 'USD', 'SGD'] as const).map(c => (
+                                {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => (
                                   <linearGradient key={c} id={`ddGrad${c}`} x1="0" y1="0" x2="0" y2="1">
                                     <stop offset="5%" stopColor={DD_COLORS[c]} stopOpacity={0.25} />
                                     <stop offset="95%" stopColor={DD_COLORS[c]} stopOpacity={0.03} />
@@ -16642,7 +16799,7 @@ const PortfolioBacktester = () => {
                               />
                               {/* A horizontal line at 0 to make the baseline clear */}
                               <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
-                              {(['PLN', 'USD', 'SGD'] as const).map(c =>
+                              {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c =>
                                 ddSelectedCurrencies.includes(c) ? (
                                   <Area
                                     key={c}
