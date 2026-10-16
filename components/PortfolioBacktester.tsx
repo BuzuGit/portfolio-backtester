@@ -16401,9 +16401,11 @@ const PortfolioBacktester = () => {
                       let anchor = -1;   // last month-end on or before the period start
                       for (let m = 0; m < months.length && (months[m].date as string) <= startDate; m++) anchor = m;
                       if (anchor >= 0) {
+                        // Each component's native currency, looked up once rather than every month
+                        const nativeCcy: Record<string, string> = Object.fromEntries(benchDef.mix.map(([t]) => [t, getAssetCurrency(t)]));
                         // Component prices in the chosen currency for month m
                         const priceIn = (m: number, t: string) =>
-                          Number(months[m][t]) * getConversionRate(months[m], getAssetCurrency(t), dailyNavCurrency);
+                          Number(months[m][t]) * getConversionRate(months[m], nativeCcy[t], dailyNavCurrency);
                         let level = 100;
                         benchPerDay[0] = level;
                         benchMonthly.push(level);
@@ -16607,7 +16609,8 @@ const PortfolioBacktester = () => {
                                     <tr>
                                       <td></td>
                                       <td style={{ color: '#1e40af', fontWeight: 600, paddingRight: 10 }}>Portfolio</td>
-                                      <td style={{ color: BENCH_COLOR, fontWeight: 600 }} title="From month-end prices: vol = monthly returns × √12, drawdowns on month-end levels">{benchDef.id}*</td>
+                                      {/* No hover tooltip here: the overlay has pointerEvents none. The * is explained in the note under the chart. */}
+                                      <td style={{ color: BENCH_COLOR, fontWeight: 600 }}>{benchDef.id}*</td>
                                     </tr>
                                   </thead>
                                 )}

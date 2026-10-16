@@ -574,7 +574,7 @@ export async function fetchSheetData(): Promise<ParsedData> {
 
   // Preset portfolios (Portfolios tab). Optional — its request was started at the top,
   // in parallel with the others; if Google answered with its "Loading..." placeholder,
-  // ask again up to twice.
+  // or the request failed outright, ask again up to twice.
   let presetPortfolios: PresetPortfolio[] = [];
   try {
     let presetsCsv = '';
@@ -582,6 +582,9 @@ export async function fetchSheetData(): Promise<ParsedData> {
     for (let attempt = 1; attempt <= 3; attempt++) {
       if (res && res.ok) presetsCsv = await res.text();
       if (presetsCsv && presetsCsv.trim() !== 'Loading...') break;   // got the real sheet
+      // A 4xx means the tab is gone or unpublished; asking again cannot fix that, and every
+      // retry here would hold up the whole page load by another second or two.
+      if (res && !res.ok && res.status < 500) break;
       if (attempt === 3) break;
       await new Promise(r => setTimeout(r, 1000 * attempt));
       res = await fetchSheet(PORTFOLIOS_SHEET_URL, 'Portfolios').catch(() => null);
@@ -630,6 +633,11 @@ function parsePresetPortfolios(csvText: string): PresetPortfolio[] {
     const values = lines[i];
     const name = (values[nameCol] || '').trim();
     if (!name) continue;   // blank row
+    // The name is what the dropdown selects by, so two rows with one name can't both work
+    if (presets.some(p => p.name === name)) {
+      console.warn(`Portfolios sheet: "${name}" appears more than once — keeping the first`);
+      continue;
+    }
 
     const assets: { asset: string; weight: number }[] = [];
     for (let n = 1; headers.includes(`AssetName${n}`); n++) {
