@@ -1233,7 +1233,7 @@ const CURRENCY_CPI: Record<string, string> = {
 // tickers from the monthly price sheet, rebalanced back to its weights at every month-end
 // (for a single-ticker mix that is just buy-and-hold). `note` is the line shown under the
 // chart while the benchmark is selected.
-const DAILY_NAV_BENCHMARKS: { id: '60/40' | 'World' | 'EQ-MF' | 'EQ-GLD'; mix: [string, number][]; note: string }[] = [
+const DAILY_NAV_BENCHMARKS: { id: '60/40' | 'World' | 'EQ-MF' | 'EQ-GLD' | '40/FI/MF/GLD'; mix: [string, number][]; note: string }[] = [
   { id: '60/40',  mix: [['VWRA', 0.6], ['VDTA', 0.4]],
     note: '60/40 is the classic balanced portfolio: 60% global equities (VWRA, FTSE All-World) and 40% US Treasuries (VDTA), rebalanced back to 60/40 every month-end. It is the standard yardstick for a diversified stock-and-bond portfolio.' },
   { id: 'World',  mix: [['VWRA', 1]],
@@ -1242,6 +1242,8 @@ const DAILY_NAV_BENCHMARKS: { id: '60/40' | 'World' | 'EQ-MF' | 'EQ-GLD'; mix: [
     note: 'EQ-MF is 60% VWRA (global equities) and 40% KMLM (managed futures / trend following), rebalanced every month-end.' },
   { id: 'EQ-GLD', mix: [['VWRA', 0.6], ['GLDM', 0.4]],
     note: 'EQ-GLD is 60% VWRA (global equities) and 40% gold (GLDM), rebalanced every month-end.' },
+  { id: '40/FI/MF/GLD', mix: [['VWRA', 0.4], ['VDTA', 0.2], ['KMLMTR', 0.2], ['GLDM', 0.2]],
+    note: '40/FI/MF/GLD is 40% VWRA (global equities), 20% VDTA (US Treasuries), 20% KMLM (managed futures) and 20% gold (GLDM), rebalanced every month-end.' },
 ];
 
 /**
@@ -1806,7 +1808,7 @@ const PortfolioBacktester = () => {
   const [dailyNavCurrency, setDailyNavCurrency] = useState<'PLN' | 'USD' | 'SGD' | 'CHF'>('PLN');
   const [dailyNavPeriod, setDailyNavPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
   // Which benchmark line is overlaid on the Daily NAV chart ('' = none, the default)
-  const [dailyNavBenchmark, setDailyNavBenchmark] = useState<'' | '60/40' | 'World' | 'EQ-MF' | 'EQ-GLD'>('');
+  const [dailyNavBenchmark, setDailyNavBenchmark] = useState<'' | '60/40' | 'World' | 'EQ-MF' | 'EQ-GLD' | '40/FI/MF/GLD'>('');
   // ---- Daily NAV Drawdowns chart state ----
   // Which currencies are shown on the drawdown chart (multi-select; CHF starts off so the
   // chart opens exactly as it did before CHF was added)
