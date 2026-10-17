@@ -11891,10 +11891,10 @@ const PortfolioBacktester = () => {
                       },
                     ].map(t => (
                       <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0">
-                        <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
-                        <div className="text-sm whitespace-nowrap truncate">
+                        <div className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
+                        <div className="text-base whitespace-nowrap truncate">
                           <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
-                          <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
+                          <span className="text-sm text-gray-500 ml-2">{t.sub}</span>
                         </div>
                       </div>
                     ))}
@@ -11994,19 +11994,19 @@ const PortfolioBacktester = () => {
                         ].map(t => (
                           <button key={t.label} onClick={() => setEdoSelected(t.p.s.series)} title={`Open ${t.p.s.series} below`}
                             className="text-left rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 px-3 py-2 min-w-0">
-                            <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label} · {t.p.s.series}</div>
-                            <div className="text-sm whitespace-nowrap truncate">
+                            <div className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label} · {t.p.s.series}</div>
+                            <div className="text-base whitespace-nowrap truncate">
                               <span className={`font-semibold tabular-nums ${t.cls}`}>{fmtPctSigned(t.p.final)}</span>
-                              <span className="text-xs text-gray-500 ml-2">{fmtPctSigned(t.p.perYear)} a year</span>
+                              <span className="text-sm text-gray-500 ml-2">{fmtPctSigned(t.p.perYear)} a year</span>
                             </div>
                           </button>
                         ))}
                         <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0"
                           title={`Series whose ${edoMaturedTax ? 'after-tax' : 'pre-tax'} payout at maturity bought more than 100 zl did at purchase`}>
-                          <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">Beat inflation</div>
-                          <div className="text-sm whitespace-nowrap truncate">
+                          <div className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">Beat inflation</div>
+                          <div className="text-base whitespace-nowrap truncate">
                             <span className="font-semibold tabular-nums text-gray-800">{beatInflation} of {beatOf}</span>
-                            <span className="text-xs text-gray-500 ml-2">{edoMaturedTax ? 'after tax' : 'pre-tax'}</span>
+                            <span className="text-sm text-gray-500 ml-2">{edoMaturedTax ? 'after tax' : 'pre-tax'}</span>
                           </div>
                         </div>
                       </div>
