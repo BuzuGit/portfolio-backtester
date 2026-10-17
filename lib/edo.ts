@@ -134,8 +134,21 @@ export function parseEdoSheet(rows: string[][]): EdoData | null {
 export const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 // Days between two YYYY-MM-DD dates (UTC, so daylight-saving can't add or lose an hour).
-const daysBetween = (a: string, b: string): number =>
+export const daysBetween = (a: string, b: string): number =>
   (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000;
+
+// The last day of the month with this month key, as YYYY-MM-DD ("2026-09-30").
+export const monthEndIso = (key: number): string =>
+  new Date(Date.UTC(Math.floor(key / 12), (key % 12) + 1, 0)).toISOString().slice(0, 10);
+
+// A month-end still in the future (the price sheet dates the current month at its month-END) is
+// valued TODAY: between last month-end's value and this month-end's, by days elapsed. Within a
+// coupon year EDO interest accrues evenly, so this is the value today, not the projected one.
+const prorateToToday = (prevValue: number, value: number, monthEnd: string, today: string): number => {
+  const prevEnd = monthEndIso(monthKeyOf(monthEnd) - 1);
+  const frac = Math.min(1, Math.max(0, daysBetween(prevEnd, today) / daysBetween(prevEnd, monthEnd)));
+  return prevValue + (value - prevValue) * frac;
+};
 
 /**
  * The value, at each of `dates`, of 100 zl put into EDO at month-end `startDate` and rolled at
@@ -201,10 +214,7 @@ export function edoChain(edo: EdoData, startDate: string, dates: string[], today
     if (level === undefined) return;
     if (d > today && key > startKey) {
       // Current month: prorate between last month-end and this (future) month-end.
-      const prevLevel = levelAt.get(key - 1) ?? level;
-      const prevEnd = new Date(Date.UTC(Math.floor((key - 1) / 12), ((key - 1) % 12) + 1, 0)).toISOString().slice(0, 10);
-      const frac = Math.min(1, Math.max(0, daysBetween(prevEnd, today) / daysBetween(prevEnd, d)));
-      out[i] = prevLevel + (level - prevLevel) * frac;
+      out[i] = prorateToToday(levelAt.get(key - 1) ?? level, level, d, today);
     } else {
       out[i] = level;
     }
@@ -219,6 +229,21 @@ export function edoWindowReturn(edo: EdoData, startDate: string, endDate: string
 }
 
 /**
+ * The EDO chain's value at each of `rows` (same order), bought at the first row on or after
+ * `startDate` (default: the first row that can buy a series). null before that row. Returns null
+ * if no row can anchor a chain. This is the cheap form: just the numbers, no copied rows — what
+ * a window calculation needs when it only has to re-price one column.
+ */
+export function edoChainOnRows(rows: AssetRow[], edo: EdoData, startDate?: string, today?: string): (number | null)[] | null {
+  if (!rows.length) return null;
+  const dates = rows.map(r => String(r.date));
+  const anchor = startDate
+    ? dates.find(d => d >= startDate)
+    : dates.find(d => edo.soldIn.has(monthKeyOf(d) + 1));
+  return anchor ? edoChain(edo, anchor, dates, today) : null;
+}
+
+/**
  * Puts EDO into the price rows as an ordinary column, anchored at `startDate` (default: the
  * first row that can buy a series). Rows before the anchor get no EDO value. Returns new row
  * objects; the input rows are not touched.
@@ -228,13 +253,8 @@ export function edoWindowReturn(edo: EdoData, startDate: string, endDate: string
  * Window calculations that start later re-anchor it at their own start (see the header).
  */
 export function withEdoColumn(rows: AssetRow[], edo: EdoData, startDate?: string, today?: string): AssetRow[] {
-  if (!rows.length) return rows;
-  const dates = rows.map(r => String(r.date));
-  const anchor = startDate
-    ? dates.find(d => d >= startDate)
-    : dates.find(d => edo.soldIn.has(monthKeyOf(d) + 1));
-  if (!anchor) return rows;
-  const levels = edoChain(edo, anchor, dates, today);
+  const levels = edoChainOnRows(rows, edo, startDate, today);
+  if (!levels) return rows;
   return rows.map((r, i) => {
     const copy: AssetRow = { ...r };
     delete copy[EDO_TICKER];
@@ -247,32 +267,41 @@ export function withEdoColumn(rows: AssetRow[], edo: EdoData, startDate?: string
  * Adds one price column per named SERIES (e.g. "EDO0734") — the bond itself, not the chain — so a
  * real holding of that series can be valued and charted like any other asset. The price of one
  * bond (100 zl nominal) is the sheet's value per 100 zl, at each month-end from its first month
- * to the month before it matures. Same current-month rule as edoChain: a month-end still in the
- * future is prorated to today. Only series the sheet has are added; rows are copied, not touched.
+ * to the month before it matures. Same rules as edoChain: a month-end still in the future is
+ * prorated to today, and a month the sheet hasn't filled in yet (not updated past a coupon reset)
+ * carries the last known value forward flat — so a held bond never silently loses its price, and
+ * it agrees with the chained EDO. Only series the sheet has are added; rows are copied, not touched.
  *
  * The data load passes every Lookup ticker that is an EDO series name, so adding a row such as
  * "EDO0734" to the Lookup tab is what makes that bond appear in Positions and Holdings.
  */
 export function withEdoSeriesColumns(rows: AssetRow[], edo: EdoData, seriesNames: string[], today: string = todayIso()): AssetRow[] {
-  const wanted = seriesNames.filter(s => edo.values.has(s));
+  const meta = new Map(edo.series.map(s => [s.series, s]));
+  const wanted = seriesNames.filter(s => edo.values.has(s) && meta.has(s));
   if (!wanted.length) return rows;
+  // Value per bond at a month-end: from the sheet; carried forward flat inside the bond's life
+  // (first sheet month .. the month before maturity); 100 (par) before its first month-end.
+  const valueAt = (s: string, key: number): number | null => {
+    const grid = edo.values.get(s)!;
+    const firstKey = monthKeyOf(meta.get(s)!.sold);
+    const lastKey = monthKeyOf(meta.get(s)!.matures) - 1;
+    if (key < firstKey) return key === firstKey - 1 ? 100 : null;
+    if (key > lastKey) return null;
+    for (let k = key; k >= firstKey; k--) {
+      const v = grid.get(k);
+      if (v !== undefined) return v;
+    }
+    return 100;
+  };
   return rows.map(r => {
     const d = String(r.date);
     const key = monthKeyOf(d);
     const copy: AssetRow = { ...r };
     wanted.forEach(s => {
-      const grid = edo.values.get(s)!;
-      const v = grid.get(key);
-      if (v === undefined) return;
-      if (d > today) {
-        // Current month: between last month-end (100 at par if bought this month) and this one.
-        const prev = grid.get(key - 1) ?? 100;
-        const prevEnd = new Date(Date.UTC(Math.floor((key - 1) / 12), ((key - 1) % 12) + 1, 0)).toISOString().slice(0, 10);
-        const frac = Math.min(1, Math.max(0, daysBetween(prevEnd, today) / daysBetween(prevEnd, d)));
-        copy[s] = prev + (v - prev) * frac;
-      } else {
-        copy[s] = v;
-      }
+      if (key < monthKeyOf(meta.get(s)!.sold)) return; // not sold yet
+      const v = valueAt(s, key);
+      if (v === null) return;
+      copy[s] = d > today ? prorateToToday(valueAt(s, key - 1) ?? 100, v, d, today) : v;
     });
     return copy;
   });
