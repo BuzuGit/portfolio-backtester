@@ -11707,6 +11707,44 @@ const PortfolioBacktester = () => {
             const lastCpi = [...seriesData].reverse().find(p => p.cpi !== null)?.cpi ?? null;
             const realAfterTax = last && lastCpi ? ((last.tax / lastCpi) - 1) * 100 : null;
 
+            // The selected series month by month, purchase to maturity: the purchase plus 120
+            // month-ends. Each bond year's rate is worked out from the bond's OWN values (interest
+            // is capitalised once a year, so it is the year-end value over the year-start value),
+            // which makes the table reconcile exactly with the sheet. Years 2-10 pay CPI + margin,
+            // so the CPI used is that rate minus the margin; with zero or negative inflation the
+            // bond pays the margin alone ("≤ 0"). Year 1 is the fixed first-year rate.
+            const daysApart = (a: string, b: string) => (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000;
+            const bondYearRate = (y: number): number | null => {
+              if (y === 1) return selected.firstYearRate;
+              const st = buyKey + 12 * (y - 1);
+              const v0 = grid.get(st);
+              if (v0 === undefined) return null;
+              const v1 = grid.get(st + 12);
+              if (v1 !== undefined) return (v1 / v0 - 1) * 100;
+              // A coupon year whose end value isn't on the sheet yet: interest accrues evenly over
+              // the year (365-day basis), so read the rate off the latest month that is.
+              let k = st + 11;
+              while (k > st && !grid.has(k)) k--;
+              if (k === st) return null;
+              return (grid.get(k)! / v0 - 1) * (365 / daysApart(keyIso(st), keyIso(k))) * 100;
+            };
+            const yearRates = Array.from({ length: 10 }, (_, i) => bondYearRate(i + 1));
+            const ladder = Array.from({ length: 121 }, (_, i) => {
+              const k = buyKey + i;
+              const year = i === 0 ? 0 : Math.ceil(i / 12);
+              const v = i === 0 ? 100 : grid.get(k) ?? null;
+              const prev = i === 0 ? null : i === 1 ? 100 : grid.get(k - 1) ?? null;
+              const c = cpiByKey.get(k);
+              const cpiIdx = cpi0 && c && k <= lastDoneKey ? (c / cpi0) * 100 : null;
+              const tax = v !== null ? edoAfterTax(v) : null;
+              return {
+                k, i, year, v, tax, cpiIdx,
+                monthPct: v !== null && prev !== null ? (v / prev - 1) * 100 : null,
+                real: tax !== null && cpiIdx !== null ? (tax / cpiIdx - 1) * 100 : null,
+                ahead: k > lastDoneKey, // already fixed by the sheet, but not yet accrued
+              };
+            });
+
             // Series table rows, newest first, after the Running / Matured filter.
             const tableRows = edo.series.filter(s => edoStatusFilter === 'all' || s.status === edoStatusFilter);
             // Pre-tax return a year since purchase — only once a series has been held a full year
@@ -11790,12 +11828,11 @@ const PortfolioBacktester = () => {
                     ))}
                   </div>
 
-                  {/* Rates & margins: what each series was sold on, beside the inflation of the day */}
+                  {/* First-year rates: what each series was sold on, beside the inflation of the day */}
                   <div className="mb-6">
-                    <div className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold mb-1">Rates by sale month</div>
+                    <div className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold mb-1">First-year rate by sale month</div>
                     <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-1">
                       <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: CHART_PALETTE.blue }} />First-year rate</span>
-                      <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: CHART_PALETTE.teal }} />Margin over CPI (years 2–10)</span>
                       <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: CHART_PALETTE.terracotta }} />Inflation PL 1Y when sold</span>
                     </div>
                     <ResponsiveContainer width="100%" height={220}>
@@ -11808,9 +11845,29 @@ const PortfolioBacktester = () => {
                           formatter={(v: number, name: string) => [`${Number(v).toFixed(2)}%`, name]}
                         />
                         <Line type="stepAfter" dataKey="rate" name="First-year rate" stroke={CHART_PALETTE.blue} strokeWidth={1.75} dot={false} isAnimationActive={false} connectNulls />
-                        <Line type="stepAfter" dataKey="margin" name="Margin over CPI" stroke={CHART_PALETTE.teal} strokeWidth={1.75} dot={false} isAnimationActive={false} connectNulls />
                         <Line type="monotone" dataKey="inflation" name="Inflation PL 1Y" stroke={CHART_PALETTE.terracotta} strokeWidth={1.25} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
                       </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Margin over CPI (years 2-10) of every series, one bar per sale month — drawn like */}
+                  {/* the Country page's monthly macro bars (black above zero, red below). */}
+                  <div className="mb-6">
+                    <div className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold mb-1">Margin over CPI by sale month (years 2–10)</div>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <BarChart data={ratesData} margin={{ top: 8, right: 8, left: -8, bottom: 0 }} barCategoryGap={1}>
+                        <XAxis dataKey="date" tickFormatter={d => String(d).slice(0, 4)} tick={{ fontSize: 11, fill: '#6b7280' }} minTickGap={30} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
+                        <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#6b7280' }} width={44} tickLine={false} axisLine={false} />
+                        <ReferenceLine y={0} stroke="#9ca3af" />
+                        <Tooltip
+                          labelFormatter={(d, p) => `${(p?.[0]?.payload as { series?: string })?.series ?? ''} · sold ${monthLabel(String(d))}`}
+                          formatter={(v: number) => [`${Number(v).toFixed(2)}%`, 'Margin over CPI']}
+                          cursor={{ fill: 'rgba(0,0,0,0.05)' }}
+                        />
+                        <Bar dataKey="margin" isAnimationActive={false}>
+                          {ratesData.map(d => <Cell key={d.series} fill={(d.margin ?? 0) < 0 ? '#dc2626' : '#111827'} />)}
+                        </Bar>
+                      </BarChart>
                     </ResponsiveContainer>
                   </div>
 
@@ -11866,6 +11923,56 @@ const PortfolioBacktester = () => {
                     ) : (
                       <p className="text-sm text-gray-500 py-6 text-center">{selected.series} has no finished month yet.</p>
                     )}
+
+                    {/* The same series month by month, from purchase to maturity (all 120 months). */}
+                    {/* Grey rows are already fixed by the sheet but lie in the future; "–" = not known yet. */}
+                    <div className="mt-4 text-[11px] uppercase tracking-wide text-gray-500 font-semibold mb-1">{selected.series} month by month</div>
+                    <div className="overflow-x-auto max-h-[420px] overflow-y-auto border border-gray-100 rounded">
+                      <table className="w-full text-sm border-collapse">
+                        <thead className="sticky top-0">
+                          <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
+                            <th className="text-left font-semibold text-gray-700 px-3 py-2">Month</th>
+                            <th className="text-right font-medium px-2 py-2 cursor-help" title="Year of the bond's life (1-10)">Year</th>
+                            <th className="text-right font-medium px-2 py-2 cursor-help" title="Interest rate for this bond year. Year 1: the fixed first-year rate. Years 2-10: CPI + margin, worked out from the bond's own values.">Rate</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={`The 12-month CPI behind this year's rate: rate minus the ${fmtPct2(selected.margin)} margin. It is GUS's CPI for the month two months before the bond year starts (hover a figure). "≤ 0" = inflation was zero or negative, so only the margin was paid.`}>CPI used</th>
+                            <th className="text-right font-medium px-2 py-2">Value</th>
+                            <th className="text-right font-medium px-2 py-2">Month</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Since purchase</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={`${Math.round(EDO_TAX_RATE * 100)}% tax on everything above 100`}>After tax</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title="Polish CPI index since purchase (100 at purchase)">Inflation</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title="After-tax value against inflation since purchase">Real after tax</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {ladder.map(r => {
+                            const rate = r.year > 0 ? yearRates[r.year - 1] : null;
+                            const cpiUsed = r.year > 1 && rate !== null && selected.margin !== null ? rate - selected.margin : null;
+                            // The CPI month the rate followed: two months before the bond year's first month.
+                            const refKey = buyKey + 12 * (r.year - 1) - 1;
+                            const yearStart = r.i % 12 === 1;
+                            const known = r.v !== null;
+                            return (
+                              <tr key={r.k}
+                                className={`${yearStart ? 'border-t-2 border-gray-200' : 'border-t border-gray-100'} ${r.ahead && known ? 'text-gray-400 italic' : ''}`}
+                                title={r.ahead && known ? 'Fixed in advance by the sheet — not yet accrued' : undefined}>
+                                <td className="px-3 py-1 whitespace-nowrap">{r.i === 0 ? `Bought ${monthLabel(selected.sold)}` : keyLabel(r.k)}</td>
+                                <td className="px-2 py-1 text-right tabular-nums">{r.year || '–'}</td>
+                                <td className={`px-2 py-1 text-right tabular-nums ${yearStart ? 'font-medium' : ''}`}>{rate !== null ? `${rate.toFixed(2)}%` : '–'}</td>
+                                <td className={`px-2 py-1 text-right tabular-nums ${yearStart ? 'font-medium' : ''}`} title={r.year > 1 ? `CPI for ${keyLabel(refKey)}` : undefined}>
+                                  {r.year === 1 ? 'fixed' : cpiUsed === null ? '–' : cpiUsed <= 0.005 ? '≤ 0' : `${cpiUsed.toFixed(2)}%`}
+                                </td>
+                                <td className="px-2 py-1 text-right tabular-nums font-medium">{known ? formatPrice(r.v as number) : '–'}</td>
+                                <td className="px-2 py-1 text-right tabular-nums">{r.monthPct !== null ? `${r.monthPct.toFixed(2)}%` : '–'}</td>
+                                <td className="px-2 py-1 text-right tabular-nums">{known ? fmtPctSigned((r.v as number) - 100) : '–'}</td>
+                                <td className="px-2 py-1 text-right tabular-nums">{r.tax !== null ? formatPrice(r.tax) : '–'}</td>
+                                <td className="px-2 py-1 text-right tabular-nums">{r.cpiIdx !== null ? fmtPctSigned(r.cpiIdx - 100) : '–'}</td>
+                                <td className={`px-2 py-1 text-right tabular-nums ${r.real === null ? '' : r.real >= 0 ? 'text-green-700' : 'text-red-700'}`}>{r.real !== null ? fmtPctSigned(r.real) : '–'}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
 
                   {/* The full series list. Click a row to chart it. */}
