@@ -11945,42 +11945,76 @@ const PortfolioBacktester = () => {
                       <table className="w-full text-sm border-collapse">
                         <thead className="sticky top-0">
                           <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
-                            <th className="text-left font-semibold text-gray-700 px-3 py-2">Month</th>
-                            <th className="text-right font-medium px-2 py-2 cursor-help" title="Year of the bond's life (1-10)">Year</th>
-                            <th className="text-right font-medium px-2 py-2 cursor-help" title="Interest rate for this bond year. Year 1: the fixed first-year rate. Years 2-10: CPI + margin, worked out from the bond's own values.">Rate</th>
-                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={`The 12-month CPI behind this year's rate: rate minus the ${fmtPct2(selected.margin)} margin. It is GUS's CPI for the month two months before the bond year starts (hover a figure). "≤ 0" = inflation was zero or negative, so only the margin was paid.`}>CPI used</th>
-                            <th className="text-right font-medium px-2 py-2">Value</th>
-                            <th className="text-right font-medium px-2 py-2">Month</th>
-                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Since purchase</th>
-                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={`${Math.round(EDO_TAX_RATE * 100)}% tax on everything above 100`}>After tax</th>
-                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title="Polish CPI index since purchase (100 at purchase)">Inflation</th>
-                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title="After-tax value against inflation since purchase">Real after tax</th>
+                            <th className="text-left font-semibold text-gray-700 px-3 py-2 cursor-help" title="Month-end the row is valued at. The first row is the purchase, at par (100).">Month</th>
+                            <th className="text-right font-medium px-2 py-2 cursor-help" title="Year of the bond's life (1-10). Each bond year runs from one anniversary of the sale month to the next.">Year</th>
+                            <th className="text-right font-medium px-2 py-2 cursor-help" title={'Interest rate for this bond year, a year\'s rate (not this month\'s).\nYear 1: the fixed first-year rate.\nYears 2-10: CPI used + margin, worked out from the bond\'s own values (year-end value ÷ year-start value − 1).'}>Rate</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={`The 12-month CPI behind this year's rate: rate minus the ${fmtPct2(selected.margin)} margin.\nIt is GUS's CPI for the month two months before the bond year starts (hover a figure).\n"≤ 0" = inflation was zero or negative, so only the margin was paid.`}>CPI used</th>
+                            <th className="text-right font-medium px-2 py-2 cursor-help" title={'What 100 zl of this series is worth at the month-end, pre-tax.\nInterest accrues day by day and is added to the value at every anniversary, so later years earn interest on it.'}>Value</th>
+                            <th className="text-right font-medium px-2 py-2 cursor-help" title={'Change in value over this one month (this month-end ÷ the previous one − 1).\nNot annualised.'}>Month</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={'Total pre-tax return since purchase (value ÷ 100 − 1).\nCumulative, NOT annualised.'}>Since purchase</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={`What you would get after tax if the bond paid out at this value: 100 + ${Math.round((1 - EDO_TAX_RATE) * 100)}% of the gain (${Math.round(EDO_TAX_RATE * 100)}% tax on everything above 100). Early-redemption fee ignored.`}>After tax</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={'Polish inflation since purchase: CPI at this month-end ÷ CPI at purchase − 1.\nCumulative, NOT annualised. (The sheet\'s CPI index, which repeats the last print until the next one.)'}>Inflation</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={'After-tax value in today\'s money: after-tax value ÷ (1 + inflation since purchase) − 1.\nTotal since purchase — cumulative, NOT annualised. Positive = you beat inflation after tax.'}>Real after tax</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {ladder.map(r => {
+                          {ladder.map((r, idx) => {
                             const rate = r.year > 0 ? yearRates[r.year - 1] : null;
                             const cpiUsed = r.year > 1 && rate !== null && selected.margin !== null ? rate - selected.margin : null;
                             // The CPI month the rate followed: two months before the bond year's first month.
                             const refKey = buyKey + 12 * (r.year - 1) - 1;
                             const yearStart = r.i % 12 === 1;
                             const known = r.v !== null;
+                            // Each cell's tooltip shows its own working with this row's numbers. Rows still
+                            // in the future say so on every cell (a cell's tooltip hides the row's).
+                            const aheadNote = r.ahead && known ? '\n(fixed in advance by the sheet — not yet accrued)' : '';
+                            const tip = (s: string | null) => (s ? s + aheadNote : undefined);
+                            const prevV = idx > 0 ? ladder[idx - 1].v : null;
+                            const cpiNow = cpiByKey.get(r.k);
+                            const yearFrom = buyKey + 12 * (r.year - 1) + 1;
+                            const fmt2 = (v: number) => v.toFixed(2);
                             return (
                               <tr key={r.k}
-                                className={`${yearStart ? 'border-t-2 border-gray-200' : 'border-t border-gray-100'} ${r.ahead && known ? 'text-gray-400 italic' : ''}`}
-                                title={r.ahead && known ? 'Fixed in advance by the sheet — not yet accrued' : undefined}>
-                                <td className="px-3 py-1 whitespace-nowrap">{r.i === 0 ? `Bought ${monthLabel(selected.sold)}` : keyLabel(r.k)}</td>
-                                <td className="px-2 py-1 text-right tabular-nums">{r.year || '–'}</td>
-                                <td className={`px-2 py-1 text-right tabular-nums ${yearStart ? 'font-medium' : ''}`}>{rate !== null ? `${rate.toFixed(2)}%` : '–'}</td>
-                                <td className={`px-2 py-1 text-right tabular-nums ${yearStart ? 'font-medium' : ''}`} title={r.year > 1 ? `CPI for ${keyLabel(refKey)}` : undefined}>
+                                className={`${yearStart ? 'border-t-2 border-gray-200' : 'border-t border-gray-100'} ${r.ahead && known ? 'text-gray-400 italic' : ''}`}>
+                                <td className="px-3 py-1 whitespace-nowrap cursor-help"
+                                  title={tip(r.i === 0 ? `Bought at par (100) on 1 ${monthLabel(selected.sold)}` : `Valued at ${keyIso(r.k)}`)}>
+                                  {r.i === 0 ? `Bought ${monthLabel(selected.sold)}` : keyLabel(r.k)}
+                                </td>
+                                <td className="px-2 py-1 text-right tabular-nums cursor-help"
+                                  title={tip(r.year > 0 ? `Bond year ${r.year} of 10: ${keyLabel(yearFrom)} – ${keyLabel(yearFrom + 11)}` : null)}>{r.year || '–'}</td>
+                                <td className={`px-2 py-1 text-right tabular-nums cursor-help ${yearStart ? 'font-medium' : ''}`}
+                                  title={tip(rate === null ? null : r.year === 1 ? `Fixed first-year rate: ${fmt2(rate)}% for the year`
+                                    : cpiUsed !== null && cpiUsed > 0.005 ? `CPI ${fmt2(cpiUsed)}% + margin ${fmtPct2(selected.margin)} = ${fmt2(rate)}% for the year`
+                                    : `Inflation zero or negative: the margin alone, ${fmt2(rate)}% for the year`)}>
+                                  {rate !== null ? `${rate.toFixed(2)}%` : '–'}
+                                </td>
+                                <td className={`px-2 py-1 text-right tabular-nums cursor-help ${yearStart ? 'font-medium' : ''}`}
+                                  title={tip(r.year === 1 ? 'Year 1 pays a fixed rate, not CPI' : r.year > 1 && rate !== null
+                                    ? `GUS 12-month CPI for ${keyLabel(refKey)} = rate ${fmt2(rate)}% − margin ${fmtPct2(selected.margin)}` : null)}>
                                   {r.year === 1 ? 'fixed' : cpiUsed === null ? '–' : cpiUsed <= 0.005 ? '≤ 0' : `${cpiUsed.toFixed(2)}%`}
                                 </td>
-                                <td className="px-2 py-1 text-right tabular-nums font-medium">{known ? formatPrice(r.v as number) : '–'}</td>
-                                <td className="px-2 py-1 text-right tabular-nums">{r.monthPct !== null ? `${r.monthPct.toFixed(2)}%` : '–'}</td>
-                                <td className="px-2 py-1 text-right tabular-nums">{known ? fmtPctSigned((r.v as number) - 100) : '–'}</td>
-                                <td className="px-2 py-1 text-right tabular-nums">{r.tax !== null ? formatPrice(r.tax) : '–'}</td>
-                                <td className="px-2 py-1 text-right tabular-nums">{r.cpiIdx !== null ? fmtPctSigned(r.cpiIdx - 100) : '–'}</td>
-                                <td className={`px-2 py-1 text-right tabular-nums ${r.real === null ? '' : r.real >= 0 ? 'text-green-700' : 'text-red-700'}`}>{r.real !== null ? fmtPctSigned(r.real) : '–'}</td>
+                                <td className="px-2 py-1 text-right tabular-nums font-medium cursor-help"
+                                  title={tip(known ? `${fmt2(r.v as number)} zl per 100 zl, pre-tax` : null)}>{known ? formatPrice(r.v as number) : '–'}</td>
+                                <td className="px-2 py-1 text-right tabular-nums cursor-help"
+                                  title={tip(r.monthPct !== null && prevV !== null ? `${fmt2(r.v as number)} ÷ ${fmt2(prevV)} − 1 = ${r.monthPct.toFixed(2)}% (this month only)` : null)}>
+                                  {r.monthPct !== null ? `${r.monthPct.toFixed(2)}%` : '–'}
+                                </td>
+                                <td className="px-2 py-1 text-right tabular-nums cursor-help"
+                                  title={tip(known ? `${fmt2(r.v as number)} ÷ 100 − 1 = ${fmt2((r.v as number) - 100)}% total since purchase (not annualised)` : null)}>
+                                  {known ? fmtPctSigned((r.v as number) - 100) : '–'}
+                                </td>
+                                <td className="px-2 py-1 text-right tabular-nums cursor-help"
+                                  title={tip(r.tax !== null && known ? `100 + (${fmt2(r.v as number)} − 100) × ${Math.round((1 - EDO_TAX_RATE) * 100)}% = ${fmt2(r.tax)}` : null)}>
+                                  {r.tax !== null ? formatPrice(r.tax) : '–'}
+                                </td>
+                                <td className="px-2 py-1 text-right tabular-nums cursor-help"
+                                  title={tip(r.cpiIdx !== null && cpiNow && cpi0 ? `CPI ${fmt2(cpiNow)} ÷ ${fmt2(cpi0)} at purchase − 1 = ${fmt2(r.cpiIdx - 100)}% cumulative since purchase (not annualised)` : null)}>
+                                  {r.cpiIdx !== null ? fmtPctSigned(r.cpiIdx - 100) : '–'}
+                                </td>
+                                <td className={`px-2 py-1 text-right tabular-nums cursor-help ${r.real === null ? '' : r.real >= 0 ? 'text-green-700' : 'text-red-700'}`}
+                                  title={tip(r.real !== null && r.tax !== null && r.cpiIdx !== null ? `${fmt2(r.tax)} after tax ÷ ${(r.cpiIdx / 100).toFixed(4)} inflation − 1 = ${fmt2(r.real)}% total since purchase (not annualised)` : null)}>
+                                  {r.real !== null ? fmtPctSigned(r.real) : '–'}
+                                </td>
                               </tr>
                             );
                           })}
