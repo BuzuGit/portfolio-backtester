@@ -413,6 +413,14 @@ const prepareRows = (data: AssetRow[]) => {
 };
 
 /**
+ * For a row with no single price history. An EDO bond's path depends on when it is bought, so
+ * each window must be priced from a purchase AT that window's start (see lib/edo.ts). Given the
+ * table's rows and a window's start date, return the same rows (same order) with this ticker's
+ * column re-drawn from that start — or null for every ordinary ticker.
+ */
+export type Reanchor = (ticker: string, startDate: string, rows: AssetRow[]) => AssetRow[] | null;
+
+/**
  * One asset or FX row, measured in `currency`. Returns null for an FX row that has nothing to
  * add (its currency IS the base, or another row already shows that currency — `shownFx`
  * remembers which currencies this table already has).
@@ -423,6 +431,7 @@ const buildPriceRow = (
   rows: AssetRow[],
   indexByMonth: Map<number, number>,
   shownFx: Set<string>,
+  reanchor?: Reanchor,
 ): MarketRow | null => {
   const nativeCcy = a.currency || 'PLN';
 
@@ -531,17 +540,22 @@ const buildPriceRow = (
       // before the end.
       const startIdx = periodStartIdx(p, endKey, firstIdx, indexByMonth);
       if (startIdx === undefined || startIdx >= endIdx || endValue === null) return;
-      const startValue = convAt[startIdx];
-      if (startValue === null) return;
-      returns[p] = (endValue / startValue - 1) * 100;
-      const startWorking = explain(rows[startIdx]);
-      if (startWorking && endWorking) {
-        working[p] = { startDate: String(rows[startIdx].date), start: startWorking, endDate: String(endRow.date), end: endWorking };
+      // A row with no single history (EDO) is re-drawn from this window's own start; every
+      // other row reads the values worked out above.
+      const windowRows = reanchor?.(a.ticker, String(rows[startIdx].date), rows) ?? null;
+      const valAt = (i: number) => (windowRows ? conv(windowRows[i]) : convAt[i]);
+      const startValue = valAt(startIdx), windowEnd = valAt(endIdx);
+      if (startValue === null || windowEnd === null) return;
+      returns[p] = (windowEnd / startValue - 1) * 100;
+      const startWorking = explain((windowRows ?? rows)[startIdx]);
+      const windowEndWorking = windowRows ? explain(windowRows[endIdx]) : endWorking;
+      if (startWorking && windowEndWorking) {
+        working[p] = { startDate: String(rows[startIdx].date), start: startWorking, endDate: String(endRow.date), end: windowEndWorking };
       }
       // Stats view: the same window's month-end values, gaps skipped.
       const windowValues: { date: string; v: number }[] = [];
       for (let i = startIdx; i <= endIdx; i++) {
-        const v = convAt[i];
+        const v = valAt(i);
         if (v !== null) windowValues.push({ date: String(rows[i].date), v });
       }
       stats[p] = statsFor(windowValues);
@@ -551,7 +565,9 @@ const buildPriceRow = (
     STATS_YEARS.forEach(y => {
       const from = indexByMonth.get(y * 12 - 1), to = indexByMonth.get(y * 12 + 11);
       if (from === undefined || to === undefined || to > endIdx) return;
-      const a0 = convAt[from], a1 = convAt[to];
+      const yearRows = reanchor?.(a.ticker, String(rows[from].date), rows) ?? null;
+      const a0 = yearRows ? conv(yearRows[from]) : convAt[from];
+      const a1 = yearRows ? conv(yearRows[to]) : convAt[to];
       if (a0 !== null && a1 !== null) yearReturns[y] = (a1 / a0 - 1) * 100;
     });
 
@@ -653,6 +669,7 @@ export const buildReturnMatrix = (
   lookup: AssetLookup[],
   currency: MarketsCurrency,
   category = 'Assets', // which SnapshotCategory this table shows
+  reanchor?: Reanchor, // for EDO: price each window from a purchase at its start
 ): ReturnMatrix | null => {
   if (!data || data.length === 0) return null;
   const { rows, indexByMonth, endDate } = prepareRows(data);
@@ -670,7 +687,7 @@ export const buildReturnMatrix = (
       placeMacroRow(a, placement.subcategory || 'Other', placement.order ?? Infinity, sheetIndex, rows, indexByMonth, placed);
       return;
     }
-    const row = buildPriceRow(a, currency, rows, indexByMonth, shownFx);
+    const row = buildPriceRow(a, currency, rows, indexByMonth, shownFx, reanchor);
     if (row) placed.push({ section: placement.subcategory || 'Other', row, order: placement.order ?? Infinity, sheetIndex });
   });
 
@@ -703,6 +720,7 @@ export const buildCountryMatrix = (
   data: AssetRow[] | null,
   lookup: AssetLookup[],
   country: Exclude<MarketsCurrency, 'Native'>,
+  reanchor?: Reanchor, // for EDO: price each window from a purchase at its start
 ): ReturnMatrix | null => {
   if (!data || data.length === 0) return null;
   const { rows, indexByMonth, endDate } = prepareRows(data);
@@ -734,7 +752,7 @@ export const buildCountryMatrix = (
       placeMacroRow(a, g.section, g.order, sheetIndex, rows, indexByMonth, macro);
     } else {
       const g = groupOf(a, 'Assets');
-      const row = buildPriceRow(a, country, rows, indexByMonth, shownFx);
+      const row = buildPriceRow(a, country, rows, indexByMonth, shownFx, reanchor);
       if (row) assets.push({ section: g.section, row, order: g.order, sheetIndex });
     }
   });

@@ -24,6 +24,7 @@ import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersF
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
 import { buildHoldings, portfolioClassOf, MARKETS_HOLDINGS, HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, HoldingsCurrency, HoldingRow } from '@/lib/holdings';
+import { EdoData, EDO_TICKER, EDO_CPI_TICKER, EDO_TAX_RATE, MARKETS_EDO, edoWindowReturn, withEdoColumn, edoAfterTax, monthKeyOf, todayIso } from '@/lib/edo';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -1607,6 +1608,8 @@ const PortfolioBacktester = () => {
   const [assetData, setAssetData] = useState<AssetRow[] | null>(null);  // Historical price data
   const [availableAssets, setAvailableAssets] = useState<string[]>([]); // List of asset names
   const [presetPortfolios, setPresetPortfolios] = useState<PresetPortfolio[]>([]); // Ready-made portfolios (Portfolios sheet)
+  // EDO bonds (EDO sheet): every series' terms and value grid. null until loaded, or if the tab failed.
+  const [edoData, setEdoData] = useState<EdoData | null>(null);
   const [assetLookup, setAssetLookup] = useState<AssetLookup[]>([]);    // Lookup table (ticker -> name)
 
   // Cross-check the sheet's FX columns against each other. Recomputed only when the
@@ -1708,6 +1711,11 @@ const PortfolioBacktester = () => {
   const [marketsCountry, setMarketsCountry] = useState<Exclude<MarketsCurrency, 'Native'>>('PLN');
   // Which SnapshotCategory the table shows ("Assets", "Factor", ...). '' = the first one in the sheet.
   const [marketsCategory, setMarketsCategory] = useState<string>('');
+  // Markets "EDO" page: the series shown in the chart ('' = the oldest still running), which
+  // lines it draws (value, inflation since purchase, value after tax), and the table filter.
+  const [edoSelected, setEdoSelected] = useState<string>('');
+  const [edoLines, setEdoLines] = useState<{ value: boolean; cpi: boolean; tax: boolean }>({ value: true, cpi: false, tax: false });
+  const [edoStatusFilter, setEdoStatusFilter] = useState<'all' | 'running' | 'matured'>('all');
   const [marketsPeriod, setMarketsPeriod] = useState<MarketsPeriod>('YTD');
   // How many years the trend sparkline covers. Follows the period button for 1Y/3Y/5Y/10Y; the
   // shorter periods (YTD/1M/3M/6M) are too short for a trend, so they leave it where it was.
@@ -2024,7 +2032,7 @@ const PortfolioBacktester = () => {
 
     try {
       // Fetch and parse the CSV data from all sheets
-      const { data, assets, lookup, yearsData: fetchedYearsData, dailyData: fetchedDailyData, ledgerData: fetchedLedgerData, presetPortfolios: fetchedPresets } = await fetchSheetData();
+      const { data, assets, lookup, yearsData: fetchedYearsData, dailyData: fetchedDailyData, ledgerData: fetchedLedgerData, presetPortfolios: fetchedPresets, edo: fetchedEdo } = await fetchSheetData();
 
       // ---- Derive positions from the ledger -------------------------------
       // Replay the Transactions tab to work out what is still held, what was sold,
@@ -2069,6 +2077,7 @@ const PortfolioBacktester = () => {
       setTransactionData(effectiveTransactions);
       setDailyData(fetchedDailyData);
       setPresetPortfolios(fetchedPresets);
+      setEdoData(fetchedEdo);
       // Auto-select all position tickers (both open and closed) by default
       const closedTickers = new Set(effectiveClosed.map((row: ClosedPositionRow) => row.ticker));
       // Open tickers come from the ledger replay, which correctly keeps a position open
@@ -3822,6 +3831,11 @@ const PortfolioBacktester = () => {
     const rangeEnd = overrides?.end ?? selectedDateRange.end;
     const rebalanceEvery = overrides?.rebalanceFreq ?? rebalanceFreq;
 
+    // EDO's price path depends on WHEN you buy it (see lib/edo.ts): a backtest starting in
+    // March 2015 buys the series on sale then, not a slice of a chain begun in 2009. So a
+    // portfolio holding EDO gets the EDO column re-drawn from this window's own start.
+    if (edoData && portfolio.assets.some(a => a.asset === EDO_TICKER)) data = withEdoColumn(data, edoData, rangeStart);
+
     // Filter data to selected date range
     const filteredData = data.filter(row =>
       row.date >= rangeStart && row.date <= rangeEnd
@@ -4138,8 +4152,11 @@ const PortfolioBacktester = () => {
     const portfolio = result.portfolio;
     if (!portfolio.assets.length) return [];
 
-    // Filter data to the selected date range (same as calculatePortfolioReturns)
-    const filteredData = assetData.filter(row =>
+    // Filter data to the selected date range (same as calculatePortfolioReturns, including
+    // re-drawing EDO from the window's own start, so this table matches the backtest)
+    const sourceData = edoData && portfolio.assets.some(a => a.asset === EDO_TICKER)
+      ? withEdoColumn(assetData, edoData, selectedDateRange.start) : assetData;
+    const filteredData = sourceData.filter(row =>
       row.date >= selectedDateRange.start && row.date <= selectedDateRange.end
     );
     if (filteredData.length < 2) return [];
@@ -4877,6 +4894,19 @@ const PortfolioBacktester = () => {
         const priorYearData = getLastPriceInYear(ticker, year - 1);
         if (!priorYearData) continue;  // No prior year data = can't calculate return
 
+        // EDO: a calendar year is a FRESH purchase at the prior year-end (see lib/edo.ts), not a
+        // slice of one long chain — so 2022 is the bond sold in January 2022, held to Dec 2022.
+        if (ticker === EDO_TICKER && edoData) {
+          const r = edoWindowReturn(edoData, priorYearData.date, endYearData.date);
+          if (r === null) continue;
+          result[ticker][year] = {
+            return: r,
+            startDate: priorYearData.date, startPrice: 100,
+            endDate: endYearData.date, endPrice: 100 + r,
+          };
+          continue;
+        }
+
         // Calculate annual return: ((endPrice / startPrice) - 1) * 100
         const annualReturn = ((endYearData.price / priorYearData.price) - 1) * 100;
 
@@ -4896,7 +4926,7 @@ const PortfolioBacktester = () => {
   // Memoized annual returns — only recalculated when assetData or assetLookup changes,
   // NOT when toggling between Returns/Prices view or changing other UI state
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const memoizedAnnualReturns = useMemo(() => calculateAssetsAnnualReturns(), [assetData, assetLookup]);
+  const memoizedAnnualReturns = useMemo(() => calculateAssetsAnnualReturns(), [assetData, assetLookup, edoData]);
 
   // Markets tab: the whole Return matrix for the selected currency (see lib/markets.ts).
   // Recomputed only when the data or the currency changes — switching the period button just
@@ -4908,22 +4938,39 @@ const PortfolioBacktester = () => {
   // (A sheet category that happens to be called "Country" is skipped, so it can't clash with it.)
   // "Holdings" follows Country the same way: a page of what you own, built from the
   // Transactions ledger rather than from the Lookup tab (see lib/holdings.ts).
+  // "EDO" (the Polish savings-bond page, built from the EDO tab — see lib/edo.ts) goes right
+  // after Equities, or before Country if the sheet has no Equities category; only once the
+  // EDO tab has loaded.
   const marketsCategories = useMemo(
-    () => [
-      ...snapshotCategories(assetLookup).filter(c => ![MARKETS_COUNTRY, MARKETS_HOLDINGS].some(x => x.toLowerCase() === c.toLowerCase())),
-      MARKETS_COUNTRY, MARKETS_HOLDINGS,
-    ],
-    [assetLookup],
+    () => {
+      const fromSheet = snapshotCategories(assetLookup)
+        .filter(c => ![MARKETS_COUNTRY, MARKETS_HOLDINGS, MARKETS_EDO].some(x => x.toLowerCase() === c.toLowerCase()));
+      if (edoData) {
+        const eq = fromSheet.findIndex(c => c.toLowerCase() === 'equities');
+        fromSheet.splice(eq >= 0 ? eq + 1 : fromSheet.length, 0, MARKETS_EDO);
+      }
+      return [...fromSheet, MARKETS_COUNTRY, MARKETS_HOLDINGS];
+    },
+    [assetLookup, edoData],
   );
   const activeMarketsCategory =
     marketsCategories.find(c => c.toLowerCase() === marketsCategory.toLowerCase()) ?? marketsCategories[0] ?? 'Assets';
   const marketsIsCountry = activeMarketsCategory === MARKETS_COUNTRY;
   const marketsIsHoldings = activeMarketsCategory === MARKETS_HOLDINGS;
+  const marketsIsEdo = activeMarketsCategory === MARKETS_EDO;
+  // EDO has no single price history (lib/edo.ts), so the Return matrix re-draws its column from
+  // each period's own start: the "3Y" cell is the bond bought three years ago.
+  const edoReanchor = useMemo(
+    () => (edoData
+      ? (ticker: string, startDate: string, rows: AssetRow[]) => (ticker === EDO_TICKER ? withEdoColumn(rows, edoData, startDate) : null)
+      : undefined),
+    [edoData],
+  );
   const marketsMatrix = useMemo(
-    () => (marketsIsHoldings ? null : marketsIsCountry
-      ? buildCountryMatrix(assetData, assetLookup, marketsCountry)
-      : buildReturnMatrix(assetData, assetLookup, marketsCurrency, activeMarketsCategory)),
-    [assetData, assetLookup, marketsCurrency, activeMarketsCategory, marketsIsCountry, marketsIsHoldings, marketsCountry],
+    () => (marketsIsHoldings || marketsIsEdo ? null : marketsIsCountry
+      ? buildCountryMatrix(assetData, assetLookup, marketsCountry, edoReanchor)
+      : buildReturnMatrix(assetData, assetLookup, marketsCurrency, activeMarketsCategory, edoReanchor)),
+    [assetData, assetLookup, marketsCurrency, activeMarketsCategory, marketsIsCountry, marketsIsHoldings, marketsIsEdo, marketsCountry, edoReanchor],
   );
   // Markets "Holdings" page: open positions + cash in one currency. Only worked out while that
   // page is on screen; the arithmetic is in lib/holdings.ts.
@@ -5478,6 +5525,14 @@ const PortfolioBacktester = () => {
     const targetStartMs = new Date(targetDateStr).getTime();
     if (actualStartMs - targetStartMs > 93 * 24 * 60 * 60 * 1000) return null;
 
+    // EDO: "3Y" is the bond BOUGHT three years ago and held (rolled at maturity) — a fresh
+    // purchase at the window's start, not a slice of one long chain (see lib/edo.ts).
+    if (ticker === EDO_TICKER && edoData) {
+      const r = edoWindowReturn(edoData, startRow.date, endRow.date);
+      if (r === null) return null;
+      return { return: r, startDate: startRow.date, startPrice: 100, endDate: endRow.date, endPrice: 100 + r };
+    }
+
     const startPrice = Number(startRow[ticker]);
     const totalReturn = ((endPrice / startPrice) - 1) * 100;
 
@@ -5791,20 +5846,58 @@ const PortfolioBacktester = () => {
         ret12m = ((currentPrice - firstPrice) / firstPrice) * 100;
       }
 
+      // EDO: each month's return (and the 12M one) is a FRESH purchase at the previous month-end,
+      // the same rule as the Annual tab and Best to Worst (lib/edo.ts). Prices stay the one chain.
+      const isEdo = asset.ticker === EDO_TICKER && !!edoData;
+      const monthEnd = (d: Date) => new Date(Date.UTC(d.getFullYear(), d.getMonth() + 1, 0)).toISOString().slice(0, 10);
+      const edoRet = (from: Date, to: Date) => edoWindowReturn(edoData!, monthEnd(from), monthEnd(to));
+
       return {
         ticker: asset.ticker,
         name: asset.name,
         prices,
-        returns,
+        returns: isEdo
+          ? returns.map((r, i) => (r === null ? null : edoRet(allMonthDates[i + 8], monthDates[i])))
+          : returns,
         sma10,
         signal,
         signals,
         dd12m,
-        ret12m
+        ret12m: isEdo && ret12m !== null ? edoRet(monthDates[0], monthDates[12]) : ret12m
       };
     });
 
     return { months, assets };
+  };
+
+  /**
+   * EDO in the Monthly tab's calendar returns table: every month (and FY) is re-priced as a
+   * FRESH purchase at the previous month-end (or prior year-end) — the same rule as the Annual
+   * tab and Best to Worst (lib/edo.ts) — rather than read off the one chain the price line
+   * draws. Converted into the display currency with the same month-end FX rates as the line.
+   */
+  const edoFreshCalendar = (mr: MonthlyReturns, displayCcy: string): MonthlyReturns => {
+    if (!edoData || !assetData) return mr;
+    const rowByMonth = new Map<number, AssetRow>();
+    assetData.forEach(r => rowByMonth.set(monthKeyOf(String(r.date)), r));
+    // Return (%) from the month-end of month `from` to the month-end of month `to`, in displayCcy.
+    const fresh = (from: number, to: number): number | null => {
+      const a = rowByMonth.get(from), b = rowByMonth.get(to);
+      if (!a || !b) return null;
+      const r = edoWindowReturn(edoData, String(a.date), String(b.date));
+      if (r === null) return null;
+      const fx = getConversionRate(b, 'PLN', displayCcy) / getConversionRate(a, 'PLN', displayCcy);
+      return ((1 + r / 100) * fx - 1) * 100;
+    };
+    const out: MonthlyReturns = {};
+    Object.entries(mr).forEach(([y, row]) => {
+      const year = Number(y);
+      const monthly = row.monthly.map((v, m) => (v === null ? null : fresh(year * 12 + m - 1, year * 12 + m)));
+      const lastMonth = row.monthly.reduce((acc: number, v, m) => (v !== null ? m : acc), -1);
+      const fy = lastMonth >= 0 ? fresh(year * 12 - 1, year * 12 + lastMonth) : null;
+      out[y] = { ...row, monthly, fy: fy ?? row.fy };
+    });
+    return out;
   };
 
   // Minimum years of history required for an asset to appear in the seasonality
@@ -10311,8 +10404,8 @@ const PortfolioBacktester = () => {
           {/* Markets tab — a one-screen overview: the Return matrix for the category chosen in the */}
           {/* left panel (Assets, Equities, Macro... from the sheet's SnapshotCategory column, plus the */}
           {/* Country page), in Returns or Stats view. All the arithmetic is in lib/markets.ts. */}
-          {/* (The Holdings page is drawn by its own block below, so this one stands aside for it.) */}
-          {isConnected && assetData && activeView === 'markets' && !marketsIsHoldings && (() => {
+          {/* (The Holdings and EDO pages are drawn by their own blocks below, so this one stands aside for them.) */}
+          {isConnected && assetData && activeView === 'markets' && !marketsIsHoldings && !marketsIsEdo && (() => {
             const m = marketsMatrix;
             const allRows = m ? m.sections.flatMap(s => s.rows) : [];
 
@@ -11545,6 +11638,286 @@ const PortfolioBacktester = () => {
             );
           })()}
 
+          {/* Markets "EDO" page — Polish 10-year inflation-linked savings bonds, from the sheet's */}
+          {/* EDO tab: the rates and margins every series was sold on, one series' value since */}
+          {/* purchase against inflation and after tax, and the full series list. Arithmetic in lib/edo.ts. */}
+          {isConnected && assetData && activeView === 'markets' && marketsIsEdo && (() => {
+            const edo = edoData;
+            const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const monthLabel = (d: string) => `${MONTHS[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`; // "Oct 2026"
+            const keyLabel = (k: number) => `${MONTHS[k % 12]} ${Math.floor(k / 12)}`;
+            const keyIso = (k: number) => new Date(Date.UTC(Math.floor(k / 12), (k % 12) + 1, 0)).toISOString().slice(0, 10);
+            const fmtPct2 = (v: number | null) => (v === null ? '–' : `${v.toFixed(2)}%`);
+            const fmtPctSigned = (v: number) => (Math.abs(v) < 0.05 ? '0.0%' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`);
+
+            if (!edo) {
+              return (
+                <div className="mt-2 bg-white rounded-xl border border-gray-200 shadow-sm p-6 text-sm text-gray-500 text-center">
+                  The EDO tab could not be loaded. Try Refresh Data.
+                </div>
+              );
+            }
+
+            // Values in the grid run ahead of today (each coupon year is fixed in advance). The
+            // page shows what has actually happened: month-ends up to the last one before today.
+            const lastDoneKey = monthKeyOf(todayIso()) - 1;
+
+            // Polish CPI index by month, from the price sheet (the same series the Macro page shows).
+            const cpiByKey = new Map<number, number>();
+            assetData.forEach(r => { const v = Number(r[EDO_CPI_TICKER]); if (v > 0) cpiByKey.set(monthKeyOf(String(r.date)), v); });
+            // 1Y inflation (%) at a month-end, from the index 12 months earlier.
+            const cpiYoY = (k: number) => {
+              const a = cpiByKey.get(k - 12), b = cpiByKey.get(k);
+              return a && b ? (b / a - 1) * 100 : null;
+            };
+            // Latest REAL inflation print: the sheet repeats the last CPI into later months, so step
+            // back to the last month the index actually changed (as the Macro page does).
+            let cpiKey = Math.max(-1, ...Array.from(cpiByKey.keys()).filter(k => k <= lastDoneKey + 1));
+            while (cpiByKey.has(cpiKey - 1) && cpiByKey.get(cpiKey - 1) === cpiByKey.get(cpiKey)) cpiKey--;
+            const inflationNow = cpiYoY(cpiKey);
+
+            const bySold = [...edo.series].filter(s => s.sold).sort((a, b) => a.sold.localeCompare(b.sold));
+            const newest = bySold[bySold.length - 1];
+            const running = edo.series.filter(s => s.status === 'running').length;
+            const selected = edo.series.find(s => s.series === edoSelected)
+              ?? bySold.find(s => s.status === 'running') ?? newest;
+
+            // Rates & margins chart: one point per series, at its sale month, beside the 1Y
+            // inflation known when it went on sale (the month-end before).
+            const ratesData = bySold.map(s => {
+              const k = monthKeyOf(s.sold);
+              return { date: s.sold, series: s.series, rate: s.firstYearRate, margin: s.margin, inflation: cpiYoY(k - 1) };
+            });
+
+            // The selected series, month by month since purchase: 100 at the month-end before its
+            // sale month, then the sheet's values up to the last finished month (or maturity).
+            const grid = edo.values.get(selected.series) ?? new Map<number, number>();
+            const buyKey = monthKeyOf(selected.sold) - 1;
+            const endKey = Math.min(lastDoneKey, monthKeyOf(selected.matures) - 1);
+            const cpi0 = cpiByKey.get(buyKey);
+            const seriesData: { date: string; value: number; tax: number; cpi: number | null }[] = [];
+            for (let k = buyKey; k <= endKey; k++) {
+              const v = k === buyKey ? 100 : grid.get(k);
+              if (v === undefined) continue;
+              const c = cpiByKey.get(k);
+              seriesData.push({ date: keyIso(k), value: v, tax: edoAfterTax(v), cpi: cpi0 && c ? (c / cpi0) * 100 : null });
+            }
+            const last = seriesData[seriesData.length - 1];
+            const monthsHeld = last ? monthKeyOf(last.date) - buyKey : 0;
+            const lastCpi = [...seriesData].reverse().find(p => p.cpi !== null)?.cpi ?? null;
+            const realAfterTax = last && lastCpi ? ((last.tax / lastCpi) - 1) * 100 : null;
+
+            // Series table rows, newest first, after the Running / Matured filter.
+            const tableRows = edo.series.filter(s => edoStatusFilter === 'all' || s.status === edoStatusFilter);
+            // Pre-tax return a year since purchase — only once a series has been held a full year
+            // (the app never annualises less than a year).
+            const annualised = (s: typeof selected): number | null => {
+              if (s.value === null || !s.valueAt) return null;
+              const months = monthKeyOf(s.valueAt) - (monthKeyOf(s.sold) - 1);
+              return months >= 12 ? (Math.pow(s.value / 100, 12 / months) - 1) * 100 : null;
+            };
+
+            const lineButtons: { key: 'value' | 'cpi' | 'tax'; label: string }[] = [
+              { key: 'value', label: 'Value' }, { key: 'cpi', label: 'Inflation' }, { key: 'tax', label: 'After tax' },
+            ];
+            // A line can be switched off, but not the last one left on (an empty chart says nothing).
+            const toggleLine = (k: 'value' | 'cpi' | 'tax') => setEdoLines(prev => {
+              const next = { ...prev, [k]: !prev[k] };
+              return next.value || next.cpi || next.tax ? next : prev;
+            });
+            const allOn = edoLines.value && edoLines.cpi && edoLines.tax;
+            const shortHistory = seriesData.length <= 25;
+            const xTick = (d: string) => (shortHistory ? `${MONTHS[Number(d.slice(5, 7)) - 1]}${d.slice(2, 4)}` : d.slice(0, 4));
+            // Long histories: one tick per year, on its January, so no year label repeats.
+            const seriesTicks = shortHistory ? undefined : seriesData.map(p => p.date).filter(d => d.slice(5, 7) === '01');
+            const latestValueAt = edo.series.reduce((m, s) => (s.valueAt > m ? s.valueAt : m), '');
+
+            return (
+              <div className="mt-2">
+                {/* Page-level filter: which series the table lists */}
+                <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-gray-500 mr-1">Series:</span>
+                    {([['all', 'All'], ['running', 'Running'], ['matured', 'Matured']] as const).map(([k, label]) => (
+                      <button
+                        key={k}
+                        onClick={() => setEdoStatusFilter(k)}
+                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                          edoStatusFilter === k ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >{label}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+                  {/* Card header */}
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+                    <div>
+                      <h3 className="text-md font-semibold text-gray-800 inline">EDO</h3>
+                      <span className="text-xs text-gray-500 ml-2 uppercase tracking-wide">10-year inflation-linked savings bonds · per 100 zl · pre-tax unless marked</span>
+                    </div>
+                    {latestValueAt && (
+                      <span className="text-xs text-gray-500 border border-gray-200 rounded px-2 py-0.5">Values as of {monthLabel(latestValueAt)}</span>
+                    )}
+                  </div>
+
+                  {/* Summary tiles: what is on sale now, today's inflation, how many series */}
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 mb-4">
+                    {[
+                      {
+                        label: 'On sale now', cls: 'text-gray-800',
+                        value: newest ? `${newest.series} · ${fmtPct2(newest.firstYearRate)}` : '–',
+                        sub: newest?.margin !== null && newest ? `then CPI + ${fmtPct2(newest.margin)}` : '',
+                      },
+                      {
+                        label: 'Inflation PL 1Y', cls: 'text-gray-800',
+                        value: inflationNow !== null ? `${inflationNow.toFixed(1)}%` : '–',
+                        sub: cpiKey >= 0 ? keyLabel(cpiKey) : '',
+                      },
+                      {
+                        label: 'Series', cls: 'text-gray-800',
+                        value: `${running} running`, sub: `${edo.series.length - running} matured`,
+                      },
+                    ].map(t => (
+                      <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0">
+                        <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
+                        <div className="text-sm whitespace-nowrap truncate">
+                          <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
+                          <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Rates & margins: what each series was sold on, beside the inflation of the day */}
+                  <div className="mb-6">
+                    <div className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold mb-1">Rates by sale month</div>
+                    <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-1">
+                      <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: CHART_PALETTE.blue }} />First-year rate</span>
+                      <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: CHART_PALETTE.teal }} />Margin over CPI (years 2–10)</span>
+                      <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: CHART_PALETTE.terracotta }} />Inflation PL 1Y when sold</span>
+                    </div>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <LineChart data={ratesData} margin={{ top: 5, right: 10, bottom: 0, left: 0 }}>
+                        <XAxis dataKey="date" tickFormatter={d => String(d).slice(0, 4)} tick={{ fontSize: 11 }} minTickGap={30} />
+                        <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 11 }} width={40} />
+                        <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="3 3" />
+                        <Tooltip
+                          labelFormatter={(d, p) => `${(p?.[0]?.payload as { series?: string })?.series ?? ''} · sold ${monthLabel(String(d))}`}
+                          formatter={(v: number, name: string) => [`${Number(v).toFixed(2)}%`, name]}
+                        />
+                        <Line type="stepAfter" dataKey="rate" name="First-year rate" stroke={CHART_PALETTE.blue} strokeWidth={1.75} dot={false} isAnimationActive={false} connectNulls />
+                        <Line type="stepAfter" dataKey="margin" name="Margin over CPI" stroke={CHART_PALETTE.teal} strokeWidth={1.75} dot={false} isAnimationActive={false} connectNulls />
+                        <Line type="monotone" dataKey="inflation" name="Inflation PL 1Y" stroke={CHART_PALETTE.terracotta} strokeWidth={1.25} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* One series since purchase: value, inflation over the same months, value after tax */}
+                  <div className="mb-6">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                      <div className="text-sm">
+                        <span className="font-semibold text-gray-800">{selected.series}</span>
+                        <span className="text-xs text-gray-500 ml-2">
+                          sold {monthLabel(selected.sold)} · matures {monthLabel(selected.matures)} · {fmtPct2(selected.firstYearRate)} then CPI + {fmtPct2(selected.margin)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {lineButtons.map(b => (
+                          <button
+                            key={b.key}
+                            onClick={() => toggleLine(b.key)}
+                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                              edoLines[b.key] ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >{b.label}</button>
+                        ))}
+                        <button
+                          onClick={() => setEdoLines(allOn ? { value: true, cpi: false, tax: false } : { value: true, cpi: true, tax: true })}
+                          className="ml-1 px-2.5 py-1 rounded text-xs font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+                        >{allOn ? 'Value only' : 'All 3'}</button>
+                      </div>
+                    </div>
+                    {last ? (
+                      <>
+                        {/* What the lines end at, in one line: the result since purchase */}
+                        <div className="text-xs text-gray-600 mb-1 tabular-nums">
+                          {monthsHeld} months to {monthLabel(last.date)}: <span className="font-medium text-gray-800">{fmtPctSigned(last.value - 100)}</span> pre-tax
+                          {' · '}<span className="font-medium text-gray-800">{fmtPctSigned(last.tax - 100)}</span> after {Math.round(EDO_TAX_RATE * 100)}% tax
+                          {lastCpi !== null && <>{' · '}inflation {fmtPctSigned(lastCpi - 100)}</>}
+                          {realAfterTax !== null && <>{' · '}real after tax <span className={`font-medium ${realAfterTax >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtPctSigned(realAfterTax)}</span></>}
+                        </div>
+                        <ResponsiveContainer width="100%" height={260}>
+                          <LineChart data={seriesData} margin={{ top: 5, right: 10, bottom: 0, left: 0 }}>
+                            <XAxis dataKey="date" ticks={seriesTicks} tickFormatter={xTick} tick={{ fontSize: 11 }} minTickGap={20} />
+                            <YAxis domain={['auto', 'auto']} tickFormatter={v => formatPrice(Number(v))} tick={{ fontSize: 11 }} width={44} />
+                            <ReferenceLine y={100} stroke="#9ca3af" strokeDasharray="3 3" />
+                            <Tooltip
+                              labelFormatter={d => monthLabel(String(d))}
+                              formatter={(v: number, name: string) => [formatPrice(Number(v)), name]}
+                            />
+                            {edoLines.value && <Line type="monotone" dataKey="value" name="Value" stroke={CHART_PALETTE.blue} strokeWidth={2} dot={false} isAnimationActive={false} />}
+                            {edoLines.cpi && <Line type="monotone" dataKey="cpi" name="Inflation (CPI = 100 at purchase)" stroke={CHART_PALETTE.terracotta} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />}
+                            {edoLines.tax && <Line type="monotone" dataKey="tax" name={`After ${Math.round(EDO_TAX_RATE * 100)}% tax`} stroke={CHART_PALETTE.teal} strokeWidth={1.75} dot={false} isAnimationActive={false} />}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </>
+                    ) : (
+                      <p className="text-sm text-gray-500 py-6 text-center">{selected.series} has no finished month yet.</p>
+                    )}
+                  </div>
+
+                  {/* The full series list. Click a row to chart it. */}
+                  <div className="overflow-x-auto max-h-[480px] overflow-y-auto border border-gray-100 rounded">
+                    <table className="w-full text-sm border-collapse">
+                      <thead className="sticky top-0">
+                        <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
+                          <th className="text-left font-semibold text-gray-700 px-3 py-2">Series</th>
+                          <th className="text-left font-medium px-2 py-2">Sold</th>
+                          <th className="text-left font-medium px-2 py-2">Matures</th>
+                          <th className="text-right font-medium px-2 py-2 whitespace-nowrap">1st year</th>
+                          <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title="Margin over CPI paid in years 2-10">Margin</th>
+                          <th className="text-left font-medium px-2 py-2">Status</th>
+                          <th className="text-right font-medium px-2 py-2">Value</th>
+                          <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={`100 + ${Math.round((1 - EDO_TAX_RATE) * 100)}% of the gain: ${Math.round(EDO_TAX_RATE * 100)}% tax is due on everything above 100`}>After tax</th>
+                          <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title="Pre-tax return a year since purchase. Blank until a series has been held a full year.">Per year</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tableRows.map(s => {
+                          const isSel = s.series === selected.series;
+                          const ann = annualised(s);
+                          return (
+                            <tr
+                              key={s.series}
+                              onClick={() => setEdoSelected(s.series)}
+                              className={`border-t border-gray-100 cursor-pointer ${isSel ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                            >
+                              <td className="px-3 py-1 font-medium text-gray-800 whitespace-nowrap">{s.series}</td>
+                              <td className="px-2 py-1 text-gray-600 whitespace-nowrap">{s.sold ? monthLabel(s.sold) : '–'}</td>
+                              <td className="px-2 py-1 text-gray-600 whitespace-nowrap">{s.matures ? monthLabel(s.matures) : '–'}</td>
+                              <td className="px-2 py-1 text-right tabular-nums">{fmtPct2(s.firstYearRate)}</td>
+                              <td className="px-2 py-1 text-right tabular-nums">{fmtPct2(s.margin)}</td>
+                              <td className={`px-2 py-1 text-xs ${s.status === 'running' ? 'text-green-700' : 'text-gray-500'}`}>{s.status}</td>
+                              <td className="px-2 py-1 text-right tabular-nums" title={s.valueAt ? `as of ${monthLabel(s.valueAt)}` : undefined}>{s.value !== null ? formatPrice(s.value) : '–'}</td>
+                              <td className="px-2 py-1 text-right tabular-nums text-gray-600">{s.value !== null ? formatPrice(edoAfterTax(s.value)) : '–'}</td>
+                              <td className="px-2 py-1 text-right tabular-nums text-gray-600">{ann !== null ? `${ann.toFixed(2)}%` : '–'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    As an asset (Backtest, Monthly, Annual, Best to Worst), EDO is bought at par on the start date — the series sold the following
+                    month — held to maturity and rolled into the next series. Pre-tax; the early-redemption fee is ignored.
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Monthly Prices Section - Shows 13 months of raw prices with heatmap and signals */}
           {isConnected && assetData && activeView === 'monthlyPrices' && (
             <div className="mt-2">
@@ -12409,7 +12782,9 @@ const PortfolioBacktester = () => {
                           value: (row[monthlySelectedTicker] as number) * getConversionRate(row, selectedAssetCcy, monthlyDisplayCurrency),
                           drawdown: 0 // not used by calculateMonthlyReturns
                         })) || [];
-                      const assetMonthlyReturns = calculateMonthlyReturns(assetReturnPoints);
+                      const assetMonthlyReturns = monthlySelectedTicker === EDO_TICKER
+                        ? edoFreshCalendar(calculateMonthlyReturns(assetReturnPoints), monthlyDisplayCurrency)
+                        : calculateMonthlyReturns(assetReturnPoints);
 
                       // The id lets the Markets tab scroll straight here after opening an asset.
                       return (
