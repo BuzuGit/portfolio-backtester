@@ -11906,7 +11906,7 @@ const PortfolioBacktester = () => {
                           {realAfterTax !== null && <>{' · '}real after tax <span className={`font-medium ${realAfterTax >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtPctSigned(realAfterTax)}</span></>}
                         </div>
                         <ResponsiveContainer width="100%" height={260}>
-                          <LineChart data={seriesData} margin={{ top: 5, right: 10, bottom: 0, left: 0 }}>
+                          <LineChart data={seriesData} margin={{ top: 5, right: 70, bottom: 0, left: 0 }}>
                             <XAxis dataKey="date" ticks={seriesTicks} tickFormatter={xTick} tick={{ fontSize: 11 }} minTickGap={20} />
                             <YAxis domain={['auto', 'auto']} tickFormatter={v => formatPrice(Number(v))} tick={{ fontSize: 11 }} width={44} />
                             <ReferenceLine y={100} stroke="#9ca3af" strokeDasharray="3 3" />
@@ -11917,6 +11917,13 @@ const PortfolioBacktester = () => {
                             {edoLines.value && <Line type="monotone" dataKey="value" name="Value" stroke={CHART_PALETTE.blue} strokeWidth={2} dot={false} isAnimationActive={false} />}
                             {edoLines.cpi && <Line type="monotone" dataKey="cpi" name="Inflation (CPI = 100 at purchase)" stroke={CHART_PALETTE.terracotta} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />}
                             {edoLines.tax && <Line type="monotone" dataKey="tax" name={`After ${Math.round(EDO_TAX_RATE * 100)}% tax`} stroke={CHART_PALETTE.teal} strokeWidth={1.75} dot={false} isAnimationActive={false} />}
+                            {/* Where each shown line ends, as a bubble at the right edge in the line's */}
+                            {/* colour — the same bubbles as the Monthly tab's price chart. */}
+                            <Customized component={<EdgeBubbles defs={[
+                              ...(edoLines.value ? [{ value: last.value, color: CHART_PALETTE.blue, label: formatPrice(last.value) }] : []),
+                              ...(edoLines.cpi && lastCpi !== null ? [{ value: lastCpi, color: CHART_PALETTE.terracotta, label: formatPrice(lastCpi) }] : []),
+                              ...(edoLines.tax ? [{ value: last.tax, color: CHART_PALETTE.teal, label: formatPrice(last.tax) }] : []),
+                            ]} />} />
                           </LineChart>
                         </ResponsiveContainer>
                       </>
