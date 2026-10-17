@@ -12,6 +12,8 @@
   but all happening automatically in the browser!
 */
 
+import { parseEdoSheet, withEdoColumn, EDO_TICKER, type EdoData } from './edo';
+
 // The base URL for your published Google Sheet
 const SHEET_BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM3Qq52UZwmQyRQrG_YER6-RNnagk2GG9Os65kFPtkNTpNtZywaoMEV8w_xDDuu0eRdEoPWgn/pub';
 
@@ -52,6 +54,9 @@ const LEDGER_SHEET_URL = `${SHEET_BASE_URL}?gid=378728363&output=csv`;
 // gid=145431423 is the Portfolios tab — ready-made portfolios (name + assets + weights)
 // offered in the Backtest tab's "Preset" dropdown
 const PORTFOLIOS_SHEET_URL = `${SHEET_BASE_URL}?gid=145431423&output=csv`;
+// gid=1035374877 is the EDO tab — Polish 10-year inflation-linked savings bonds: every series'
+// terms plus a month-end value grid. Read by lib/edo.ts, which turns it into the "EDO" asset.
+const EDO_SHEET_URL = `${SHEET_BASE_URL}?gid=1035374877&output=csv`;
 
 // Type definitions - these describe the shape of our data
 // (TypeScript uses these to catch errors and provide autocomplete)
@@ -292,6 +297,7 @@ export interface ParsedData {
   dailyData: DailyNavRow[];   // Daily NAV + inflation data (from Daily sheet)
   ledgerData: LedgerRow[];    // Full transaction ledger (from Transactions sheet)
   presetPortfolios: PresetPortfolio[];  // Ready-made portfolios (from Portfolios sheet)
+  edo: EdoData | null;        // EDO bond series + value grid (from EDO sheet); null if it failed to load
 }
 
 // One ready-made portfolio from the "Portfolios" sheet (gid=145431423),
@@ -484,6 +490,9 @@ async function fetchSheet(url: string, label: string): Promise<Response> {
 export async function fetchSheetData(): Promise<ParsedData> {
   // The small Portfolios tab starts loading now, alongside the rest; it is awaited near the end
   const presetsRequest = fetchSheet(PORTFOLIOS_SHEET_URL, 'Portfolios').catch(() => null);
+  // The EDO tab too (~1-4s, so it is done long before the Daily tab). Optional: if it fails,
+  // the app loads normally, just without the EDO asset and page.
+  const edoRequest = fetchSheet(EDO_SHEET_URL, 'EDO').catch(() => null);
   // Fetch all seven sheets in parallel for speed
   const [dataResponse, lookupResponse, yearsResponse, dailyResponse, ledgerResponse] = await Promise.all([
     fetchSheet(DATA_SHEET_URL, 'Price data'),
@@ -599,9 +608,31 @@ export async function fetchSheetData(): Promise<ParsedData> {
     console.warn('Failed to parse Portfolios sheet (non-fatal):', err);
   }
 
+  // EDO tab. Its request was started at the top. If it parsed, EDO becomes an ordinary price
+  // column ("EDO", one chain bought at the first row and rolled at each maturity — see
+  // lib/edo.ts), so every tab can pick it like any other asset.
+  let edo: EdoData | null = null;
+  let pricedData = data;
+  try {
+    const res = await edoRequest;
+    if (res && res.ok) {
+      const edoCsv = await res.text();
+      if (edoCsv.trim() !== 'Loading...') edo = parseEdoSheet(parseCSVRows(edoCsv));
+    }
+    if (edo) {
+      pricedData = withEdoColumn(data, edo);
+      if (!assets.includes(EDO_TICKER)) assets.push(EDO_TICKER);
+      console.log(`EDO sheet: parsed ${edo.series.length} series over ${edo.months.length} months`);
+    } else {
+      console.warn('EDO sheet unavailable — the EDO asset and page will be missing');
+    }
+  } catch (err) {
+    console.warn('Failed to parse EDO sheet (non-fatal):', err);
+  }
+
   console.log(`Lookup table has ${lookup.length} assets: ${lookup.map(l => l.ticker).join(', ')}`);
 
-  return { data, assets, lookup, yearsData, dailyData, ledgerData, presetPortfolios };
+  return { data: pricedData, assets, lookup, yearsData, dailyData, ledgerData, presetPortfolios, edo };
 }
 
 /**
