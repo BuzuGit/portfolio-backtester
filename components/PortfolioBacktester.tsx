@@ -11688,6 +11688,13 @@ const PortfolioBacktester = () => {
               const k = monthKeyOf(s.sold);
               return { date: s.sold, series: s.series, rate: s.firstYearRate, margin: s.margin, inflation: cpiYoY(k - 1) };
             });
+            // Its Y axis, set by hand: left to itself the chart picks round steps of 7 and starts at
+            // -7% for a low point of -1.x%, which squashes the lines. Instead: the lowest point
+            // rounded down to a whole percent (-2%), then zero, then steps of 4 to above the highest.
+            const ratesVals = ratesData.flatMap(d => [d.rate, d.inflation]).filter((v): v is number => v !== null);
+            const ratesLo = Math.min(0, Math.floor(Math.min(...ratesVals)));
+            const ratesHi = Math.max(4, Math.ceil(Math.max(...ratesVals) / 4) * 4);
+            const ratesTicks = [...(ratesLo < 0 ? [ratesLo] : []), ...Array.from({ length: ratesHi / 4 + 1 }, (_, i) => i * 4)];
 
             // The selected series, month by month since purchase: 100 at the month-end before its
             // sale month, then the sheet's values up to the last finished month (or maturity).
@@ -11838,7 +11845,7 @@ const PortfolioBacktester = () => {
                     <ResponsiveContainer width="100%" height={220}>
                       <LineChart data={ratesData} margin={{ top: 5, right: 10, bottom: 0, left: 0 }}>
                         <XAxis dataKey="date" tickFormatter={d => String(d).slice(0, 4)} tick={{ fontSize: 11 }} minTickGap={30} />
-                        <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 11 }} width={40} />
+                        <YAxis domain={[ratesLo, ratesHi]} ticks={ratesTicks} interval={0} tickFormatter={v => `${v}%`} tick={{ fontSize: 11 }} width={40} />
                         <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="3 3" />
                         <Tooltip
                           labelFormatter={(d, p) => `${(p?.[0]?.payload as { series?: string })?.series ?? ''} · sold ${monthLabel(String(d))}`}
