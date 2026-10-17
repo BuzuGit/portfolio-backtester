@@ -12,7 +12,7 @@
   but all happening automatically in the browser!
 */
 
-import { parseEdoSheet, withEdoColumn, EDO_TICKER, type EdoData } from './edo';
+import { parseEdoSheet, withEdoColumn, withEdoSeriesColumns, EDO_TICKER, type EdoData } from './edo';
 
 // The base URL for your published Google Sheet
 const SHEET_BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM3Qq52UZwmQyRQrG_YER6-RNnagk2GG9Os65kFPtkNTpNtZywaoMEV8w_xDDuu0eRdEoPWgn/pub';
@@ -621,6 +621,11 @@ export async function fetchSheetData(): Promise<ParsedData> {
     }
     if (edo) {
       pricedData = withEdoColumn(data, edo);
+      // A single series named in the Lookup tab (e.g. "EDO0734", a bond actually held) also gets
+      // its own price column, so Positions and Holdings can value it.
+      const seriesTickers = lookup.map(l => l.ticker).filter(t => edo!.values.has(t));
+      pricedData = withEdoSeriesColumns(pricedData, edo, seriesTickers);
+      seriesTickers.forEach(t => { if (!assets.includes(t)) assets.push(t); });
       if (!assets.includes(EDO_TICKER)) assets.push(EDO_TICKER);
       console.log(`EDO sheet: parsed ${edo.series.length} series over ${edo.months.length} months`);
     } else {

@@ -243,6 +243,41 @@ export function withEdoColumn(rows: AssetRow[], edo: EdoData, startDate?: string
   });
 }
 
+/**
+ * Adds one price column per named SERIES (e.g. "EDO0734") — the bond itself, not the chain — so a
+ * real holding of that series can be valued and charted like any other asset. The price of one
+ * bond (100 zl nominal) is the sheet's value per 100 zl, at each month-end from its first month
+ * to the month before it matures. Same current-month rule as edoChain: a month-end still in the
+ * future is prorated to today. Only series the sheet has are added; rows are copied, not touched.
+ *
+ * The data load passes every Lookup ticker that is an EDO series name, so adding a row such as
+ * "EDO0734" to the Lookup tab is what makes that bond appear in Positions and Holdings.
+ */
+export function withEdoSeriesColumns(rows: AssetRow[], edo: EdoData, seriesNames: string[], today: string = todayIso()): AssetRow[] {
+  const wanted = seriesNames.filter(s => edo.values.has(s));
+  if (!wanted.length) return rows;
+  return rows.map(r => {
+    const d = String(r.date);
+    const key = monthKeyOf(d);
+    const copy: AssetRow = { ...r };
+    wanted.forEach(s => {
+      const grid = edo.values.get(s)!;
+      const v = grid.get(key);
+      if (v === undefined) return;
+      if (d > today) {
+        // Current month: between last month-end (100 at par if bought this month) and this one.
+        const prev = grid.get(key - 1) ?? 100;
+        const prevEnd = new Date(Date.UTC(Math.floor((key - 1) / 12), ((key - 1) % 12) + 1, 0)).toISOString().slice(0, 10);
+        const frac = Math.min(1, Math.max(0, daysBetween(prevEnd, today) / daysBetween(prevEnd, d)));
+        copy[s] = prev + (v - prev) * frac;
+      } else {
+        copy[s] = v;
+      }
+    });
+    return copy;
+  });
+}
+
 /** After-tax value per 100 zl: 19% is due on the gain above 100 (nothing on a loss). */
 export const edoAfterTax = (value: number): number =>
   value > 100 ? 100 + (value - 100) * (1 - EDO_TAX_RATE) : value;
