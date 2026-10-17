@@ -11695,6 +11695,19 @@ const PortfolioBacktester = () => {
             const ratesLo = Math.min(0, Math.floor(Math.min(...ratesVals)));
             const ratesHi = Math.max(4, Math.ceil(Math.max(...ratesVals) / 4) * 4);
             const ratesTicks = [...(ratesLo < 0 ? [ratesLo] : []), ...Array.from({ length: ratesHi / 4 + 1 }, (_, i) => i * 4)];
+            // The highest and lowest point of each line, marked like the Monthly tab's price chart:
+            // a green dot for the max, a red one for the min (the first time it was reached).
+            const extremes = (key: 'rate' | 'inflation') => {
+              const pts = ratesData.filter(d => d[key] !== null);
+              if (!pts.length) return [];
+              const hi = pts.reduce((a, b) => ((b[key] as number) > (a[key] as number) ? b : a));
+              const lo = pts.reduce((a, b) => ((b[key] as number) < (a[key] as number) ? b : a));
+              return [
+                { key: `${key}-max`, date: hi.date, v: hi[key] as number, max: true },
+                { key: `${key}-min`, date: lo.date, v: lo[key] as number, max: false },
+              ];
+            };
+            const ratesExtremes = [...extremes('rate'), ...extremes('inflation')];
 
             // The selected series, month by month since purchase: 100 at the month-end before its
             // sale month, then the sheet's values up to the last finished month (or maturity).
@@ -11842,8 +11855,8 @@ const PortfolioBacktester = () => {
                       <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: CHART_PALETTE.blue }} />First-year rate</span>
                       <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: CHART_PALETTE.terracotta }} />Inflation PL 1Y when sold</span>
                     </div>
-                    <ResponsiveContainer width="100%" height={220}>
-                      <LineChart data={ratesData} margin={{ top: 5, right: 10, bottom: 0, left: 0 }}>
+                    <ResponsiveContainer width="100%" height={240}>
+                      <LineChart data={ratesData} margin={{ top: 22, right: 10, bottom: 0, left: 0 }}>
                         <XAxis dataKey="date" tickFormatter={d => String(d).slice(0, 4)} tick={{ fontSize: 11 }} minTickGap={30} />
                         <YAxis domain={[ratesLo, ratesHi]} ticks={ratesTicks} interval={0} tickFormatter={v => `${v}%`} tick={{ fontSize: 11 }} width={40} />
                         <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="3 3" />
@@ -11853,6 +11866,24 @@ const PortfolioBacktester = () => {
                         />
                         <Line type="stepAfter" dataKey="rate" name="First-year rate" stroke={CHART_PALETTE.blue} strokeWidth={1.75} dot={false} isAnimationActive={false} connectNulls />
                         <Line type="monotone" dataKey="inflation" name="Inflation PL 1Y" stroke={CHART_PALETTE.terracotta} strokeWidth={1.25} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                        {/* Max (green, value above) and min (red, value below) of each line */}
+                        {ratesExtremes.map(p => (
+                          <ReferenceDot
+                            key={p.key}
+                            x={p.date}
+                            y={p.v}
+                            r={5}
+                            fill={p.max ? '#22c55e' : '#ef4444'}
+                            stroke="#fff"
+                            strokeWidth={2}
+                            // A low sitting on the bottom of the axis would print its value over the
+                            // year labels, so that one is written beside the dot instead.
+                            label={{
+                              value: `${p.v.toFixed(2)}%`, fontSize: 11, fill: '#111827', fontWeight: 600,
+                              position: p.max ? 'top' : p.v - ratesLo < (ratesHi - ratesLo) * 0.12 ? 'right' : 'bottom',
+                            }}
+                          />
+                        ))}
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
@@ -11906,7 +11937,7 @@ const PortfolioBacktester = () => {
                     {last ? (
                       <>
                         {/* What the lines end at, in one line: the result since purchase */}
-                        <div className="text-xs text-gray-600 mb-1 tabular-nums">
+                        <div className="text-sm text-gray-600 mb-2 tabular-nums">
                           {monthsHeld} months to {monthLabel(last.date)}: <span className="font-medium text-gray-800">{fmtPctSigned(last.value - 100)}</span> pre-tax
                           {' · '}<span className="font-medium text-gray-800">{fmtPctSigned(last.tax - 100)}</span> after {Math.round(EDO_TAX_RATE * 100)}% tax
                           {lastCpi !== null && <>{' · '}inflation {fmtPctSigned(lastCpi - 100)}</>}
