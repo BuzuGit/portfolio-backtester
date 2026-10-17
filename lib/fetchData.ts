@@ -480,6 +480,36 @@ async function fetchSheet(url: string, label: string): Promise<Response> {
 }
 
 /**
+ * Reads a tab's text, retrying while Google answers with its placeholder "Loading..." instead of
+ * the data. It does that a lot right after the spreadsheet is edited (measured Oct 2026: the price
+ * tab answered "Loading..." 6 times in a row, the EDO tab ~30% of the time, in bursts of up to
+ * four over ~3 seconds). The placeholder comes back instantly, so quick retries just land inside
+ * the same burst: wait 1.5s, 3s, 4.5s... (~22s at worst over 6 attempts), each time with a URL of
+ * its own so no cache can hand back the placeholder again.
+ *
+ * Returns the text of the last answer: the real data, or — if every attempt was the placeholder
+ * or a 4xx (gone / unpublished; retrying can't fix it) — whatever came back, for the caller to
+ * report or ignore exactly as before.
+ */
+async function sheetTextWithRetry(first: Response | null, url: string, label: string, attempts = 6): Promise<string> {
+  let res = first;
+  let text = '';
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (res && res.ok) {
+      text = await res.text();
+      if (text.trim() !== 'Loading...') return text;
+    } else if (res && res.status < 500 && res.status !== 429) {
+      return text;
+    }
+    if (attempt === attempts) break;
+    console.log(`${label} sheet not ready ("Loading..."), retrying (${attempt + 1}/${attempts})...`);
+    await new Promise(r => setTimeout(r, 1500 * attempt));
+    res = await fetchSheet(`${url}&retry=${Date.now()}`, label).catch(() => null);
+  }
+  return text;
+}
+
+/**
  * Fetches and parses CSV data from both Google Sheet tabs.
  * - Tab 1: Raw price data
  * - Tab 2: Lookup table (ticker -> asset name)
@@ -511,9 +541,11 @@ export async function fetchSheetData(): Promise<ParsedData> {
   }
 
   // Get CSV text from responses
+  // (Retrying while Google answers "Loading..." — see sheetTextWithRetry. These two tabs are the
+  // core of the app: one placeholder here used to fail the whole load with "Not enough data in CSV".)
   const [dataCsvText, lookupCsvText] = await Promise.all([
-    dataResponse.text(),
-    lookupResponse.text()
+    sheetTextWithRetry(dataResponse, DATA_SHEET_URL, 'Price data'),
+    sheetTextWithRetry(lookupResponse, LOOKUP_SHEET_URL, 'Lookup table'),
   ]);
 
   // Parse core CSVs
@@ -614,11 +646,10 @@ export async function fetchSheetData(): Promise<ParsedData> {
   let edo: EdoData | null = null;
   let pricedData = data;
   try {
-    const res = await edoRequest;
-    if (res && res.ok) {
-      const edoCsv = await res.text();
-      if (edoCsv.trim() !== 'Loading...') edo = parseEdoSheet(parseCSVRows(edoCsv));
-    }
+    // Retrying while Google answers "Loading..." (see sheetTextWithRetry): without it an unlucky
+    // refresh silently lost EDO — and with it the price of any EDO bond held in Positions / Holdings.
+    const edoCsv = await sheetTextWithRetry(await edoRequest, EDO_SHEET_URL, 'EDO');
+    if (edoCsv && edoCsv.trim() !== 'Loading...') edo = parseEdoSheet(parseCSVRows(edoCsv));
     if (edo) {
       pricedData = withEdoColumn(data, edo);
       // A single series named in the Lookup tab (e.g. "EDO0734", a bond actually held) also gets
