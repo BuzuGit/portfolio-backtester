@@ -415,10 +415,11 @@ const prepareRows = (data: AssetRow[]) => {
 /**
  * For a row with no single price history. An EDO bond's path depends on when it is bought, so
  * each window must be priced from a purchase AT that window's start (see lib/edo.ts). Given the
- * table's rows and a window's start date, return the same rows (same order) with this ticker's
- * column re-drawn from that start — or null for every ordinary ticker.
+ * table's rows and a window's start date, return this ticker's price at each row (same order),
+ * re-drawn from that start — or null for every ordinary ticker. Just the numbers: the table
+ * re-prices that one column without copying any rows.
  */
-export type Reanchor = (ticker: string, startDate: string, rows: AssetRow[]) => AssetRow[] | null;
+export type Reanchor = (ticker: string, startDate: string, rows: AssetRow[]) => (number | null)[] | null;
 
 /**
  * One asset or FX row, measured in `currency`. Returns null for an FX row that has nothing to
@@ -535,6 +536,31 @@ const buildPriceRow = (
     let firstIdx = 0;
     while (firstIdx < endIdx && convAt[firstIdx] === null) firstIdx++;
 
+    // How a window starting at `startDate` reads this row's value at row i (view currency).
+    // Ordinary rows: the values above. A row with no single history (EDO, see Reanchor) is
+    // re-priced from the window's own start — and since converting a price only multiplies it,
+    // the re-priced value is the converted one scaled by (new price ÷ the sheet's price).
+    // `explainAt` gives the tooltip working for the same re-priced value.
+    type WindowReader = ((i: number) => number | null) & { reanchored: boolean; explainAt: (i: number) => ValueWorking | null };
+    const windowValueReader = (startDate: string): WindowReader => {
+      const vals = reanchor?.(a.ticker, startDate, rows) ?? null;
+      const read = ((i: number) => {
+        if (!vals) return convAt[i];
+        const base = positive(rows[i], a.ticker), v = vals[i], c = convAt[i];
+        if (base === null || v === null || c === null) return null;
+        // No conversion happening (native / own currency): use the value itself, so no float
+        // drift from scaling can move a rounded figure.
+        return c === base ? v : c * (v / base);
+      }) as WindowReader;
+      read.reanchored = vals !== null;
+      read.explainAt = (i: number) => {
+        if (!vals) return explain(rows[i]);
+        const v = vals[i];
+        return v === null ? null : explain({ ...rows[i], [a.ticker]: v });
+      };
+      return read;
+    };
+
     MARKETS_PERIODS.forEach(p => {
       // YTD starts at last December; Max at the first month with data; everything else N months
       // before the end.
@@ -542,13 +568,12 @@ const buildPriceRow = (
       if (startIdx === undefined || startIdx >= endIdx || endValue === null) return;
       // A row with no single history (EDO) is re-drawn from this window's own start; every
       // other row reads the values worked out above.
-      const windowRows = reanchor?.(a.ticker, String(rows[startIdx].date), rows) ?? null;
-      const valAt = (i: number) => (windowRows ? conv(windowRows[i]) : convAt[i]);
+      const valAt = windowValueReader(String(rows[startIdx].date));
       const startValue = valAt(startIdx), windowEnd = valAt(endIdx);
       if (startValue === null || windowEnd === null) return;
       returns[p] = (windowEnd / startValue - 1) * 100;
-      const startWorking = explain((windowRows ?? rows)[startIdx]);
-      const windowEndWorking = windowRows ? explain(windowRows[endIdx]) : endWorking;
+      const startWorking = valAt.explainAt(startIdx);
+      const windowEndWorking = valAt.reanchored ? valAt.explainAt(endIdx) : endWorking;
       if (startWorking && windowEndWorking) {
         working[p] = { startDate: String(rows[startIdx].date), start: startWorking, endDate: String(endRow.date), end: windowEndWorking };
       }
@@ -565,9 +590,8 @@ const buildPriceRow = (
     STATS_YEARS.forEach(y => {
       const from = indexByMonth.get(y * 12 - 1), to = indexByMonth.get(y * 12 + 11);
       if (from === undefined || to === undefined || to > endIdx) return;
-      const yearRows = reanchor?.(a.ticker, String(rows[from].date), rows) ?? null;
-      const a0 = yearRows ? conv(yearRows[from]) : convAt[from];
-      const a1 = yearRows ? conv(yearRows[to]) : convAt[to];
+      const yearVal = windowValueReader(String(rows[from].date));
+      const a0 = yearVal(from), a1 = yearVal(to);
       if (a0 !== null && a1 !== null) yearReturns[y] = (a1 / a0 - 1) * 100;
     });
 

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 /*
   PORTFOLIO BACKTESTER COMPONENT
 
@@ -24,7 +24,7 @@ import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersF
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
 import { buildHoldings, portfolioClassOf, MARKETS_HOLDINGS, HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, HoldingsCurrency, HoldingRow } from '@/lib/holdings';
-import { EdoData, EDO_TICKER, EDO_CPI_TICKER, EDO_TAX_RATE, MARKETS_EDO, edoWindowReturn, withEdoColumn, edoAfterTax, monthKeyOf, todayIso } from '@/lib/edo';
+import { EdoData, EDO_TICKER, EDO_CPI_TICKER, EDO_TAX_RATE, MARKETS_EDO, edoWindowReturn, withEdoColumn, edoChainOnRows, edoAfterTax, monthKeyOf, monthEndIso, daysBetween, todayIso } from '@/lib/edo';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -1612,6 +1612,28 @@ const PortfolioBacktester = () => {
   const [edoData, setEdoData] = useState<EdoData | null>(null);
   const [assetLookup, setAssetLookup] = useState<AssetLookup[]>([]);    // Lookup table (ticker -> name)
 
+  // ---- The one place that knows some assets have no single price history ----
+  // EDO's path depends on WHEN you buy it (lib/edo.ts): a window starting in 2015 holds the bond
+  // sold then, not a slice of one chain begun in 2009. Every window calculation asks these instead
+  // of special-casing EDO, so a new start-dependent asset — or a new window view — only needs
+  // wiring here.
+  //   isStartDependent(t)        does this ticker's price path depend on the window's start?
+  //   windowPrices(t, start, end) the start/end prices of a window bought fresh at `start`, and
+  //                               its return in % (use `ret`, not endPrice ÷ startPrice: the
+  //                               division drifts in floating point, so 6.75 would print as 6.7):
+  //                               undefined = an ordinary ticker (read its column as usual),
+  //                               null = no price for that window.
+  //   rowsForWindow(rows, tickers, start)  price rows with any start-dependent column among
+  //                               `tickers` re-drawn from `start` (other rows/columns untouched).
+  const isStartDependent = (ticker: string): boolean => ticker === EDO_TICKER && !!edoData;
+  const windowPrices = (ticker: string, start: string, end: string): { startPrice: number; endPrice: number; ret: number } | null | undefined => {
+    if (!isStartDependent(ticker)) return undefined;
+    const r = edoWindowReturn(edoData!, start, end);
+    return r === null ? null : { startPrice: 100, endPrice: 100 + r, ret: r };
+  };
+  const rowsForWindow = (rows: AssetRow[], tickers: string[], start: string): AssetRow[] =>
+    (edoData && tickers.some(isStartDependent) ? withEdoColumn(rows, edoData, start) : rows);
+
   // Cross-check the sheet's FX columns against each other. Recomputed only when the
   // data actually reloads, not on every re-render (it walks every row).
   const fxDataIssues = useMemo(() => findFxDataIssues(assetData), [assetData]);
@@ -2106,7 +2128,9 @@ const PortfolioBacktester = () => {
         });
       }
 
-      setLoadingMessage(`Loaded ${assets.length} assets, ${data.length} data points`);
+      // A failed EDO tab is not fatal, but it must not be silent: it also takes away the price of
+      // any EDO bond held in Positions / Holdings. (Shown as a third status line.)
+      setLoadingMessage(`Loaded ${assets.length} assets, ${data.length} data points${fetchedEdo ? '' : ', EDO tab missing: Refresh'}`);
     } catch (error) {
       console.error('Failed to load data:', error);
       setLoadingMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -3837,7 +3861,7 @@ const PortfolioBacktester = () => {
     // EDO's price path depends on WHEN you buy it (see lib/edo.ts): a backtest starting in
     // March 2015 buys the series on sale then, not a slice of a chain begun in 2009. So a
     // portfolio holding EDO gets the EDO column re-drawn from this window's own start.
-    if (edoData && portfolio.assets.some(a => a.asset === EDO_TICKER)) data = withEdoColumn(data, edoData, rangeStart);
+    data = rowsForWindow(data, portfolio.assets.map(a => a.asset), rangeStart);
 
     // Filter data to selected date range
     const filteredData = data.filter(row =>
@@ -4157,8 +4181,7 @@ const PortfolioBacktester = () => {
 
     // Filter data to the selected date range (same as calculatePortfolioReturns, including
     // re-drawing EDO from the window's own start, so this table matches the backtest)
-    const sourceData = edoData && portfolio.assets.some(a => a.asset === EDO_TICKER)
-      ? withEdoColumn(assetData, edoData, selectedDateRange.start) : assetData;
+    const sourceData = rowsForWindow(assetData, portfolio.assets.map(a => a.asset), selectedDateRange.start);
     const filteredData = sourceData.filter(row =>
       row.date >= selectedDateRange.start && row.date <= selectedDateRange.end
     );
@@ -4899,13 +4922,13 @@ const PortfolioBacktester = () => {
 
         // EDO: a calendar year is a FRESH purchase at the prior year-end (see lib/edo.ts), not a
         // slice of one long chain — so 2022 is the bond sold in January 2022, held to Dec 2022.
-        if (ticker === EDO_TICKER && edoData) {
-          const r = edoWindowReturn(edoData, priorYearData.date, endYearData.date);
-          if (r === null) continue;
+        const fresh = windowPrices(ticker, priorYearData.date, endYearData.date);
+        if (fresh !== undefined) {
+          if (fresh === null) continue;
           result[ticker][year] = {
-            return: r,
-            startDate: priorYearData.date, startPrice: 100,
-            endDate: endYearData.date, endPrice: 100 + r,
+            return: fresh.ret,
+            startDate: priorYearData.date, startPrice: fresh.startPrice,
+            endDate: endYearData.date, endPrice: fresh.endPrice,
           };
           continue;
         }
@@ -4963,9 +4986,10 @@ const PortfolioBacktester = () => {
   const marketsIsEdo = activeMarketsCategory === MARKETS_EDO;
   // EDO has no single price history (lib/edo.ts), so the Return matrix re-draws its column from
   // each period's own start: the "3Y" cell is the bond bought three years ago.
+  // (Just the re-priced numbers: lib/markets.ts scales the column, no rows are copied.)
   const edoReanchor = useMemo(
     () => (edoData
-      ? (ticker: string, startDate: string, rows: AssetRow[]) => (ticker === EDO_TICKER ? withEdoColumn(rows, edoData, startDate) : null)
+      ? (ticker: string, startDate: string, rows: AssetRow[]) => (isStartDependent(ticker) ? edoChainOnRows(rows, edoData, startDate) : null)
       : undefined),
     [edoData],
   );
@@ -5530,10 +5554,13 @@ const PortfolioBacktester = () => {
 
     // EDO: "3Y" is the bond BOUGHT three years ago and held (rolled at maturity) — a fresh
     // purchase at the window's start, not a slice of one long chain (see lib/edo.ts).
-    if (ticker === EDO_TICKER && edoData) {
-      const r = edoWindowReturn(edoData, startRow.date, endRow.date);
-      if (r === null) return null;
-      return { return: r, startDate: startRow.date, startPrice: 100, endDate: endRow.date, endPrice: 100 + r };
+    const fresh = windowPrices(ticker, startRow.date, endRow.date);
+    if (fresh !== undefined) {
+      if (fresh === null) return null;
+      return {
+        return: fresh.ret,
+        startDate: startRow.date, startPrice: fresh.startPrice, endDate: endRow.date, endPrice: fresh.endPrice,
+      };
     }
 
     const startPrice = Number(startRow[ticker]);
@@ -5851,22 +5878,24 @@ const PortfolioBacktester = () => {
 
       // EDO: each month's return (and the 12M one) is a FRESH purchase at the previous month-end,
       // the same rule as the Annual tab and Best to Worst (lib/edo.ts). Prices stay the one chain.
-      const isEdo = asset.ticker === EDO_TICKER && !!edoData;
-      const monthEnd = (d: Date) => new Date(Date.UTC(d.getFullYear(), d.getMonth() + 1, 0)).toISOString().slice(0, 10);
-      const edoRet = (from: Date, to: Date) => edoWindowReturn(edoData!, monthEnd(from), monthEnd(to));
+      const freshReturn = (from: Date, to: Date): number | null => {
+        const w = windowPrices(asset.ticker, monthEndIso(from.getFullYear() * 12 + from.getMonth()), monthEndIso(to.getFullYear() * 12 + to.getMonth()));
+        return w ? w.ret : null;
+      };
+      const startDependent = isStartDependent(asset.ticker);
 
       return {
         ticker: asset.ticker,
         name: asset.name,
         prices,
-        returns: isEdo
-          ? returns.map((r, i) => (r === null ? null : edoRet(allMonthDates[i + 8], monthDates[i])))
+        returns: startDependent
+          ? returns.map((r, i) => (r === null ? null : freshReturn(allMonthDates[i + 8], monthDates[i])))
           : returns,
         sma10,
         signal,
         signals,
         dd12m,
-        ret12m: isEdo && ret12m !== null ? edoRet(monthDates[0], monthDates[12]) : ret12m
+        ret12m: startDependent && ret12m !== null ? freshReturn(monthDates[0], monthDates[12]) : ret12m
       };
     });
 
@@ -5874,31 +5903,41 @@ const PortfolioBacktester = () => {
   };
 
   /**
-   * EDO in the Monthly tab's calendar returns table: every month (and FY) is re-priced as a
-   * FRESH purchase at the previous month-end (or prior year-end) — the same rule as the Annual
-   * tab and Best to Worst (lib/edo.ts) — rather than read off the one chain the price line
-   * draws. Converted into the display currency with the same month-end FX rates as the line.
+   * A start-dependent asset (EDO) in the Monthly tab's calendar returns table: every month (and
+   * FY) is re-priced as a FRESH purchase at the previous month-end (or the year's start) — the
+   * same rule as the Annual tab and Best to Worst (lib/edo.ts) — rather than read off the one
+   * chain the price line draws. Converted into the display currency with the same month-end FX
+   * rates as the line.
+   *
+   * Every figure in the result is on that one basis: FY runs from the month-end before the year's
+   * first fresh month (normally last December) to its last; a year with no fresh month at all is
+   * left out rather than filled from the chain.
    */
-  const edoFreshCalendar = (mr: MonthlyReturns, displayCcy: string): MonthlyReturns => {
-    if (!edoData || !assetData) return mr;
+  const freshCalendar = (ticker: string, mr: MonthlyReturns, displayCcy: string): MonthlyReturns => {
+    if (!isStartDependent(ticker) || !assetData) return mr;
+    const nativeCcy = getAssetCurrency(ticker);
     const rowByMonth = new Map<number, AssetRow>();
     assetData.forEach(r => rowByMonth.set(monthKeyOf(String(r.date)), r));
     // Return (%) from the month-end of month `from` to the month-end of month `to`, in displayCcy.
     const fresh = (from: number, to: number): number | null => {
       const a = rowByMonth.get(from), b = rowByMonth.get(to);
       if (!a || !b) return null;
-      const r = edoWindowReturn(edoData, String(a.date), String(b.date));
-      if (r === null) return null;
-      const fx = getConversionRate(b, 'PLN', displayCcy) / getConversionRate(a, 'PLN', displayCcy);
-      return ((1 + r / 100) * fx - 1) * 100;
+      const w = windowPrices(ticker, String(a.date), String(b.date));
+      if (!w) return null;
+      const fx = getConversionRate(b, nativeCcy, displayCcy) / getConversionRate(a, nativeCcy, displayCcy);
+      // In its own currency this is exactly the window's return (no division, so no float drift).
+      return fx === 1 ? w.ret : ((1 + w.ret / 100) * fx - 1) * 100;
     };
     const out: MonthlyReturns = {};
     Object.entries(mr).forEach(([y, row]) => {
       const year = Number(y);
       const monthly = row.monthly.map((v, m) => (v === null ? null : fresh(year * 12 + m - 1, year * 12 + m)));
-      const lastMonth = row.monthly.reduce((acc: number, v, m) => (v !== null ? m : acc), -1);
-      const fy = lastMonth >= 0 ? fresh(year * 12 - 1, year * 12 + lastMonth) : null;
-      out[y] = { ...row, monthly, fy: fy ?? row.fy };
+      const firstMonth = monthly.findIndex(v => v !== null);
+      if (firstMonth < 0) return;
+      const lastMonth = monthly.reduce((acc: number, v, m) => (v !== null ? m : acc), -1);
+      const fy = fresh(year * 12 + firstMonth - 1, year * 12 + lastMonth);
+      if (fy === null) return;
+      out[y] = { ...row, monthly, fy };
     });
     return out;
   };
@@ -7902,6 +7941,17 @@ const PortfolioBacktester = () => {
   // inside the tab's outer box — inside anything shorter it would stop being pinned when that
   // shorter box scrolls away.
   const PINNED_FILTERS = 'sticky top-0 z-40 bg-white pt-2 pb-1';
+
+  // EDO bonds held (Lookup tickers named like a series, e.g. "EDO0734") get their price from the
+  // EDO tab. If that tab failed to load, say so on the pages that value them, rather than letting
+  // the holding quietly show no price.
+  const heldEdoTickers = assetLookup.map(a => a.ticker).filter(t => /^EDO\d{4}$/.test(t));
+  const edoMissingBanner = !edoData && heldEdoTickers.length > 0 ? (
+    <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+      The EDO tab didn&apos;t load, so {heldEdoTickers.join(', ')} {heldEdoTickers.length === 1 ? 'has' : 'have'} no price
+      below. Press Refresh Data to try again.
+    </div>
+  ) : null;
 
   // Every view, in menu order. The sidebar (wide screens) and the slide-in drawer (narrow
   // screens) are both drawn from this one list, so they can never disagree.
@@ -11388,6 +11438,7 @@ const PortfolioBacktester = () => {
 
             return (
               <div className="mt-2">
+                {edoMissingBanner}
                 {/* Page-level filter: the one currency every money figure is converted into, or */}
                 {/* Native (each row in its own currency; totals, weights and tiles then in USD). */}
                 <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
@@ -11649,7 +11700,7 @@ const PortfolioBacktester = () => {
             const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
             const monthLabel = (d: string) => `${MONTHS[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`; // "Oct 2026"
             const keyLabel = (k: number) => `${MONTHS[k % 12]} ${Math.floor(k / 12)}`;
-            const keyIso = (k: number) => new Date(Date.UTC(Math.floor(k / 12), (k % 12) + 1, 0)).toISOString().slice(0, 10);
+            const keyIso = monthEndIso; // a month key as its month-end date (lib/edo.ts)
             const fmtPct2 = (v: number | null) => (v === null ? '–' : `${v.toFixed(2)}%`);
             const fmtPctSigned = (v: number) => (Math.abs(v) < 0.05 ? '0.0%' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`);
 
@@ -11785,7 +11836,6 @@ const PortfolioBacktester = () => {
             // which makes the table reconcile exactly with the sheet. Years 2-10 pay CPI + margin,
             // so the CPI used is that rate minus the margin; with zero or negative inflation the
             // bond pays the margin alone ("≤ 0"). Year 1 is the fixed first-year rate.
-            const daysApart = (a: string, b: string) => (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000;
             const bondYearRate = (y: number): number | null => {
               if (y === 1) return selected.firstYearRate;
               const st = buyKey + 12 * (y - 1);
@@ -11798,7 +11848,7 @@ const PortfolioBacktester = () => {
               let k = st + 11;
               while (k > st && !grid.has(k)) k--;
               if (k === st) return null;
-              return (grid.get(k)! / v0 - 1) * (365 / daysApart(keyIso(st), keyIso(k))) * 100;
+              return (grid.get(k)! / v0 - 1) * (365 / daysBetween(keyIso(st), keyIso(k))) * 100;
             };
             const yearRates = Array.from({ length: 10 }, (_, i) => bondYearRate(i + 1));
             const ladder = Array.from({ length: 121 }, (_, i) => {
@@ -12154,7 +12204,7 @@ const PortfolioBacktester = () => {
                             <th className="text-left font-semibold text-gray-700 px-3 py-2 cursor-help" title="Month-end the row is valued at. The first row is the purchase, at par (100).">Month</th>
                             <th className="text-right font-medium px-2 py-2 cursor-help" title="Year of the bond's life (1-10). Each bond year runs from one anniversary of the sale month to the next.">Year</th>
                             <th className="text-right font-medium px-2 py-2 cursor-help" title={'Interest rate for this bond year, a year\'s rate (not this month\'s).\nYear 1: the fixed first-year rate.\nYears 2-10: CPI used + margin, worked out from the bond\'s own values (year-end value ÷ year-start value − 1).'}>Rate</th>
-                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={`The 12-month CPI behind this year's rate: rate minus the ${fmtPct2(selected.margin)} margin.\nIt is GUS's CPI for the month two months before the bond year starts (hover a figure).\n"≤ 0" = inflation was zero or negative, so only the margin was paid.`}>CPI used</th>
+                            <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={`The 12-month CPI behind this year's rate: rate minus the ${fmtPct2(selected.margin)} margin — exact, worked out from the bond's own values.\nThe reference month shown on hover (two months before the bond year starts) is inferred from all series and fits best, but is not stated in the sheet; the sheet's own CPI index can differ from GUS's published figure by about 0.1pp.\n"≤ 0" = inflation was zero or negative, so only the margin was paid.`}>CPI used</th>
                             <th className="text-right font-medium px-2 py-2 cursor-help" title={'What 100 zl of this series is worth at the month-end, pre-tax.\nInterest accrues day by day and is added to the value at every anniversary, so later years earn interest on it.'}>Value</th>
                             <th className="text-right font-medium px-2 py-2 cursor-help" title={'Change in value over this one month (this month-end ÷ the previous one − 1).\nNot annualised.'}>Month</th>
                             <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title={'Total pre-tax return since purchase (value ÷ 100 − 1).\nCumulative, NOT annualised.'}>Since purchase</th>
@@ -12196,7 +12246,7 @@ const PortfolioBacktester = () => {
                                 </td>
                                 <td className={`px-2 py-1 text-right tabular-nums cursor-help ${yearStart ? 'font-medium' : ''}`}
                                   title={tip(r.year === 1 ? 'Year 1 pays a fixed rate, not CPI' : r.year > 1 && rate !== null
-                                    ? `GUS 12-month CPI for ${keyLabel(refKey)} = rate ${fmt2(rate)}% − margin ${fmtPct2(selected.margin)}` : null)}>
+                                    ? `Rate ${fmt2(rate)}% − margin ${fmtPct2(selected.margin)}: the 12-month CPI behind this year (most likely GUS's figure for ${keyLabel(refKey)})` : null)}>
                                   {r.year === 1 ? 'fixed' : cpiUsed === null ? '–' : cpiUsed <= 0.005 ? '≤ 0' : `${cpiUsed.toFixed(2)}%`}
                                 </td>
                                 <td className="px-2 py-1 text-right tabular-nums font-medium cursor-help"
@@ -13143,9 +13193,8 @@ const PortfolioBacktester = () => {
                           value: (row[monthlySelectedTicker] as number) * getConversionRate(row, selectedAssetCcy, monthlyDisplayCurrency),
                           drawdown: 0 // not used by calculateMonthlyReturns
                         })) || [];
-                      const assetMonthlyReturns = monthlySelectedTicker === EDO_TICKER
-                        ? edoFreshCalendar(calculateMonthlyReturns(assetReturnPoints), monthlyDisplayCurrency)
-                        : calculateMonthlyReturns(assetReturnPoints);
+                      // (A start-dependent asset like EDO is re-priced as fresh purchases; others pass through.)
+                      const assetMonthlyReturns = freshCalendar(monthlySelectedTicker, calculateMonthlyReturns(assetReturnPoints), monthlyDisplayCurrency);
 
                       // The id lets the Markets tab scroll straight here after opening an asset.
                       return (
@@ -17833,6 +17882,7 @@ const PortfolioBacktester = () => {
           {/* ============================================ */}
           {isConnected && assetData && activeView === 'positions' && (
             <div className="mt-2">
+              {edoMissingBanner}
 
               {/* --- Positions Tab Filter Controls --- */}
               {/* Shared filter for both open and closed positions */}

@@ -487,26 +487,23 @@ async function fetchSheet(url: string, label: string): Promise<Response> {
  * the same burst: wait 1.5s, 3s, 4.5s... (~22s at worst over 6 attempts), each time with a URL of
  * its own so no cache can hand back the placeholder again.
  *
- * Returns the text of the last answer: the real data, or — if every attempt was the placeholder
- * or a 4xx (gone / unpublished; retrying can't fix it) — whatever came back, for the caller to
- * report or ignore exactly as before.
+ * ONLY the placeholder is retried here. No answer at all means fetchSheet has already made its
+ * own 3 timed attempts, and a 4xx means the tab is gone or unpublished — asking again cannot help
+ * either, and stacking retries on fetchSheet's could hold up the whole load for minutes.
+ *
+ * Returns the text of the last answer: the real data, or whatever came back ('' for no answer,
+ * the placeholder if every attempt was one), for the caller to report or ignore exactly as before.
  */
 async function sheetTextWithRetry(first: Response | null, url: string, label: string, attempts = 6): Promise<string> {
   let res = first;
-  let text = '';
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    if (res && res.ok) {
-      text = await res.text();
-      if (text.trim() !== 'Loading...') return text;
-    } else if (res && res.status < 500 && res.status !== 429) {
-      return text;
-    }
-    if (attempt === attempts) break;
+  for (let attempt = 1; ; attempt++) {
+    if (!res || !res.ok) return '';
+    const text = await res.text();
+    if (text.trim() !== 'Loading...' || attempt === attempts) return text;
     console.log(`${label} sheet not ready ("Loading..."), retrying (${attempt + 1}/${attempts})...`);
     await new Promise(r => setTimeout(r, 1500 * attempt));
     res = await fetchSheet(`${url}&retry=${Date.now()}`, label).catch(() => null);
   }
-  return text;
 }
 
 /**
@@ -521,8 +518,10 @@ export async function fetchSheetData(): Promise<ParsedData> {
   // The small Portfolios tab starts loading now, alongside the rest; it is awaited near the end
   const presetsRequest = fetchSheet(PORTFOLIOS_SHEET_URL, 'Portfolios').catch(() => null);
   // The EDO tab too (~1-4s, so it is done long before the Daily tab). Optional: if it fails,
-  // the app loads normally, just without the EDO asset and page.
-  const edoRequest = fetchSheet(EDO_SHEET_URL, 'EDO').catch(() => null);
+  // the app loads normally, just without the EDO asset and page. Its "Loading..." retries start
+  // right away as well, so their waiting overlaps the slow Daily tab instead of following it.
+  const edoTextRequest = fetchSheet(EDO_SHEET_URL, 'EDO').catch(() => null)
+    .then(res => sheetTextWithRetry(res, EDO_SHEET_URL, 'EDO'));
   // Fetch all seven sheets in parallel for speed
   const [dataResponse, lookupResponse, yearsResponse, dailyResponse, ledgerResponse] = await Promise.all([
     fetchSheet(DATA_SHEET_URL, 'Price data'),
@@ -646,9 +645,9 @@ export async function fetchSheetData(): Promise<ParsedData> {
   let edo: EdoData | null = null;
   let pricedData = data;
   try {
-    // Retrying while Google answers "Loading..." (see sheetTextWithRetry): without it an unlucky
+    // Retried while Google answers "Loading..." (see sheetTextWithRetry): without it an unlucky
     // refresh silently lost EDO — and with it the price of any EDO bond held in Positions / Holdings.
-    const edoCsv = await sheetTextWithRetry(await edoRequest, EDO_SHEET_URL, 'EDO');
+    const edoCsv = await edoTextRequest;
     if (edoCsv && edoCsv.trim() !== 'Loading...') edo = parseEdoSheet(parseCSVRows(edoCsv));
     if (edo) {
       pricedData = withEdoColumn(data, edo);
