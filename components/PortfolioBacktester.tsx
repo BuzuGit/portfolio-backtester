@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 /*
   PORTFOLIO BACKTESTER COMPONENT
 
@@ -1716,6 +1716,9 @@ const PortfolioBacktester = () => {
   const [edoSelected, setEdoSelected] = useState<string>('');
   const [edoLines, setEdoLines] = useState<{ value: boolean; cpi: boolean; tax: boolean }>({ value: true, cpi: false, tax: false });
   const [edoStatusFilter, setEdoStatusFilter] = useState<'all' | 'running' | 'matured'>('all');
+  // The "Matured series" section: outcomes after tax or before, and real (after inflation) or nominal.
+  const [edoMaturedTax, setEdoMaturedTax] = useState(false);
+  const [edoMaturedReal, setEdoMaturedReal] = useState(true);
   const [marketsPeriod, setMarketsPeriod] = useState<MarketsPeriod>('YTD');
   // How many years the trend sparkline covers. Follows the period button for 1Y/3Y/5Y/10Y; the
   // shorter periods (YTD/1M/3M/6M) are too short for a trend, so they leave it where it was.
@@ -11709,6 +11712,55 @@ const PortfolioBacktester = () => {
             };
             const ratesExtremes = [...extremes('rate'), ...extremes('inflation')];
 
+            // ---- Matured series: every completed 10-year hold, side by side ----
+            // Each matured series' path from purchase (month 0, = 100) to maturity (month 120), on
+            // the chosen basis: pre-tax or after tax (as if paid out that month), and real (divided
+            // by Polish inflation since purchase) or nominal. A series is left out if any month is
+            // missing — e.g. in real terms the very first series, bought before the CPI index starts.
+            const maturedPaths = bySold.filter(s => s.status === 'matured').map(s => {
+              const g = edo.values.get(s.series);
+              const b = monthKeyOf(s.sold) - 1;
+              const c0 = cpiByKey.get(b);
+              const pts: number[] = [];
+              for (let i = 0; i <= 120; i++) {
+                const v = i === 0 ? 100 : g?.get(b + i);
+                if (v === undefined) return null;
+                let x = edoMaturedTax ? edoAfterTax(v) : v;
+                if (edoMaturedReal) {
+                  const c = cpiByKey.get(b + i);
+                  if (!c0 || !c) return null;
+                  x = x / (c / c0);
+                }
+                pts.push(x);
+              }
+              return { s, pts, final: pts[120] - 100, perYear: (Math.pow(pts[120] / 100, 1 / 10) - 1) * 100 };
+            }).filter((p): p is NonNullable<typeof p> => p !== null);
+            const byOutcome = [...maturedPaths].sort((a, b) => a.final - b.final);
+            const mWorst = byOutcome[0], mBest = byOutcome[byOutcome.length - 1];
+            const mMedian = byOutcome.length ? byOutcome[Math.floor((byOutcome.length - 1) / 2)] : undefined;
+            // "Beat inflation" is always measured in real terms, on the chosen tax basis.
+            const beatInflation = bySold.filter(s => s.status === 'matured').filter(s => {
+              const b = monthKeyOf(s.sold) - 1, v = edo.values.get(s.series)?.get(b + 120);
+              const c0 = cpiByKey.get(b), c1 = cpiByKey.get(b + 120);
+              return v !== undefined && c0 && c1 && (edoMaturedTax ? edoAfterTax(v) : v) / (c1 / c0) > 100;
+            }).length;
+            const beatOf = bySold.filter(s => s.status === 'matured' && cpiByKey.has(monthKeyOf(s.sold) - 1)).length;
+            // The black line: the MEDIAN across all series at each month (not one series' path).
+            const median = (xs: number[]) => {
+              const a = [...xs].sort((p, q) => p - q), m = a.length >> 1;
+              return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+            };
+            const pathsData = Array.from({ length: 121 }, (_, i) => {
+              const row: Record<string, number> = { i, median: median(maturedPaths.map(p => p.pts[i])) };
+              maturedPaths.forEach(p => { row[p.s.series] = p.pts[i]; });
+              return row;
+            });
+            const outcomeData = maturedPaths.map(p => ({ date: p.s.sold, series: p.s.series, ret: p.final, perYear: p.perYear }));
+            const basisLabel = `${edoMaturedReal ? 'real' : 'nominal'}, ${edoMaturedTax ? 'after tax' : 'pre-tax'}`;
+            // The sale-month charts get one tick per year, on each January's series, so no year
+            // label repeats or goes missing (left to itself the axis did both).
+            const januaryTicks = (rows: { date: string }[]) => rows.map(r => r.date).filter(d => d.slice(5, 7) === '01');
+
             // The selected series, month by month since purchase: 100 at the month-end before its
             // sale month, then the sheet's values up to the last finished month (or maturity).
             const grid = edo.values.get(selected.series) ?? new Map<number, number>();
@@ -11857,7 +11909,7 @@ const PortfolioBacktester = () => {
                     </div>
                     <ResponsiveContainer width="100%" height={240}>
                       <LineChart data={ratesData} margin={{ top: 22, right: 10, bottom: 0, left: 0 }}>
-                        <XAxis dataKey="date" tickFormatter={d => String(d).slice(0, 4)} tick={{ fontSize: 11 }} minTickGap={30} />
+                        <XAxis dataKey="date" ticks={januaryTicks(ratesData)} interval="preserveStartEnd" minTickGap={8} tickFormatter={d => String(d).slice(0, 4)} tick={{ fontSize: 11 }} />
                         <YAxis domain={[ratesLo, ratesHi]} ticks={ratesTicks} interval={0} tickFormatter={v => `${v}%`} tick={{ fontSize: 11 }} width={40} />
                         <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="3 3" />
                         <Tooltip
@@ -11894,7 +11946,7 @@ const PortfolioBacktester = () => {
                     <div className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold mb-1">Margin over CPI by sale month (years 2–10)</div>
                     <ResponsiveContainer width="100%" height={180}>
                       <BarChart data={ratesData} margin={{ top: 8, right: 8, left: -8, bottom: 0 }} barCategoryGap={1}>
-                        <XAxis dataKey="date" tickFormatter={d => String(d).slice(0, 4)} tick={{ fontSize: 11, fill: '#6b7280' }} minTickGap={30} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
+                        <XAxis dataKey="date" ticks={januaryTicks(ratesData)} interval="preserveStartEnd" minTickGap={8} tickFormatter={d => String(d).slice(0, 4)} tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
                         <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#6b7280' }} width={44} tickLine={false} axisLine={false} />
                         <ReferenceLine y={0} stroke="#9ca3af" />
                         <Tooltip
@@ -11908,6 +11960,129 @@ const PortfolioBacktester = () => {
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
+
+                  {/* Matured series: how every completed 10-year hold played out — best, worst and */}
+                  {/* median, the outcome by sale month, and every path on one chart. */}
+                  {maturedPaths.length > 0 && mBest && mWorst && mMedian && (
+                    <div className="mb-6">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <div className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold">
+                          Matured series · {maturedPaths.length} ten-year holds · {basisLabel}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {([[false, 'Pre-tax'], [true, 'After tax']] as const).map(([v, label]) => (
+                            <button key={label} onClick={() => setEdoMaturedTax(v)}
+                              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${edoMaturedTax === v ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                            >{label}</button>
+                          ))}
+                          <span className="w-px h-4 bg-gray-200" />
+                          {([[true, 'Real'], [false, 'Nominal']] as const).map(([v, label]) => (
+                            <button key={label} onClick={() => setEdoMaturedReal(v)}
+                              title={v ? 'After Polish inflation since purchase' : 'Before inflation'}
+                              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${edoMaturedReal === v ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                            >{label}</button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Best / median / worst outcome, and how many beat inflation */}
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-3">
+                        {[
+                          { label: 'Best', p: mBest, cls: 'text-green-700' },
+                          { label: 'Median', p: mMedian, cls: 'text-gray-800' },
+                          { label: 'Worst', p: mWorst, cls: mWorst.final >= 0 ? 'text-gray-800' : 'text-red-700' },
+                        ].map(t => (
+                          <button key={t.label} onClick={() => setEdoSelected(t.p.s.series)} title={`Open ${t.p.s.series} below`}
+                            className="text-left rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 px-3 py-2 min-w-0">
+                            <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label} · {t.p.s.series}</div>
+                            <div className="text-sm whitespace-nowrap truncate">
+                              <span className={`font-semibold tabular-nums ${t.cls}`}>{fmtPctSigned(t.p.final)}</span>
+                              <span className="text-xs text-gray-500 ml-2">{fmtPctSigned(t.p.perYear)} a year</span>
+                            </div>
+                          </button>
+                        ))}
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0"
+                          title={`Series whose ${edoMaturedTax ? 'after-tax' : 'pre-tax'} payout at maturity bought more than 100 zl did at purchase`}>
+                          <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">Beat inflation</div>
+                          <div className="text-sm whitespace-nowrap truncate">
+                            <span className="font-semibold tabular-nums text-gray-800">{beatInflation} of {beatOf}</span>
+                            <span className="text-xs text-gray-500 ml-2">{edoMaturedTax ? 'after tax' : 'pre-tax'}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* The 10-year outcome of each series, by the month it was sold */}
+                      <div className="text-xs text-gray-500 mb-1">10-year return by sale month — total, not annualised. Click a bar to open that series below.</div>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <BarChart data={outcomeData} margin={{ top: 20, right: 8, left: -8, bottom: 0 }} barCategoryGap={1}
+                          onClick={(e: { activePayload?: { payload?: { series?: string } }[] }) => {
+                            const s = e?.activePayload?.[0]?.payload?.series;
+                            if (s) setEdoSelected(s);
+                          }}>
+                          <XAxis dataKey="date" ticks={januaryTicks(outcomeData)} interval="preserveStartEnd" minTickGap={8} tickFormatter={d => String(d).slice(0, 4)} tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
+                          <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#6b7280' }} width={44} tickLine={false} axisLine={false} />
+                          <ReferenceLine y={0} stroke="#9ca3af" />
+                          <Tooltip
+                            labelFormatter={(d, p) => `${(p?.[0]?.payload as { series?: string })?.series ?? ''} · sold ${monthLabel(String(d))}`}
+                            formatter={(v: number, _n: string, item: { payload?: { perYear?: number } }) =>
+                              [`${fmtPctSigned(Number(v))} (${fmtPctSigned(item?.payload?.perYear ?? 0)} a year)`, `10-year return, ${basisLabel}`]}
+                            cursor={{ fill: 'rgba(0,0,0,0.05)' }}
+                          />
+                          <Bar dataKey="ret" isAnimationActive={false} cursor="pointer">
+                            {outcomeData.map(d => (
+                              <Cell key={d.series} fill={d.series === mBest.s.series ? '#22c55e' : d.series === mWorst.s.series ? '#ef4444' : d.ret < 0 ? '#dc2626' : '#111827'} />
+                            ))}
+                          </Bar>
+                          <ReferenceDot x={mBest.s.sold} y={mBest.final} r={0} fill="none" stroke="none"
+                            label={{ value: `${mBest.s.series} ${fmtPctSigned(mBest.final)}`, position: 'top', fontSize: 11, fill: '#15803d', fontWeight: 600 }} />
+                          <ReferenceDot x={mWorst.s.sold} y={mWorst.final} r={0} fill="none" stroke="none"
+                            label={{ value: `${mWorst.s.series} ${fmtPctSigned(mWorst.final)}`, position: mWorst.final < 0 ? 'bottom' : 'top', fontSize: 11, fill: '#b91c1c', fontWeight: 600 }} />
+                        </BarChart>
+                      </ResponsiveContainer>
+
+                      {/* Every path on one chart: grey, with the best, worst and the median picked out */}
+                      <div className="flex flex-wrap gap-4 text-xs text-gray-600 mt-4 mb-1">
+                        <span>Every matured series from purchase (100) to maturity, {basisLabel}:</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#22c55e]" />Best ({mBest.s.series})</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#ef4444]" />Worst ({mWorst.s.series})</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#111827]" />Median of all, month by month</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#d1d5db]" />Others</span>
+                      </div>
+                      <ResponsiveContainer width="100%" height={320}>
+                        <LineChart data={pathsData} margin={{ top: 5, right: 70, bottom: 0, left: 0 }}>
+                          <XAxis dataKey="i" type="number" domain={[0, 120]} ticks={[0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120]}
+                            tickFormatter={v => (v === 0 ? 'Buy' : `${v / 12}y`)} tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={{ stroke: '#d1d5db' }} />
+                          <YAxis domain={['auto', 'auto']} tickFormatter={v => formatPrice(Number(v))} tick={{ fontSize: 11, fill: '#6b7280' }} width={44} tickLine={false} axisLine={false} />
+                          <ReferenceLine y={100} stroke="#9ca3af" strokeDasharray="3 3" />
+                          {/* With ~80 lines the default tooltip would list them all: show only the three that matter. */}
+                          <Tooltip content={({ active, label }) => {
+                            if (!active || label === undefined) return null;
+                            const i = Number(label), row = pathsData[i];
+                            if (!row) return null;
+                            return (
+                              <div className="bg-white border border-gray-200 rounded shadow-sm px-2 py-1 text-xs tabular-nums">
+                                <div className="font-medium text-gray-700 mb-0.5">{i === 0 ? 'Purchase' : `Month ${i} (${(i / 12).toFixed(1)} years)`}</div>
+                                <div className="text-green-700">Best {mBest.s.series}: {formatPrice(row[mBest.s.series])}</div>
+                                <div className="text-gray-900">Median: {formatPrice(row.median)}</div>
+                                <div className="text-red-700">Worst {mWorst.s.series}: {formatPrice(row[mWorst.s.series])}</div>
+                              </div>
+                            );
+                          }} />
+                          {maturedPaths.filter(p => p !== mBest && p !== mWorst).map(p => (
+                            <Line key={p.s.series} dataKey={p.s.series} stroke="#d1d5db" strokeWidth={1} dot={false} isAnimationActive={false} activeDot={false} />
+                          ))}
+                          <Line dataKey={mWorst.s.series} stroke="#ef4444" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line dataKey={mBest.s.series} stroke="#22c55e" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line dataKey="median" stroke="#111827" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Customized component={<EdgeBubbles defs={[
+                            { value: mBest.pts[120], color: '#22c55e', label: formatPrice(mBest.pts[120]) },
+                            { value: pathsData[120].median, color: '#111827', label: formatPrice(pathsData[120].median) },
+                            { value: mWorst.pts[120], color: '#ef4444', label: formatPrice(mWorst.pts[120]) },
+                          ]} />} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
 
                   {/* One series since purchase: value, inflation over the same months, value after tax */}
                   <div className="mb-6">
