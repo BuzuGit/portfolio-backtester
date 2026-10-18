@@ -18,7 +18,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
-import { RefreshCw, Plus, Trash2, Menu, X } from 'lucide-react';
+import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3 } from 'lucide-react';
 import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
@@ -1603,6 +1603,8 @@ const PortfolioBacktester = () => {
   const [isConnected, setIsConnected] = useState(false);      // Do we have data loaded?
   const [isLoading, setIsLoading] = useState(true);           // Are we currently loading?
   const [loadingMessage, setLoadingMessage] = useState('');   // Status message to show user
+  // When the app last finished pulling the sheet successfully (shown at the bottom of the menu)
+  const [lastFetchedAt, setLastFetchedAt] = useState<Date | null>(null);
 
   // The actual data
   const [assetData, setAssetData] = useState<AssetRow[] | null>(null);  // Historical price data
@@ -2131,6 +2133,7 @@ const PortfolioBacktester = () => {
       // A failed EDO tab is not fatal, but it must not be silent: it also takes away the price of
       // any EDO bond held in Positions / Holdings. (Shown as a third status line.)
       setLoadingMessage(`Loaded ${assets.length} assets, ${data.length} data points${fetchedEdo ? '' : ', EDO tab missing: Refresh'}`);
+      setLastFetchedAt(new Date());
     } catch (error) {
       console.error('Failed to load data:', error);
       setLoadingMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -7955,21 +7958,22 @@ const PortfolioBacktester = () => {
 
   // Every view, in menu order. The sidebar (wide screens) and the slide-in drawer (narrow
   // screens) are both drawn from this one list, so they can never disagree.
-  const NAV_VIEWS: { view: typeof activeView; label: string }[] = [
-    { view: 'backtest', label: 'Backtest' },
-    { view: 'markets', label: 'Markets' },
-    { view: 'monthlyPrices', label: 'Monthly' },
-    { view: 'annualReturns', label: 'Annual' },
-    { view: 'bestToWorst', label: 'Best To Worst' },
-    { view: 'graphs', label: 'Graphs' },
-    { view: 'trendFollowing', label: 'Trend Following' },
-    { view: 'correlationMatrix', label: 'Correlations' },
-    { view: 'portfolio', label: 'Portfolio' },
-    { view: 'positions', label: 'Positions' },
+  // Each has a small icon drawn to the left of its label.
+  const NAV_VIEWS: { view: typeof activeView; label: string; icon: React.ElementType }[] = [
+    { view: 'backtest', label: 'Backtest', icon: FlaskConical },
+    { view: 'markets', label: 'Markets', icon: Globe },
+    { view: 'portfolio', label: 'Portfolio', icon: Briefcase },
+    { view: 'positions', label: 'Positions', icon: Layers },
+    { view: 'monthlyPrices', label: 'Monthly', icon: CalendarDays },
+    { view: 'annualReturns', label: 'Annual', icon: CalendarRange },
+    { view: 'bestToWorst', label: 'Best To Worst', icon: ArrowDownWideNarrow },
+    { view: 'graphs', label: 'Graphs', icon: LineChartIcon },
+    { view: 'trendFollowing', label: 'Trend Following', icon: TrendingUp },
+    { view: 'correlationMatrix', label: 'Correlations', icon: Grid3x3 },
   ];
-  // Sections INSIDE a view, listed indented under it in the left panel while that view is open:
-  // the left panel is for moving between pages and sections, the top of each page for filtering
-  // what is on it. To give another view sections, add a case here.
+  // Sections INSIDE a view, always listed indented under it in the left panel (clicking one
+  // opens that view at that section): the left panel is for moving between pages and sections,
+  // the top of each page for filtering what is on it. To give another view sections, add a case here.
   //   Markets      — its categories, straight from the sheet's SnapshotCategory column
   //   Best To Worst — the one-year Ranking table or the multi-year Return Map
   const navSections = (view: typeof activeView): { items: { key: string; label: string }[]; active: string; select: (key: string) => void } | null => {
@@ -7992,32 +7996,36 @@ const PortfolioBacktester = () => {
 
   // The list of view buttons, shared by the sidebar and the drawer. Choosing one also closes
   // the drawer (harmless on wide screens, where it is never open).
+  // Dark panel look: the open view is a white "pill" with dark text; the others are light grey
+  // text that brightens on hover. A section counts as selected only while its own view is open.
   const navList = (
     <div className="flex flex-col gap-1">
-      {NAV_VIEWS.map(({ view, label }) => {
-        const sections = activeView === view ? navSections(view) : null;
+      {NAV_VIEWS.map(({ view, label, icon: Icon }) => {
+        const sections = navSections(view);
+        const isActive = activeView === view;
         return (
           <React.Fragment key={view}>
             <button
               type="button"
               onClick={() => { setActiveView(view); setNavOpen(false); }}
-              className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                activeView === view ? 'bg-slate-800 text-white' : 'text-gray-600 hover:bg-gray-100'
+              className={`w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'
               }`}
             >
+              <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-slate-700' : 'text-slate-400'}`} />
               {label}
             </button>
             {sections && sections.items.length > 0 && (
-              <div className="flex flex-col gap-0.5 ml-3 pl-2 border-l border-gray-200 mb-1">
+              <div className="flex flex-col gap-0.5 ml-[18px] pl-2 border-l border-white/10 mb-1">
                 {sections.items.map(s => (
                   <button
                     key={s.key}
                     type="button"
-                    onClick={() => { sections.select(s.key); setNavOpen(false); }}
-                    className={`w-full text-left px-2 py-1 rounded-md text-xs transition-colors ${
-                      sections.active === s.key
-                        ? 'bg-gray-100 text-gray-900 font-semibold'
-                        : 'text-gray-600 hover:bg-gray-50'
+                    onClick={() => { setActiveView(view); sections.select(s.key); setNavOpen(false); }}
+                    className={`w-full text-left px-2 py-1 rounded-md text-xs whitespace-nowrap transition-colors ${
+                      isActive && sections.active === s.key
+                        ? 'bg-white/10 text-white font-semibold'
+                        : 'text-slate-400 hover:bg-white/5 hover:text-white'
                     }`}
                   >
                     {s.label}
@@ -8031,51 +8039,90 @@ const PortfolioBacktester = () => {
     </div>
   );
 
+  // Footer card at the bottom of the menu: how fresh the data is.
+  //   "Data as of" — the newest date in the Daily sheet (or, failing that, the price sheet), so a
+  //                  sheet that stopped updating shows up here even after a fresh fetch. Dates
+  //                  after today are ignored: the sheet pre-fills the coming week's rows with
+  //                  the latest value repeated, which would otherwise show a future date.
+  //   "Fetched"    — when the app last pulled from Google; the date is added if it wasn't today.
+  const fmtNavDate = (iso: string) => {
+    // Built from the "YYYY-MM-DD" parts directly, so no timezone can shift it by a day
+    const [y, m, d] = iso.split('-').map(Number);
+    return `${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]} ${y}`;
+  };
+  const navNow = new Date();
+  // Today's LOCAL date (not lib/edo's todayIso(), which is UTC and lags a day before 8am in Singapore)
+  const navTodayIso = `${navNow.getFullYear()}-${String(navNow.getMonth() + 1).padStart(2, '0')}-${String(navNow.getDate()).padStart(2, '0')}`;
+  const latestDataDate = dailyData.length > 0
+    ? dailyData.reduce((max, r) => (r.date > max && r.date <= navTodayIso ? r.date : max), '')
+    : assetData && assetData.length > 0 ? assetData[assetData.length - 1].date : '';
+  const fetchedLabel = lastFetchedAt
+    ? (lastFetchedAt.toDateString() === new Date().toDateString()
+        ? ''
+        : `${lastFetchedAt.getDate()} ${lastFetchedAt.toLocaleString('en-GB', { month: 'short' })}, `)
+      + lastFetchedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+    : '';
+  const navFooter = latestDataDate ? (
+    <div className="mt-2 shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
+      <div className="text-[10px] uppercase tracking-wider text-slate-400">Data as of</div>
+      <div className="text-lg leading-tight text-white whitespace-nowrap">{fmtNavDate(latestDataDate)}</div>
+      {fetchedLabel && <div className="mt-0.5 text-[11px] text-slate-400 whitespace-nowrap">Fetched {fetchedLabel}</div>}
+    </div>
+  ) : null;
+
   // Refresh button + load status. Lives at the top of the sidebar on wide screens; narrow
   // screens keep the original "Data" bar above the page instead (they have no sidebar).
+  // (Colours chosen to read on the dark sidebar.)
   const loadStatusClass =
-    loadingMessage.includes('Loaded') ? 'text-gray-500' :
-    loadingMessage.includes('Error') ? 'text-red-600' :
-    'text-gray-500';
+    loadingMessage.includes('Error') ? 'text-red-400' : 'text-slate-400';
 
   // Page background: flat, neutral light grey so the white cards stand out cleanly.
   //
   // LAYOUT: the content column is max-w-6xl (1,152px), exactly as before. From 1,368px of window
-  // width there is room for a 168px sidebar + 16px gap beside it (1,152 + 16 + 168 + the page's
-  // 2×16px padding = 1,368), so the sidebar sits to its left and the pair is centred as one block —
+  // width there is room for a 168px sidebar + 8px gap beside it (1,152 + 8 + 168 + the page's
+  // 2×16px padding = 1,360, so 1,368 leaves a little spare), so the sidebar sits to its left and
+  // the pair is centred as one block —
   // the content keeps its full width and the sidebar uses what used to be empty grey margin.
   // Below 1,368px the sidebar disappears and a "Menu" button opens the drawer instead, so the
   // content never gives up width to navigation.
+  //
+  // The sidebar is a dark column that runs the full height of the page (the row is at least one
+  // window tall, and the column stretches to match the content beside it). Its contents are a
+  // window-tall box pinned to the top while the page scrolls: Refresh at the top, the menu in the
+  // middle (scrolls on its own if the window is too short), the "Data as of" card at the bottom.
   return (
     <div className="min-h-screen bg-[#f1f2f4] p-4">
-      <div className="mx-auto max-w-6xl min-[1368px]:max-w-[1336px] min-[1368px]:flex min-[1368px]:items-start min-[1368px]:gap-4">
-      {/* Sidebar (wide screens): pinned to the top of the window while the page scrolls */}
-      <nav className="hidden min-[1368px]:block w-[168px] shrink-0 sticky top-4 bg-white rounded-xl border border-gray-200 shadow-sm p-2">
-        {/* Data controls: full-width Refresh button, then the load status in small print */}
-        <button
-          type="button"
-          onClick={loadDataFromSheet}
-          disabled={isLoading}
-          className="w-full px-3 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 font-semibold flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
-        >
-          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-          {isLoading ? 'Loading...' : 'Refresh Data'}
-        </button>
-        <div className={`px-1 pt-1.5 pb-2 text-[11px] leading-snug text-center ${loadStatusClass}`}>
-          {/* Too long for one line at this width, so break it deliberately after the first comma
-              ("Loaded 128 assets" / "203 data points") instead of wherever the text happens to wrap.
-              Other messages (loading, errors) have no comma and show as they are. */}
-          {(loadingMessage || 'Ready').split(/,\s*/).map((part, i) => <div key={i}>{part}</div>)}
-        </div>
-        <div className="border-t border-gray-100 pt-2">
-          {isConnected && assetData
-            ? navList
-            : <div className="px-3 py-2 text-xs text-gray-400">Loading data…</div>}
+      <div className="mx-auto max-w-6xl min-[1368px]:max-w-[1328px] min-[1368px]:flex min-[1368px]:items-stretch min-[1368px]:gap-2 min-[1368px]:min-h-[calc(100vh-2rem)]">
+      <nav className="hidden min-[1368px]:block w-[168px] shrink-0 rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
+        <div className="sticky top-4 h-[calc(100vh-2rem)] flex flex-col p-2">
+          {/* Data controls: full-width Refresh button, then the load status in small print */}
+          <button
+            type="button"
+            onClick={loadDataFromSheet}
+            disabled={isLoading}
+            className="w-full px-3 py-2 bg-white/10 text-white border border-white/10 rounded-lg hover:bg-white/15 font-semibold flex items-center justify-center gap-2 disabled:opacity-50 text-sm shrink-0"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            {isLoading ? 'Loading...' : 'Refresh Data'}
+          </button>
+          <div className={`px-1 pt-1.5 pb-2 text-[11px] leading-snug text-center shrink-0 ${loadStatusClass}`}>
+            {/* Too long for one line at this width, so break it deliberately after the first comma
+                ("Loaded 128 assets" / "203 data points") instead of wherever the text happens to wrap.
+                Other messages (loading, errors) have no comma and show as they are. */}
+            {(loadingMessage || 'Ready').split(/,\s*/).map((part, i) => <div key={i}>{part}</div>)}
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto border-t border-white/10 pt-2 [scrollbar-width:thin] [scrollbar-color:#334155_transparent]">
+            {isConnected && assetData
+              ? navList
+              : <div className="px-3 py-2 text-xs text-slate-500">Loading data…</div>}
+          </div>
+          {navFooter}
         </div>
       </nav>
       <div className="min-w-0 min-[1368px]:w-[1152px] min-[1368px]:shrink-0">
-        {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy) */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4">
+        {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy).
+            On wide screens no bottom margin, so it ends level with the dark sidebar beside it. */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1368px]:mb-0">
 
           {/* Data Status Section - compact single row. Narrow screens only: wide screens show
               the same Refresh button and status at the top of the sidebar instead. */}
@@ -21408,19 +21455,21 @@ const PortfolioBacktester = () => {
       {navOpen && (
         <div className="fixed inset-0 z-50 min-[1368px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
           <div className="absolute inset-0 bg-black/30" onClick={() => setNavOpen(false)} />
-          <nav className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-white shadow-xl p-3 overflow-y-auto">
-            <div className="flex items-center justify-between mb-2 px-1">
-              <span className="text-sm font-semibold text-gray-700">Views</span>
+          {/* Same dark look as the wide-screen sidebar: menu scrolls, "Data as of" card stays at the bottom */}
+          <nav className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col">
+            <div className="flex items-center justify-between mb-2 px-1 shrink-0">
+              <span className="text-sm font-semibold text-slate-300">Views</span>
               <button
                 type="button"
                 onClick={() => setNavOpen(false)}
-                className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100"
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-white/10 hover:text-white"
                 aria-label="Close navigation"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            {navList}
+            <div className="flex-1 min-h-0 overflow-y-auto">{navList}</div>
+            {navFooter}
           </nav>
         </div>
       )}
