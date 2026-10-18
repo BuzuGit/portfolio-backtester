@@ -26,8 +26,9 @@ html {
      the page is 15px wider whenever the scrollbar is absent, everything re-centres, and the
      sidebar and content jump sideways when switching between short and long pages. */
   scrollbar-gutter: stable;
-  /* That reserved strip shows the page's own background, so give it the app's grey. */
-  background-color: #f1f2f4;
+  /* That reserved strip shows the page's own background, so give it the app's grey
+     (the "page" colour in tailwind.config.js, the same one the page itself uses). */
+  background-color: theme('colors.page');
 }
 
 /* Custom scrollbar for tables (makes them look cleaner) */
