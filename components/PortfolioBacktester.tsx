@@ -8093,18 +8093,6 @@ const PortfolioBacktester = () => {
   // text that brightens on hover. A section counts as selected only while its own view is open.
   const navList = (
     <div className="flex flex-col gap-1">
-      {/* Dark / light mode switch, just above Backtest. It names the mode it switches TO. */}
-      <button
-        type="button"
-        onClick={toggleDarkMode}
-        aria-pressed={darkMode}
-        className="w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors text-slate-300 hover:bg-white/10 hover:text-white"
-      >
-        {darkMode
-          ? <Sun className="w-4 h-4 shrink-0 text-slate-400" />
-          : <Moon className="w-4 h-4 shrink-0 text-slate-400" />}
-        {darkMode ? 'Light mode' : 'Dark mode'}
-      </button>
       {NAV_VIEWS.map(({ view, label, icon: Icon }) => {
         const sections = navSections(view);
         const isActive = activeView === view;
@@ -8149,6 +8137,22 @@ const PortfolioBacktester = () => {
     </div>
   );
 
+  // Dark / light mode switch: a small icon-only button. Sits beside Refresh Data in the sidebar and
+  // beside the close button in the narrow-screen drawer (className gives each spot its own look).
+  // The icon shows the mode it switches TO (moon = go dark, sun = go light); hover shows the words.
+  const themeToggle = (className: string) => (
+    <button
+      type="button"
+      onClick={toggleDarkMode}
+      aria-pressed={darkMode}
+      aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={darkMode ? 'Light mode' : 'Dark mode'}
+      className={`shrink-0 rounded-lg transition-colors ${className}`}
+    >
+      {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+    </button>
+  );
+
   // Footer card at the bottom of the menu: how fresh the data is.
   //   "Data as of" — the last row of the Daily sheet, so a sheet that stopped updating shows up
   //                  here even after a fresh fetch. (Its pre-filled future rows are already
@@ -8187,13 +8191,14 @@ const PortfolioBacktester = () => {
 
   // Page background: flat, neutral light grey so the white cards stand out cleanly.
   //
-  // LAYOUT: the content column is max-w-6xl (1,152px), exactly as before. From 1,368px of window
-  // width there is room for a 168px sidebar + 8px gap beside it (1,152 + 8 + 168 + the page's
-  // 2×16px padding = 1,360, so 1,368 leaves a little spare), so the sidebar sits to its left and
+  // LAYOUT: the content column is max-w-6xl (1,152px), exactly as before. From 1,392px of window
+  // width there is room for a 192px sidebar + 8px gap beside it (1,152 + 8 + 192 + the page's
+  // 2×16px padding = 1,384, so 1,392 leaves a little spare), so the sidebar sits to its left and
   // the pair is centred as one block —
   // the content keeps its full width and the sidebar uses what used to be empty grey margin.
-  // Below 1,368px the sidebar disappears and a "Menu" button opens the drawer instead, so the
+  // Below 1,392px the sidebar disappears and a "Menu" button opens the drawer instead, so the
   // content never gives up width to navigation.
+  // (The sidebar was 168px; it grew to 192px so the dark-mode icon fits beside Refresh Data.)
   //
   // The sidebar is a dark panel exactly one window tall (minus the 16px margin top and bottom),
   // pinned in place while the page scrolls, so its rounded corners always stay on screen and the
@@ -8201,19 +8206,22 @@ const PortfolioBacktester = () => {
   // own if the window is too short), the "Data as of" card at the bottom.
   return (
     <div className="min-h-screen bg-page p-4">
-      <div className="mx-auto max-w-6xl min-[1368px]:max-w-[1328px] min-[1368px]:flex min-[1368px]:items-start min-[1368px]:gap-2">
-      <nav aria-label="Pages" className="hidden min-[1368px]:block w-[168px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
+      <div className="mx-auto max-w-6xl min-[1392px]:max-w-[1352px] min-[1392px]:flex min-[1392px]:items-start min-[1392px]:gap-2">
+      <nav aria-label="Pages" className="hidden min-[1392px]:block w-[192px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
         <div className="h-full flex flex-col p-2">
-          {/* Data controls: full-width Refresh button, then the load status in small print */}
-          <button
-            type="button"
-            onClick={loadDataFromSheet}
-            disabled={isLoading}
-            className="w-full px-3 py-2 bg-white/10 text-white border border-white/10 rounded-lg hover:bg-white/15 font-semibold flex items-center justify-center gap-2 disabled:opacity-50 text-sm shrink-0"
-          >
-            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-            {isLoading ? 'Loading...' : 'Refresh Data'}
-          </button>
+          {/* Data controls: Refresh button with the dark-mode icon beside it, then the load status in small print */}
+          <div className="flex gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={loadDataFromSheet}
+              disabled={isLoading}
+              className="flex-1 min-w-0 px-3 py-2 bg-white/10 text-white border border-white/10 rounded-lg hover:bg-white/15 font-semibold flex items-center justify-center gap-2 disabled:opacity-50 text-sm whitespace-nowrap"
+            >
+              <RefreshCw className={`w-4 h-4 shrink-0 ${isLoading ? 'animate-spin' : ''}`} />
+              {isLoading ? 'Loading...' : 'Refresh Data'}
+            </button>
+            {themeToggle('px-2.5 bg-white/10 text-slate-300 border border-white/10 hover:bg-white/15 hover:text-white')}
+          </div>
           <div className={`px-1 pt-1.5 pb-2 text-[11px] leading-snug text-center shrink-0 ${loadStatusClass}`}>
             {/* Too long for one line at this width, so break it deliberately after the first comma
                 ("Loaded 128 assets" / "203 data points") instead of wherever the text happens to wrap.
@@ -8228,14 +8236,14 @@ const PortfolioBacktester = () => {
           {navFooter}
         </div>
       </nav>
-      <div className="min-w-0 min-[1368px]:w-[1152px] min-[1368px]:shrink-0">
+      <div className="min-w-0 min-[1392px]:w-[1152px] min-[1392px]:shrink-0">
         {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy).
             On wide screens no bottom margin, so it ends level with the dark sidebar beside it. */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1368px]:mb-0">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1392px]:mb-0">
 
           {/* Data Status Section - compact single row. Narrow screens only: wide screens show
               the same Refresh button and status at the top of the sidebar instead. */}
-          <div className="mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between min-[1368px]:hidden">
+          <div className="mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between min-[1392px]:hidden">
             <div className="flex items-center gap-3">
               <h2 className="text-lg font-semibold text-gray-700">Data</h2>
               <span className={`text-sm ${
@@ -8309,11 +8317,11 @@ const PortfolioBacktester = () => {
             </div>
           )}
 
-          {/* Navigation on narrow screens. Wide screens (1,368px+) get the sidebar on the left
+          {/* Navigation on narrow screens. Wide screens (1,392px+) get the sidebar on the left
               instead, so this button hides there. Tapping it slides the same list in from the
               left (see the drawer at the bottom of the page). */}
           {isConnected && assetData && (
-            <div className="mb-6 min-[1368px]:hidden">
+            <div className="mb-6 min-[1392px]:hidden">
               <button
                 type="button"
                 onClick={() => setNavOpen(true)}
@@ -21564,12 +21572,14 @@ const PortfolioBacktester = () => {
       {/* Slide-in navigation drawer (narrow screens), opened by the "Menu" button. Tapping the
           dimmed backdrop, the close button, or any view closes it. */}
       {navOpen && (
-        <div className="fixed inset-0 z-50 min-[1368px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
+        <div className="fixed inset-0 z-50 min-[1392px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
           <div className="absolute inset-0 bg-black/30" onClick={() => setNavOpen(false)} />
           {/* Same dark look as the wide-screen sidebar: menu scrolls, "Data as of" card stays at the bottom */}
           <nav aria-label="Pages" className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col">
             <div className="flex items-center justify-between mb-2 px-1 shrink-0">
               <span className="text-sm font-semibold text-slate-300">Views</span>
+              <div className="flex items-center gap-1">
+              {themeToggle('p-1.5 text-slate-400 hover:bg-white/10 hover:text-white')}
               <button
                 type="button"
                 onClick={() => setNavOpen(false)}
@@ -21578,6 +21588,7 @@ const PortfolioBacktester = () => {
               >
                 <X className="w-4 h-4" />
               </button>
+              </div>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">{navList}</div>
             {navFooter}
