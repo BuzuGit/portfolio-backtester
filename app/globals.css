@@ -22,6 +22,12 @@ html, body {
 /* Smooth scrolling for the whole page */
 html {
   scroll-behavior: smooth;
+  /* Always keep room for the vertical scrollbar, even on a page too short to scroll. Otherwise
+     the page is 15px wider whenever the scrollbar is absent, everything re-centres, and the
+     sidebar and content jump sideways when switching between short and long pages. */
+  scrollbar-gutter: stable;
+  /* That reserved strip shows the page's own background, so give it the app's grey. */
+  background-color: #f1f2f4;
 }
 
 /* Custom scrollbar for tables (makes them look cleaner) */

@@ -8022,9 +8022,9 @@ const PortfolioBacktester = () => {
                     key={s.key}
                     type="button"
                     onClick={() => { setActiveView(view); sections.select(s.key); setNavOpen(false); }}
-                    className={`w-full text-left px-2 py-1 rounded-md text-xs whitespace-nowrap transition-colors ${
+                    className={`w-full text-left px-2 py-1 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
                       isActive && sections.active === s.key
-                        ? 'bg-white/10 text-white font-semibold'
+                        ? 'bg-white/10 text-white'
                         : 'text-slate-400 hover:bg-white/5 hover:text-white'
                     }`}
                   >
