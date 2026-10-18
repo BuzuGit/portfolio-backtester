@@ -5,6 +5,10 @@ module.exports = {
     './app/**/*.{js,ts,jsx,tsx,mdx}',
     './components/**/*.{js,ts,jsx,tsx,mdx}',
   ],
+  // "dark:" classes follow the "dark" class on <html> (the left-panel switch), not the computer's
+  // own light/dark setting. Almost all dark styling lives in app/dark.css; "dark:" is only used
+  // where an element must show or hide by mode, like the sun/moon icon on the switch.
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {

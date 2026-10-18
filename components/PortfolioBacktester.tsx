@@ -1463,49 +1463,53 @@ const isDarkTheme = (): boolean =>
  * them. In dark mode this keeps the hue and turns the lightness upside down, like a photo negative
  * that keeps its colours: the white end becomes near-black (blends into the dark card) and the
  * strong end stays strong, so "brighter = bigger" still holds. In light mode the colour comes back
- * untouched. Accepts "#rrggbb", "rgb(r, g, b)" or "hsl(h, s%, l%)"; returns "#rrggbb".
+ * untouched. Accepts "#rgb", "#rrggbb", "rgb(r, g, b)" or "hsl(h, s%, l%)"; returns "#rrggbb".
  */
 const themedCell = (color: string): string => {
   if (!isDarkTheme()) return color;
-  let r = 0, g = 0, b = 0;
   const nums = (color.match(/-?[\d.]+/g) ?? []).map(Number);
-  if (color.startsWith('#')) {
-    const n = parseInt(color.slice(1), 16);
-    r = (n >> 16) & 255; g = (n >> 8) & 255; b = n & 255;
-  } else if (color.startsWith('rgb')) {
-    [r, g, b] = nums;
-  } else if (color.startsWith('hsl')) {
-    // hsl → rgb (standard formula)
-    const [h, s, l] = [nums[0], nums[1] / 100, nums[2] / 100];
-    const k = (n: number) => (n + h / 30) % 12;
-    const a = s * Math.min(l, 1 - l);
-    const f = (n: number) => 255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))));
-    [r, g, b] = [f(0), f(8), f(4)];
+  // Work in hue / saturation / lightness (H in degrees, S and L from 0 to 1)
+  let H = 0, S = 0, L = 0;
+  if (color.startsWith('hsl')) {
+    // Already in that form: read it straight off
+    [H, S, L] = [nums[0], nums[1] / 100, nums[2] / 100];
   } else {
-    return color;
-  }
-  // rgb → hsl
-  const [R, G, B] = [r / 255, g / 255, b / 255];
-  const max = Math.max(R, G, B), min = Math.min(R, G, B);
-  const L = (max + min) / 2;
-  const d = max - min;
-  const S = d === 0 ? 0 : d / (1 - Math.abs(2 * L - 1));
-  let H = 0;
-  if (d !== 0) {
-    if (max === R) H = 60 * (((G - B) / d) % 6);
-    else if (max === G) H = 60 * ((B - R) / d + 2);
-    else H = 60 * ((R - G) / d + 4);
+    let r: number, g: number, b: number;
+    if (color.startsWith('#')) {
+      // "#fff" is shorthand for "#ffffff": each digit doubled
+      const hex = color.length === 4 ? color.slice(1).split('').map(c => c + c).join('') : color.slice(1);
+      const n = parseInt(hex, 16);
+      [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    } else if (color.startsWith('rgb')) {
+      [r, g, b] = nums;
+    } else {
+      return color; // a colour format we don't know: leave it alone
+    }
+    // rgb → hsl (standard formula)
+    const [R, G, B] = [r / 255, g / 255, b / 255];
+    const max = Math.max(R, G, B), min = Math.min(R, G, B);
+    const d = max - min;
+    L = (max + min) / 2;
+    S = d === 0 ? 0 : d / (1 - Math.abs(2 * L - 1));
+    if (d !== 0) {
+      if (max === R) H = 60 * (((G - B) / d) % 6);
+      else if (max === G) H = 60 * ((B - R) / d + 2);
+      else H = 60 * ((R - G) / d + 4);
+    }
   }
   // Flip the lightness: white (1) → 0.11, about the dark card colour; mid tones stay mid.
   // Slightly less saturated, because full-strength colour glares on a dark page.
-  const L2 = 0.11 + (1 - L) * 0.85;
-  const S2 = S * 0.8;
-  const a2 = S2 * Math.min(L2, 1 - L2);
-  const h2 = (H + 360) % 360;
-  const k2 = (n: number) => (n + h2 / 30) % 12;
-  const f2 = (n: number) => Math.round(255 * (L2 - a2 * Math.max(-1, Math.min(k2(n) - 3, Math.min(9 - k2(n), 1)))));
-  return `#${[f2(0), f2(8), f2(4)].map(c => c.toString(16).padStart(2, '0')).join('')}`;
+  const [r2, g2, b2] = hslToRgb((H + 360) % 360, S * 0.8, 0.11 + (1 - L) * 0.85);
+  return `#${[r2, g2, b2].map(c => Math.round(c).toString(16).padStart(2, '0')).join('')}`;
 };
+
+/** hsl → [r, g, b] (0–255), the standard formula. H in degrees, S and L from 0 to 1. */
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => 255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))));
+  return [f(0), f(8), f(4)];
+}
 
 /**
  * Return Map "Return" highlight: pale for returns near zero, deep green for big gains, deep red for
@@ -1758,8 +1762,10 @@ const PortfolioBacktester = () => {
   useEffect(() => { setDarkMode(isDarkTheme()); }, []);
   // The left-panel button: flip the class on <html> (which switches app/dark.css on or off),
   // remember the choice for next time, and re-render so the computed heatmap colours update too.
+  // Reads the current mode from <html> itself, not from the state above, so a click right after
+  // loading (before the state has caught up) still goes the right way.
   const toggleDarkMode = () => {
-    const next = !darkMode;
+    const next = !isDarkTheme();
     document.documentElement.classList.toggle('dark', next);
     try { localStorage.setItem('theme', next ? 'dark' : 'light'); } catch { /* private window: just don't remember */ }
     setDarkMode(next);
@@ -6402,7 +6408,8 @@ const PortfolioBacktester = () => {
   /**
    * Price heatmap: dark red (lowest) → white (mid) → dark green (highest).
    * Used for all price tables (Monthly prices, Annual prices, detail view prices).
-   * Text always stays dark — only the background color changes.
+   * Only the background colour changes; the text keeps the page's normal colour (dark in light
+   * mode, light in dark mode, where themedCell turns the white middle near-black).
    */
   const getPriceHeatmap = (value: number, min: number, max: number): string => {
     if (min === max) return themedCell('#ffffff');
@@ -8139,17 +8146,22 @@ const PortfolioBacktester = () => {
 
   // Dark / light mode switch: a small icon-only button. Sits beside Refresh Data in the sidebar and
   // beside the close button in the narrow-screen drawer (className gives each spot its own look).
-  // The icon shows the mode it switches TO (moon = go dark, sun = go light); hover shows the words.
+  // The icon shows the mode it switches TO (moon = go dark, sun = go light).
+  // Both icons are always there and the "dark:" classes show the right one straight from the class
+  // on <html>, so a reload in dark mode shows the sun from the very first frame (no moon flicker
+  // while React catches up). For screen readers it's an on/off switch with a fixed name: "Dark
+  // mode, pressed" means dark mode is on.
   const themeToggle = (className: string) => (
     <button
       type="button"
       onClick={toggleDarkMode}
       aria-pressed={darkMode}
-      aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-      title={darkMode ? 'Light mode' : 'Dark mode'}
+      aria-label="Dark mode"
+      title="Dark mode"
       className={`shrink-0 rounded-lg transition-colors ${className}`}
     >
-      {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+      <Moon className="w-4 h-4 dark:hidden" />
+      <Sun className="w-4 h-4 hidden dark:block" />
     </button>
   );
 
@@ -10029,7 +10041,9 @@ const PortfolioBacktester = () => {
                 // Helper for sortable header styling
                 const getSortableHeaderClass = (column: string | number, baseClass: string) => {
                   const isSelected = annualReturnsSortColumn === column;
-                  return `${baseClass} cursor-pointer select-none ${isSelected ? 'font-bold' : ''}`;
+                  // Background as a class (blue-200 = #bfdbfe sorted, gray-100 = #f3f4f6 otherwise,
+                  // the same colours the inline style used to set) so app/dark.css can theme it
+                  return `${baseClass} cursor-pointer select-none ${isSelected ? 'font-bold bg-blue-200' : 'bg-gray-100'}`;
                 };
 
                 return (
@@ -10039,87 +10053,69 @@ const PortfolioBacktester = () => {
                       <thead>
                         <tr className="border-b-2 border-gray-200">
                           {/* Asset Name column - sticky both top and left (corner cell, highest z-index) */}
-                          <th className="text-left py-2 px-2 sticky top-0 left-0 z-30 min-w-[150px]" style={{ backgroundColor: '#f3f4f6' }}>
+                          <th className="text-left py-2 px-2 sticky top-0 left-0 z-30 min-w-[150px] bg-gray-100">
                             Asset
                           </th>
                           {/* Year columns - oldest to newest, clickable for sorting (filtered by selected years) */}
                           {displayYears.map(year => (
                             <th
                               key={year}
-                              className={getSortableHeaderClass(year, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
-                              style={{ backgroundColor: annualReturnsSortColumn === year ? '#bfdbfe' : '#f3f4f6' }}
-                              onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === year ? null : year)}
+                              className={getSortableHeaderClass(year, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}                              onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === year ? null : year)}
                             >
                               {year}
                             </th>
                           ))}
                           {/* Period column - shows data history length */}
                           <th
-                            className={getSortableHeaderClass('Period', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'Period' ? '#bfdbfe' : '#f3f4f6' }}
-                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Period' ? null : 'Period')}
+                            className={getSortableHeaderClass('Period', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Period' ? null : 'Period')}
                           >
                             Period
                           </th>
                           {/* CAGR column - compound annual growth rate */}
                           <th
-                            className={getSortableHeaderClass('CAGR', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'CAGR' ? '#bfdbfe' : '#f3f4f6' }}
-                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CAGR' ? null : 'CAGR')}
+                            className={getSortableHeaderClass('CAGR', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CAGR' ? null : 'CAGR')}
                           >
                             CAGR
                           </th>
                           {/* Volatility column - annualized std dev of monthly returns */}
                           <th
-                            className={getSortableHeaderClass('Vol', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[50px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'Vol' ? '#bfdbfe' : '#f3f4f6' }}
-                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Vol' ? null : 'Vol')}
+                            className={getSortableHeaderClass('Vol', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[50px]')}                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Vol' ? null : 'Vol')}
                           >
                             Vol
                           </th>
                           {/* Sharpe Ratio column - risk-adjusted return */}
                           <th
-                            className={getSortableHeaderClass('Sharpe', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'Sharpe' ? '#bfdbfe' : '#f3f4f6' }}
-                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Sharpe' ? null : 'Sharpe')}
+                            className={getSortableHeaderClass('Sharpe', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Sharpe' ? null : 'Sharpe')}
                           >
                             Sharpe
                           </th>
                           {/* Max Drawdown column - worst peak-to-trough decline */}
                           <th
-                            className={getSortableHeaderClass('MaxDD', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'MaxDD' ? '#bfdbfe' : '#f3f4f6' }}
-                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'MaxDD' ? null : 'MaxDD')}
+                            className={getSortableHeaderClass('MaxDD', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'MaxDD' ? null : 'MaxDD')}
                           >
                             Max DD
                           </th>
                           {/* DD Duration column - longest drawdown duration */}
                           <th
-                            className={getSortableHeaderClass('DDDur', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'DDDur' ? '#bfdbfe' : '#f3f4f6' }}
-                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'DDDur' ? null : 'DDDur')}
+                            className={getSortableHeaderClass('DDDur', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'DDDur' ? null : 'DDDur')}
                           >
                             DD Dur
                           </th>
                           {/* Current Drawdown column - distance from ATH */}
                           <th
-                            className={getSortableHeaderClass('CurrDD', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}
-                            style={{ backgroundColor: annualReturnsSortColumn === 'CurrDD' ? '#bfdbfe' : '#f3f4f6' }}
-                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CurrDD' ? null : 'CurrDD')}
+                            className={getSortableHeaderClass('CurrDD', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CurrDD' ? null : 'CurrDD')}
                           >
                             Curr DD
                           </th>
                           {/* Ticker column - placed after Curr DD */}
-                          <th className="text-left py-2 px-2 sticky top-0 z-20" style={{ backgroundColor: '#f3f4f6' }}>Ticker</th>
+                          <th className="text-left py-2 px-2 sticky top-0 z-20 bg-gray-100">Ticker</th>
                           {/* Empty separator column */}
-                          <th className="py-2 px-1 w-2 sticky top-0 z-20" style={{ backgroundColor: '#f3f4f6' }}></th>
+                          <th className="py-2 px-1 w-2 sticky top-0 z-20 bg-gray-100"></th>
                           {/* Period return columns (1Y-5Y) */}
                           {['1Y', '2Y', '3Y', '4Y', '5Y'].map(period => (
                             <th
                               key={period}
-                              className={getSortableHeaderClass(period, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[50px]')}
-                              style={{ backgroundColor: annualReturnsSortColumn === period ? '#bfdbfe' : '#f3f4f6' }}
-                              onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === period ? null : period)}
+                              className={getSortableHeaderClass(period, 'text-right py-2 px-2 sticky top-0 z-20 min-w-[50px]')}                              onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === period ? null : period)}
                             >
                               {period}
                             </th>
@@ -10145,7 +10141,7 @@ const PortfolioBacktester = () => {
                           return (
                           <tr key={asset.ticker} className={`border-b border-gray-100 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
                             {/* Asset name - sticky left column with solid background so data doesn't bleed through */}
-                            <td className="py-2 px-2 font-medium sticky left-0 z-10" style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f9fafb' }}>
+                            <td className={`py-2 px-2 font-medium sticky left-0 z-10 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
                               {asset.name}
                             </td>
                             {/* Annual data for each year — returns (%) or end-of-year prices depending on view mode */}
@@ -12702,6 +12698,10 @@ const PortfolioBacktester = () => {
                       return bVal - aVal;
                     });
 
+                // Header background: blue-200 (#bfdbfe) on the sorted column, gray-100 (#f3f4f6) on the
+                // rest. A class rather than an inline style so app/dark.css can theme it.
+                const monthlyHeadBg = (col: string) => monthlySortColumn === col ? 'bg-blue-200' : 'bg-gray-100';
+
                 return (
                   <div className="bg-white p-4 rounded-lg shadow">
                     {/* Scrollable table container */}
@@ -12711,8 +12711,7 @@ const PortfolioBacktester = () => {
                           <tr className="border-b border-gray-200">
                             {/* Asset Name - sticky left column, sortable */}
                             <th
-                              className="sticky left-0 z-10 text-left py-1 px-1 min-w-[160px] border-r border-gray-200 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'name' ? '#bfdbfe' : '#f3f4f6' }}
+                              className={`sticky left-0 z-10 text-left py-1 px-1 min-w-[160px] border-r border-gray-200 cursor-pointer select-none ${monthlyHeadBg('name')}`}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'name' ? null : 'name')}
                             >
                               Asset
@@ -12721,8 +12720,7 @@ const PortfolioBacktester = () => {
                             {months.map((month, idx) => (
                               <th
                                 key={idx}
-                                className="text-right py-1 px-1 whitespace-nowrap cursor-pointer select-none"
-                                style={{ backgroundColor: monthlySortColumn === `month-${idx}` ? '#bfdbfe' : '#f3f4f6' }}
+                                className={`text-right py-1 px-1 whitespace-nowrap cursor-pointer select-none ${monthlyHeadBg(`month-${idx}`)}`}
                                 onClick={() => setMonthlySortColumn(monthlySortColumn === `month-${idx}` ? null : `month-${idx}`)}
                               >
                                 {month}
@@ -12730,40 +12728,35 @@ const PortfolioBacktester = () => {
                             ))}
                             {/* 10m SMA column, sortable */}
                             <th
-                              className="text-right py-1 px-1 whitespace-nowrap border-l border-gray-200 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'sma10' ? '#bfdbfe' : '#f3f4f6' }}
+                              className={`text-right py-1 px-1 whitespace-nowrap border-l border-gray-200 cursor-pointer select-none ${monthlyHeadBg('sma10')}`}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'sma10' ? null : 'sma10')}
                             >
                               10mSMA
                             </th>
                             {/* Signal column, sortable */}
                             <th
-                              className="text-center py-1 px-1 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'signal' ? '#bfdbfe' : '#f3f4f6' }}
+                              className={`text-center py-1 px-1 cursor-pointer select-none ${monthlyHeadBg('signal')}`}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'signal' ? null : 'signal')}
                             >
                               Signal
                             </th>
                             {/* Ticker column, sortable */}
                             <th
-                              className="text-left py-1 px-1 border-l border-gray-200 cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'ticker' ? '#bfdbfe' : '#f3f4f6' }}
+                              className={`text-left py-1 px-1 border-l border-gray-200 cursor-pointer select-none ${monthlyHeadBg('ticker')}`}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'ticker' ? null : 'ticker')}
                             >
                               Ticker
                             </th>
                             {/* 12-month return column, sortable */}
                             <th
-                              className="text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'ret12m' ? '#bfdbfe' : '#f3f4f6' }}
+                              className={`text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none ${monthlyHeadBg('ret12m')}`}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'ret12m' ? null : 'ret12m')}
                             >
                               12M Ret
                             </th>
                             {/* 12-month drawdown column, sortable */}
                             <th
-                              className="text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none"
-                              style={{ backgroundColor: monthlySortColumn === 'dd12m' ? '#bfdbfe' : '#f3f4f6' }}
+                              className={`text-right py-1 px-1 border-l border-gray-200 whitespace-nowrap cursor-pointer select-none ${monthlyHeadBg('dd12m')}`}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'dd12m' ? null : 'dd12m')}
                             >
                               12M DD
@@ -16183,12 +16176,12 @@ const PortfolioBacktester = () => {
                       <thead>
                         <tr>
                           {/* Empty top-left corner cell - sticky both top and left (highest z-index) */}
-                          <th className="py-1 px-2 sticky top-0 left-0 z-30 border border-gray-200 min-w-[60px]" style={{ backgroundColor: '#f3f4f6' }}></th>
+                          <th className="py-1 px-2 sticky top-0 left-0 z-30 border border-gray-200 min-w-[60px] bg-gray-100"></th>
                           {/* Column headers — one per ticker, each sticky top */}
                           {tickers.map(ticker => (
                             <th
                               key={ticker}
-                              className="py-1 px-2 sticky top-0 z-20 border border-gray-200 text-center font-semibold min-w-[55px]" style={{ backgroundColor: '#f3f4f6' }}
+                              className="py-1 px-2 sticky top-0 z-20 border border-gray-200 text-center font-semibold min-w-[55px] bg-gray-100"
                               title={assetLookup.find(a => a.ticker === ticker)?.name || ticker}
                             >
                               {ticker}
@@ -16201,7 +16194,7 @@ const PortfolioBacktester = () => {
                           <tr key={rowTicker}>
                             {/* Row header — sticky on the left with solid background */}
                             <td
-                              className="py-1 px-2 sticky left-0 z-10 border border-gray-200 font-semibold" style={{ backgroundColor: '#f3f4f6' }}
+                              className="py-1 px-2 sticky left-0 z-10 border border-gray-200 font-semibold bg-gray-100"
                               title={assetLookup.find(a => a.ticker === rowTicker)?.name || rowTicker}
                             >
                               {rowTicker}
@@ -16215,7 +16208,7 @@ const PortfolioBacktester = () => {
                                   key={colTicker}
                                   className="py-1 px-2 text-center border border-gray-200 font-mono"
                                   style={{
-                                    backgroundColor: isValid ? getCorrelationColor(value) : '#f3f4f6',
+                                    backgroundColor: isValid ? getCorrelationColor(value) : themedCell('#f3f4f6'),
                                     // Make text darker for better readability on colored backgrounds
                                     color: isValid ? '#1f2937' : '#9ca3af',
                                   }}
