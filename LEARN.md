@@ -10,13 +10,21 @@ Imagine you're a time traveler with a financial mission: "If I had invested $10,
 
 That's exactly what a **backtester** does. It takes historical price data and simulates what would have happened if you'd followed a specific investment strategy. No actual time travel required!
 
-**Key features:**
-- Load historical price data from a Google Sheet
-- Create multiple portfolio configurations (e.g., "60% stocks, 40% bonds")
-- Run simulations to see how those portfolios would have performed
-- View beautiful charts and detailed statistics
-- See monthly returns broken down by year
-- Analyze closed positions with XIRR, "what if I kept it?" analysis, and comparison to alternative investments
+That was where it started. It has since grown into a whole investing cockpit — ten pages in the
+left-hand menu, all fed by one Google Sheet:
+
+| Page | What it answers |
+|---|---|
+| **Backtest** | "How would this mix have done?" Build portfolios (or pick a preset from the sheet), choose rebalancing and an optional inflation-linked withdrawal, and compare growth, drawdowns and stats. |
+| **Markets** | "How is everything doing right now?" One board per category you set in the sheet, each with a Returns view and a Stats view. Plus three special pages: **EDO** (Polish inflation-linked bonds), **Country** (one country's assets, currency and macro in its own currency) and **Holdings** (what you own today, cash included, in one currency). |
+| **Portfolio** | "How has *my* money actually done?" Daily NAV against inflation and benchmarks, returns and contributions by year, and each year's profit split by asset. |
+| **Positions** | "What do I hold, what did I sell, and how did each one work out?" Open and Closed positions rebuilt from the transaction diary, with XIRR, "what if I'd kept it?" comparisons, and cash balances per account. |
+| **Monthly** | "What's the trend?" 13 months of prices as a heatmap with buy/sell signals; click an asset for its detail page (stats, charts, seasonality, how it did vs the market). |
+| **Annual** | Every asset's calendar-year returns in one table. |
+| **Best To Worst** | **Ranking**: one year's assets from best to worst. **Return Map**: several years side by side, so you can watch winners and losers rotate. |
+| **Graphs** | A wall of price charts, one per asset. |
+| **Trend Following** | Buy & Hold vs a simple "own it only above its 10-month average" rule. |
+| **Correlations** | Which assets move together: a correlation matrix, head-to-head pairs, and a risk vs return scatter. |
 
 ---
 
@@ -57,7 +65,7 @@ Think of this app like a restaurant:
 
 **The Flow:**
 1. User opens the app
-2. App automatically fetches data from Google Sheets (5 tabs, in parallel)
+2. App automatically fetches data from Google Sheets (7 tabs, in parallel)
 3. `positions.ts` replays the transaction ledger to work out what is held and what was sold
 4. User configures portfolios and runs backtest
 5. App calculates returns and displays results
@@ -92,8 +100,9 @@ portfolio-backtester/
 │   ├── fetchData.ts             # Handles fetching & parsing CSV from Google
 │   ├── positions.ts             # Replays the transaction ledger into positions
 │   ├── cash.ts                  # Reads the same ledger as double-entry: cash balances
-│   ├── markets.ts               # The Markets tab's return matrix and stats
-│   └── holdings.ts              # The Markets tab's Holdings page: what you own, in one currency
+│   ├── markets.ts               # The Markets tab's return matrix, stats and Country page
+│   ├── holdings.ts              # The Markets tab's Holdings page: what you own, in one currency
+│   └── edo.ts                   # Polish EDO savings bonds: turns the EDO tab into an asset
 │
 ├── package.json                 # Project dependencies (like a shopping list)
 ├── next.config.js               # Next.js settings
@@ -104,13 +113,13 @@ portfolio-backtester/
 
 ### Key Files Explained
 
-**`components/PortfolioBacktester.tsx`** - This is the heart of the app. It's a large component (~14,500 lines) that breaks down into clear sections:
+**`components/PortfolioBacktester.tsx`** - This is the heart of the app. It's a large component (~21,500 lines) that breaks down into clear sections:
 - State management (tracking what data we have, user selections)
 - Data loading (fetching from Google Sheets)
 - Portfolio management (adding/removing assets)
 - Backtest calculations (the math that simulates investing)
 - Closed positions analysis (XIRR, comparison charts, dashboard stats)
-- UI rendering (displaying forms, charts, tables across 9 tabs)
+- UI rendering (displaying forms, charts, tables across the 10 pages listed at the top of this guide)
 
 **`lib/positions.ts`** - Replays the Transactions ledger to work out what you still hold, what you
 sold, and which dividend belongs to which shares (FIFO lot matching). Both the Positions tab and the
@@ -124,7 +133,7 @@ section subtotals, XIRR and Curr DD. It does no drawing at all — the component
 returns — which is what made it possible to time it and test it on its own (see Lesson 33).
 
 **`lib/fetchData.ts`** - A helper that:
-- Fetches CSV text from your Google Sheet URL (5 sheets in parallel: prices, lookup, years, daily NAV, transactions ledger)
+- Fetches CSV text from your Google Sheet URL (7 sheets in parallel: prices, lookup, years, daily NAV, transactions ledger, preset portfolios, EDO bonds)
 - Parses the CSV (handling tricky cases like commas inside quoted fields, and multiline headers)
 - Returns clean, structured data including computed fields like CAGR and total returns
 
@@ -227,6 +236,10 @@ A React library for drawing charts. We use:
 - Default behavior differs: other tabs start with everything selected, but Closed starts with nothing selected (you choose what to analyze)
 - Prevents confusing crosstalk: switching between tabs shouldn't reset your filters
 
+*Update:* the Closed tab is now the Closed half of the **Positions** page, and that filter
+(`closedSelectedTickers`) covers Open and Closed alike. It no longer starts empty: every asset you
+have ever held is selected when the data loads. The class and currency filters were later dropped.
+
 ### Why normalize comparison prices instead of showing raw prices?
 
 **Decision:** When comparing "what if I invested in CSPX instead of selling IWDA?", normalize the comparison asset's price to match the sold asset's price at the sale date.
@@ -244,6 +257,9 @@ A React library for drawing charts. We use:
 - That was the scope actually asked for, and chart colours in the other tabs aren't decorative — they encode things like buy-and-hold vs strategy, and trend signals. Recolouring them is a *meaning* change that deserves its own deliberate pass, not a find-and-replace done in passing
 - Restyling all of them blind would have risked breaking the link between a line and its legend dot, which is the one thing a chart cannot afford to get wrong
 - The cost is honest and visible: the app is **knowingly half-restyled**. If you're reading this and wondering why the Graphs tab still has a neon green line in it, that's why — not an oversight
+
+*Update:* since then the Markets, Monthly and Portfolio pages have picked up `CHART_PALETTE` colours
+too (the Portfolio tab only for some lines); Graphs and Trend Following still have their originals.
 
 **If you finish the job:** pull the colours from `CHART_PALETTE` rather than inventing new hexes, and re-run the palette validator for each chart's *actual* series count (see Lesson 16 — five colours can be made colour-blind safe, six cannot).
 
