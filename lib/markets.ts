@@ -11,6 +11,11 @@
   placed in several categories — the three cells hold comma-separated lists paired by position
   ("Assets, Factor" / "Equities, World" / "4, 1") — see SnapshotPlacement in fetchData.ts.
 
+  THE COUNTRY PAGE is built here too (buildCountryMatrix): one country's assets, its currency
+  against the others, and its macro rows (inflation, rates, yields), all chosen by the Lookup
+  tab's SnapshotCountry column and shown in that country's currency. The Markets tab's other
+  two special pages have their own files: Holdings (lib/holdings.ts) and EDO (lib/edo.ts).
+
   HOW A RETURN IS MEASURED: every period ends at the asset's latest monthly price (the live,
   month-to-date row, the same "now" the rest of the app uses) and starts at the month-end N
   months earlier. YTD starts at the last price of the previous December. The prices are
