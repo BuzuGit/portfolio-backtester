@@ -8086,15 +8086,15 @@ const PortfolioBacktester = () => {
   // Below 1,368px the sidebar disappears and a "Menu" button opens the drawer instead, so the
   // content never gives up width to navigation.
   //
-  // The sidebar is a dark column that runs the full height of the page (the row is at least one
-  // window tall, and the column stretches to match the content beside it). Its contents are a
-  // window-tall box pinned to the top while the page scrolls: Refresh at the top, the menu in the
-  // middle (scrolls on its own if the window is too short), the "Data as of" card at the bottom.
+  // The sidebar is a dark panel exactly one window tall (minus the 16px margin top and bottom),
+  // pinned in place while the page scrolls, so its rounded corners always stay on screen and the
+  // panel itself never moves. Inside: Refresh at the top, the menu in the middle (scrolls on its
+  // own if the window is too short), the "Data as of" card at the bottom.
   return (
     <div className="min-h-screen bg-[#f1f2f4] p-4">
-      <div className="mx-auto max-w-6xl min-[1368px]:max-w-[1328px] min-[1368px]:flex min-[1368px]:items-stretch min-[1368px]:gap-2 min-[1368px]:min-h-[calc(100vh-2rem)]">
-      <nav className="hidden min-[1368px]:block w-[168px] shrink-0 rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
-        <div className="sticky top-4 h-[calc(100vh-2rem)] flex flex-col p-2">
+      <div className="mx-auto max-w-6xl min-[1368px]:max-w-[1328px] min-[1368px]:flex min-[1368px]:items-start min-[1368px]:gap-2">
+      <nav className="hidden min-[1368px]:block w-[168px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
+        <div className="h-full flex flex-col p-2">
           {/* Data controls: full-width Refresh button, then the load status in small print */}
           <button
             type="button"
