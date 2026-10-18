@@ -1,0 +1,230 @@
+/*
+  DARK MODE
+
+  How it works, in one sentence: when the <html> tag carries the class "dark", every rule in this
+  file switches on and repaints the app's light colours with dark ones. Without that class, not a
+  single rule here matches anything, so light mode is exactly what it was before this file existed.
+
+  Think of it as a set of tinted overlays laid on top of the existing page rather than a second
+  copy of the page. The component code keeps its light colour classes ("bg-white", "text-gray-700"
+  ...) and this file says what each of them means in the dark.
+
+  Why this way and not Tailwind's "dark:" prefixes on every element? The app has ~1,500 colour
+  classes in one very large file. Adding "dark:" twins to all of them would touch nearly every line
+  of the UI (risking light mode) and every future change would have to be written twice. Here the
+  translation lives in one place.
+
+  The catch to remember: a colour class used for the first time somewhere in the app has no dark
+  translation until one is added here. It still works, it just shows its light colour in dark mode.
+
+  Specificity note (which rule wins): "html.dark .bg-white" outranks the plain ".bg-white", and the
+  hover rules below carry one more piece (":hover") so they still outrank the base colour of the
+  same element. Inline style="" colours always beat stylesheet rules, so those need "!important".
+
+  Who turns it on: the button at the top of the left panel. The choice is remembered in the
+  browser (localStorage "theme"), and app/layout.tsx applies it before the page first paints, so
+  a dark-mode user never sees a white flash on load.
+*/
+
+/* ---------- The dark palette (one place to tune it) ---------- */
+html.dark {
+  --d-page: #0e1014;      /* page background, behind the cards */
+  --d-card: #171a1f;      /* cards and panels (what bg-white becomes) */
+  --d-50: #1c1f25;        /* bg-gray-50: subtle sections */
+  --d-100: #23272e;       /* bg-gray-100: unselected buttons, table headers */
+  --d-200: #2c3139;       /* bg-gray-200: hover / pressed */
+  --d-300: #3a404a;       /* bg-gray-300: hairline dividers drawn as boxes */
+  --d-line-faint: #1f2329; /* border-gray-50 */
+  --d-line-soft: #252a31;  /* border-gray-100 */
+  --d-line: #2e333b;       /* border-gray-200 and the default border */
+  --d-line-strong: #3b414b; /* border-gray-300 */
+  --d-text-900: #f3f4f6;
+  --d-text-800: #e6e8eb;
+  --d-text-700: #d2d6dc;
+  --d-text-600: #b3b9c2;
+  --d-text-500: #969daa;
+  --d-text-400: #7a8290;
+  --d-text-300: #59606c;
+  --d-selected: #e6e8eb;  /* selected buttons: a light pill, like the active item in the sidebar */
+  --d-selected-text: #0e1014;
+
+  /* Native controls (date pickers, dropdowns, checkboxes, scrollbars) draw themselves dark */
+  color-scheme: dark;
+  /* The strip kept free for the scrollbar shows this colour (see globals.css) */
+  background-color: var(--d-page);
+}
+
+html.dark body {
+  /* Text without a colour class of its own would otherwise inherit the browser's black */
+  color: var(--d-text-800);
+  background-color: var(--d-page);
+}
+
+/* Tailwind gives every border a light grey by default. :where() keeps this rule at zero weight,
+   so any border with its own colour class still wins over it. */
+:where(html.dark) *, :where(html.dark) ::before, :where(html.dark) ::after {
+  border-color: var(--d-line);
+}
+
+/* ---------- Surfaces ---------- */
+html.dark .bg-page { background-color: var(--d-page); }
+html.dark .bg-white { background-color: var(--d-card); }
+html.dark .bg-gray-50 { background-color: var(--d-50); }
+html.dark .bg-gray-50\/60 { background-color: rgb(28 31 37 / 0.6); }
+html.dark .bg-gray-100 { background-color: var(--d-100); }
+html.dark .bg-gray-200 { background-color: var(--d-200); }
+html.dark .bg-gray-300 { background-color: var(--d-300); }
+html.dark .bg-gray-400 { background-color: #5b6270; }
+
+/* Selected buttons (slate-800 with white text in light mode) become a light pill with dark text */
+html.dark .bg-slate-800 { background-color: var(--d-selected); color: var(--d-selected-text); }
+html.dark .border-slate-800 { border-color: var(--d-selected); }
+html.dark .hover\:bg-slate-700:hover { background-color: #ffffff; }
+html.dark .border-slate-400 { border-color: #6b7280; }
+html.dark .ring-slate-900 { --tw-ring-color: var(--d-selected); }
+
+/* Soft tinted backgrounds: a faint wash of the same hue instead of a pale pastel */
+html.dark .bg-green-50 { background-color: rgb(34 197 94 / 0.10); }
+html.dark .bg-green-50\/30 { background-color: rgb(34 197 94 / 0.05); }
+html.dark .bg-green-100 { background-color: rgb(34 197 94 / 0.18); }
+html.dark .bg-red-50 { background-color: rgb(239 68 68 / 0.10); }
+html.dark .bg-red-100 { background-color: rgb(239 68 68 / 0.18); }
+html.dark .bg-blue-50 { background-color: rgb(59 130 246 / 0.12); }
+html.dark .bg-blue-100 { background-color: rgb(59 130 246 / 0.20); }
+html.dark .bg-blue-200 { background-color: rgb(59 130 246 / 0.30); }
+html.dark .bg-yellow-50 { background-color: rgb(234 179 8 / 0.10); }
+html.dark .bg-amber-50 { background-color: rgb(245 158 11 / 0.10); }
+html.dark .bg-amber-50\/40 { background-color: rgb(245 158 11 / 0.05); }
+html.dark .bg-amber-100 { background-color: rgb(245 158 11 / 0.18); }
+html.dark .bg-orange-50 { background-color: rgb(249 115 22 / 0.10); }
+
+/* Hover backgrounds (listed after the plain ones, and one notch stronger, so they win) */
+html.dark .hover\:bg-gray-50:hover { background-color: var(--d-50); }
+html.dark .hover\:bg-gray-100:hover { background-color: var(--d-100); }
+html.dark .hover\:bg-gray-200:hover { background-color: var(--d-200); }
+html.dark .hover\:bg-blue-50:hover { background-color: rgb(59 130 246 / 0.12); }
+html.dark .hover\:bg-blue-100:hover { background-color: rgb(59 130 246 / 0.20); }
+
+/* ---------- Borders ---------- */
+html.dark .border-gray-50 { border-color: var(--d-line-faint); }
+html.dark .border-gray-100 { border-color: var(--d-line-soft); }
+html.dark .border-gray-200 { border-color: var(--d-line); }
+html.dark .border-gray-300 { border-color: var(--d-line-strong); }
+html.dark .border-black { border-color: var(--d-text-800); }
+html.dark .border-red-200 { border-color: rgb(239 68 68 / 0.30); }
+html.dark .border-red-300 { border-color: rgb(239 68 68 / 0.45); }
+html.dark .border-green-200 { border-color: rgb(34 197 94 / 0.30); }
+html.dark .border-amber-200 { border-color: rgb(245 158 11 / 0.30); }
+html.dark .border-amber-300 { border-color: rgb(245 158 11 / 0.45); }
+
+/* ---------- Text ---------- */
+html.dark .text-gray-900 { color: var(--d-text-900); }
+html.dark .text-gray-800 { color: var(--d-text-800); }
+html.dark .text-gray-700 { color: var(--d-text-700); }
+html.dark .text-gray-600 { color: var(--d-text-600); }
+html.dark .text-gray-500 { color: var(--d-text-500); }
+html.dark .text-gray-400 { color: var(--d-text-400); }
+html.dark .text-gray-300 { color: var(--d-text-300); }
+html.dark .text-slate-900 { color: var(--d-text-900); }
+html.dark .text-slate-700 { color: var(--d-text-700); }
+html.dark .hover\:text-slate-900:hover { color: #ffffff; }
+
+/* Coloured text: the same hues a few shades lighter, so they read on a dark background */
+html.dark .text-red-500, html.dark .text-red-600, html.dark .text-red-700 { color: #f87171; }
+html.dark .text-red-800 { color: #fca5a5; }
+html.dark .hover\:text-red-700:hover { color: #fca5a5; }
+html.dark .text-green-500, html.dark .text-green-600, html.dark .text-green-700 { color: #4ade80; }
+html.dark .text-green-800 { color: #86efac; }
+html.dark .hover\:text-green-900:hover { color: #bbf7d0; }
+html.dark .text-blue-600, html.dark .text-blue-700 { color: #60a5fa; }
+html.dark .hover\:text-blue-900:hover { color: #93c5fd; }
+html.dark .text-amber-600, html.dark .text-amber-700 { color: #fbbf24; }
+html.dark .text-amber-800, html.dark .text-amber-900 { color: #fcd34d; }
+html.dark .hover\:text-amber-700:hover, html.dark .hover\:text-amber-900:hover { color: #fde68a; }
+html.dark .text-yellow-800 { color: #fde047; }
+html.dark .text-orange-600, html.dark .text-orange-700 { color: #fb923c; }
+html.dark .text-purple-700 { color: #c084fc; }
+html.dark .text-teal-700 { color: #2dd4bf; }
+
+/* The left panel was already dark, so it keeps its own look: undo the translations above
+   for the few classes it shares with the rest of the page (the white "you are here" pill). */
+html.dark nav[aria-label="Pages"] .bg-white { background-color: #ffffff; }
+html.dark nav[aria-label="Pages"] .text-slate-900 { color: #0f172a; }
+html.dark nav[aria-label="Pages"] .text-slate-700 { color: #334155; }
+
+/* ---------- Charts (Recharts draws SVG) ----------
+   Chart colours are written as SVG attributes such as stroke="#000000". A stylesheet rule beats
+   an attribute, so these swap them without touching the chart code. The "i" means upper or lower
+   case hex both match. */
+html.dark .recharts-cartesian-grid line { stroke: var(--d-line); }
+html.dark .recharts-cartesian-axis-line,
+html.dark .recharts-cartesian-axis-tick-line { stroke: #4b5260; }
+html.dark .recharts-cartesian-axis-tick-value,
+html.dark .recharts-label { fill: var(--d-text-500); }
+html.dark .recharts-tooltip-cursor { fill: rgb(255 255 255 / 0.06); stroke: var(--d-line-strong); }
+
+/* Black / near-black series, bars and labels become near-white */
+html.dark svg [stroke="#000" i], html.dark svg [stroke="#000000" i],
+html.dark svg [stroke="#111827" i], html.dark svg [stroke="#1f2937" i],
+html.dark svg [stroke="#1e293b" i] { stroke: var(--d-text-800); }
+html.dark svg [fill="#000" i], html.dark svg [fill="#000000" i],
+html.dark svg [fill="#111827" i], html.dark svg [fill="#1f2937" i],
+html.dark svg [fill="#1e293b" i] { fill: var(--d-text-800); }
+/* ...so white text written on top of a black bar or bubble turns dark to stay readable */
+html.dark svg [fill="#000000" i] + text[fill="#ffffff" i] { fill: var(--d-page); }
+html.dark svg text[style*="fill: rgb(255, 255, 255)"] { fill: var(--d-page) !important; }
+html.dark svg [fill="#374151" i] { fill: var(--d-text-700); }
+html.dark svg [stroke="#374151" i] { stroke: var(--d-text-700); }
+/* Mid-grey axis text */
+html.dark svg [fill="#666" i], html.dark svg [fill="#6b7280" i] { fill: var(--d-text-500); }
+html.dark svg [stroke="#666" i], html.dark svg [stroke="#6b7280" i] { stroke: var(--d-text-500); }
+/* Light-grey lines (grids, axis lines, faint "spaghetti" paths) become dark-grey lines */
+html.dark svg [stroke="#ccc" i], html.dark svg [stroke="#d1d5db" i],
+html.dark svg [stroke="#e5e7eb" i], html.dark svg [stroke="#f0f0f0" i],
+html.dark svg [stroke="#f3f4f6" i] { stroke: var(--d-line-strong); }
+html.dark svg [fill="#fecaca" i] { fill: rgb(239 68 68 / 0.25); }
+/* Small green / red "pill" labels drawn inside charts (pale fill, dark-green or dark-red text) */
+html.dark svg [fill="#dcfce7" i] { fill: rgb(34 197 94 / 0.18); }
+html.dark svg [fill="#fee2e2" i] { fill: rgb(239 68 68 / 0.18); }
+html.dark svg [fill="#15803d" i] { fill: #4ade80; }
+html.dark svg [fill="#b91c1c" i] { fill: #f87171; }
+/* White outlines between pie slices and white dots on lines take the card colour instead */
+html.dark svg [stroke="#fff" i], html.dark svg [stroke="#ffffff" i] { stroke: var(--d-card); }
+html.dark svg circle[fill="#fff" i], html.dark svg circle[fill="#ffffff" i] { fill: var(--d-card); }
+
+/* Recharts' own tooltip box carries its colours in an inline style, hence !important */
+html.dark .recharts-default-tooltip {
+  background-color: var(--d-100) !important;
+  border-color: var(--d-line-strong) !important;
+}
+
+/* ---------- Inline style="" colours ----------
+   A few colours are set directly on elements (table headers, custom tooltips, portfolio colours).
+   The browser stores those as rgb(...), which is what these match. */
+html.dark [style*="background-color: rgb(255, 255, 255)"],
+html.dark [style*="background: rgb(255, 255, 255)"],
+html.dark [style*="background: white"] { background-color: var(--d-card) !important; }
+html.dark [style*="background-color: rgb(249, 250, 251)"] { background-color: var(--d-50) !important; }
+html.dark [style*="background-color: rgb(243, 244, 246)"] { background-color: var(--d-100) !important; }
+html.dark [style*="background-color: rgb(191, 219, 254)"] { background-color: #1e3a5f !important; }
+html.dark [style*="border: 1px solid rgb(229, 231, 235)"] { border-color: var(--d-line-strong) !important; }
+
+/* Black text (the first portfolio's colour is black) and dark-grey text */
+html.dark [style*="color: rgb(0, 0, 0)"]:not([style*="background-color: rgb(0, 0, 0)"]),
+html.dark [style*="color: rgb(17, 24, 39)"] { color: var(--d-text-800) !important; }
+html.dark [style*="color: rgb(55, 65, 81)"] { color: var(--d-text-700) !important; }
+html.dark [style*="color: rgb(107, 114, 128)"] { color: var(--d-text-500) !important; }
+html.dark [style*="color: rgb(22, 163, 74)"], html.dark [style*="color: rgb(22, 101, 52)"] { color: #4ade80 !important; }
+html.dark [style*="color: rgb(220, 38, 38)"], html.dark [style*="color: rgb(153, 27, 27)"] { color: #f87171 !important; }
+/* SVG text labels with an inline fill */
+html.dark [style*="fill: rgb(102, 102, 102)"] { fill: var(--d-text-500) !important; }
+html.dark [style*="fill: rgb(55, 65, 81)"] { fill: var(--d-text-700) !important; }
+html.dark [style*="fill: rgb(146, 96, 10)"] { fill: #fbbf24 !important; }
+
+/* The left panel sits on a page almost as dark as itself, so give it a faint edge */
+html.dark nav[aria-label="Pages"] { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.07); }
+
+/* ---------- Table scrollbars (light versions in globals.css) ---------- */
+html.dark .overflow-x-auto::-webkit-scrollbar-track { background: var(--d-50); }
+html.dark .overflow-x-auto::-webkit-scrollbar-thumb { background: var(--d-300); }
+html.dark .overflow-x-auto::-webkit-scrollbar-thumb:hover { background: #5b6270; }
