@@ -34,7 +34,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
-import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3 } from 'lucide-react';
+import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun } from 'lucide-react';
 import { fetchSheetData, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
@@ -1451,6 +1451,63 @@ const readableTextOn = (hex: string): string => {
 };
 
 /**
+ * Is dark mode on right now? The "dark" class on <html> is the one source of truth: app/layout.tsx
+ * sets it before the first paint, and the button at the top of the left panel flips it.
+ */
+const isDarkTheme = (): boolean =>
+  typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+
+/**
+ * Heatmap cell colour, adjusted for dark mode. The heatmaps run from white (nothing to see) to a
+ * strong colour (look here), and their colours are computed in code, so app/dark.css can't reach
+ * them. In dark mode this keeps the hue and turns the lightness upside down, like a photo negative
+ * that keeps its colours: the white end becomes near-black (blends into the dark card) and the
+ * strong end stays strong, so "brighter = bigger" still holds. In light mode the colour comes back
+ * untouched. Accepts "#rrggbb", "rgb(r, g, b)" or "hsl(h, s%, l%)"; returns "#rrggbb".
+ */
+const themedCell = (color: string): string => {
+  if (!isDarkTheme()) return color;
+  let r = 0, g = 0, b = 0;
+  const nums = (color.match(/-?[\d.]+/g) ?? []).map(Number);
+  if (color.startsWith('#')) {
+    const n = parseInt(color.slice(1), 16);
+    r = (n >> 16) & 255; g = (n >> 8) & 255; b = n & 255;
+  } else if (color.startsWith('rgb')) {
+    [r, g, b] = nums;
+  } else if (color.startsWith('hsl')) {
+    // hsl → rgb (standard formula)
+    const [h, s, l] = [nums[0], nums[1] / 100, nums[2] / 100];
+    const k = (n: number) => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n: number) => 255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))));
+    [r, g, b] = [f(0), f(8), f(4)];
+  } else {
+    return color;
+  }
+  // rgb → hsl
+  const [R, G, B] = [r / 255, g / 255, b / 255];
+  const max = Math.max(R, G, B), min = Math.min(R, G, B);
+  const L = (max + min) / 2;
+  const d = max - min;
+  const S = d === 0 ? 0 : d / (1 - Math.abs(2 * L - 1));
+  let H = 0;
+  if (d !== 0) {
+    if (max === R) H = 60 * (((G - B) / d) % 6);
+    else if (max === G) H = 60 * ((B - R) / d + 2);
+    else H = 60 * ((R - G) / d + 4);
+  }
+  // Flip the lightness: white (1) → 0.11, about the dark card colour; mid tones stay mid.
+  // Slightly less saturated, because full-strength colour glares on a dark page.
+  const L2 = 0.11 + (1 - L) * 0.85;
+  const S2 = S * 0.8;
+  const a2 = S2 * Math.min(L2, 1 - L2);
+  const h2 = (H + 360) % 360;
+  const k2 = (n: number) => (n + h2 / 30) % 12;
+  const f2 = (n: number) => Math.round(255 * (L2 - a2 * Math.max(-1, Math.min(k2(n) - 3, Math.min(9 - k2(n), 1)))));
+  return `#${[f2(0), f2(8), f2(4)].map(c => c.toString(16).padStart(2, '0')).join('')}`;
+};
+
+/**
  * Return Map "Return" highlight: pale for returns near zero, deep green for big gains, deep red for
  * big losses. Anything beyond ±40% gets the deepest shade so one outlier doesn't wash out the rest.
  */
@@ -1460,7 +1517,7 @@ const returnHeatColor = (ret: number): string => {
     ? [[236, 253, 243], [21, 128, 61]]   // very light green → green-700
     : [[254, 242, 242], [185, 28, 28]];  // very light red → red-700
   const mix = from.map((c, i) => Math.round(c + (to[i] - c) * t));
-  return `#${mix.map(c => c.toString(16).padStart(2, '0')).join('')}`;
+  return themedCell(`#${mix.map(c => c.toString(16).padStart(2, '0')).join('')}`);
 };
 
 // "Group Metals & Crypto" feature (Positions tab): while on, assets take the class in the Lookup
@@ -1695,6 +1752,18 @@ const PortfolioBacktester = () => {
   const [activeView, setActiveView] = useState<'backtest' | 'markets' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'graphs' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'positions'>('backtest');
   // Narrow screens only: is the slide-in navigation drawer open? (Wide screens show the sidebar.)
   const [navOpen, setNavOpen] = useState(false);
+  // Dark mode on/off. Starts as light; the real value is read from <html> once the page is in the
+  // browser (app/layout.tsx may already have switched it to dark from the saved choice).
+  const [darkMode, setDarkMode] = useState(false);
+  useEffect(() => { setDarkMode(isDarkTheme()); }, []);
+  // The left-panel button: flip the class on <html> (which switches app/dark.css on or off),
+  // remember the choice for next time, and re-render so the computed heatmap colours update too.
+  const toggleDarkMode = () => {
+    const next = !darkMode;
+    document.documentElement.classList.toggle('dark', next);
+    try { localStorage.setItem('theme', next ? 'dark' : 'light'); } catch { /* private window: just don't remember */ }
+    setDarkMode(next);
+  };
   // Escape closes the drawer, as it would any pop-over. The listener only exists while it's open.
   useEffect(() => {
     if (!navOpen) return;
@@ -6317,7 +6386,7 @@ const PortfolioBacktester = () => {
   const getHeatmapColor = (value: number, min: number, max: number): string => {
     // Handle edge case where all values are the same
     if (min === max) {
-      return 'hsl(60, 80%, 85%)';  // Neutral yellow
+      return themedCell('hsl(60, 80%, 85%)');  // Neutral yellow
     }
 
     // Calculate position in range (0 = min, 1 = max)
@@ -6327,7 +6396,7 @@ const PortfolioBacktester = () => {
     const hue = position * 120;
 
     // Return HSL color with fixed saturation and lightness for readability
-    return `hsl(${hue}, 80%, 85%)`;
+    return themedCell(`hsl(${hue}, 80%, 85%)`);
   };
 
   /**
@@ -6336,7 +6405,7 @@ const PortfolioBacktester = () => {
    * Text always stays dark — only the background color changes.
    */
   const getPriceHeatmap = (value: number, min: number, max: number): string => {
-    if (min === max) return '#ffffff';
+    if (min === max) return themedCell('#ffffff');
     const pos = (value - min) / (max - min); // 0 = min, 1 = max
 
     let r: number, g: number, b: number;
@@ -6354,7 +6423,7 @@ const PortfolioBacktester = () => {
       b = Math.round(255 - t * (255 - 120)); // 255 → 120
     }
 
-    return `rgb(${r}, ${g}, ${b})`;
+    return themedCell(`rgb(${r}, ${g}, ${b})`);
   };
 
   /**
@@ -6371,7 +6440,7 @@ const PortfolioBacktester = () => {
     // When value =  0: hue = 60 (yellow)
     // When value = -1: hue = 120 (green)
     const hue = (1 - value) * 60;
-    return `hsl(${hue}, 80%, 85%)`;
+    return themedCell(`hsl(${hue}, 80%, 85%)`);
   };
 
   /**
@@ -8024,6 +8093,18 @@ const PortfolioBacktester = () => {
   // text that brightens on hover. A section counts as selected only while its own view is open.
   const navList = (
     <div className="flex flex-col gap-1">
+      {/* Dark / light mode switch, just above Backtest. It names the mode it switches TO. */}
+      <button
+        type="button"
+        onClick={toggleDarkMode}
+        aria-pressed={darkMode}
+        className="w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors text-slate-300 hover:bg-white/10 hover:text-white"
+      >
+        {darkMode
+          ? <Sun className="w-4 h-4 shrink-0 text-slate-400" />
+          : <Moon className="w-4 h-4 shrink-0 text-slate-400" />}
+        {darkMode ? 'Light mode' : 'Dark mode'}
+      </button>
       {NAV_VIEWS.map(({ view, label, icon: Icon }) => {
         const sections = navSections(view);
         const isActive = activeView === view;
@@ -10253,11 +10334,11 @@ const PortfolioBacktester = () => {
                         </p>
                       ) : (
                         <p className="mt-1">
-                          <span className="inline-block w-3 h-3 border border-gray-200 mr-1" style={{ backgroundColor: 'hsl(0, 80%, 85%)' }}></span>
+                          <span className="inline-block w-3 h-3 border border-gray-200 mr-1" style={{ backgroundColor: themedCell('hsl(0, 80%, 85%)') }}></span>
                           Lowest price
-                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: 'hsl(60, 80%, 85%)' }}></span>
+                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: themedCell('hsl(60, 80%, 85%)') }}></span>
                           Mid
-                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: 'hsl(120, 80%, 85%)' }}></span>
+                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: themedCell('hsl(120, 80%, 85%)') }}></span>
                           Highest price
                         </p>
                       )}
@@ -12800,9 +12881,9 @@ const PortfolioBacktester = () => {
                         <div className="flex items-center gap-2">
                           <span>Price heatmap (per row):</span>
                           <div className="flex items-center">
-                            <div className="w-6 h-4 rounded-l" style={{ backgroundColor: 'hsl(0, 80%, 85%)' }}></div>
-                            <div className="w-6 h-4" style={{ backgroundColor: 'hsl(60, 80%, 85%)' }}></div>
-                            <div className="w-6 h-4 rounded-r" style={{ backgroundColor: 'hsl(120, 80%, 85%)' }}></div>
+                            <div className="w-6 h-4 rounded-l" style={{ backgroundColor: themedCell('hsl(0, 80%, 85%)') }}></div>
+                            <div className="w-6 h-4" style={{ backgroundColor: themedCell('hsl(60, 80%, 85%)') }}></div>
+                            <div className="w-6 h-4 rounded-r" style={{ backgroundColor: themedCell('hsl(120, 80%, 85%)') }}></div>
                           </div>
                           <span>Low → High</span>
                         </div>
@@ -15122,12 +15203,12 @@ const PortfolioBacktester = () => {
                             // Red heatmap for drawdowns: white (0%) → muted red (worst DD)
                             // Aligned with getPriceHeatmap red end: rgb(205, 130, 130)
                             const getDDColor = (dd: number): string => {
-                              if (dd === 0 || worstDD === 0) return '#ffffff';
+                              if (dd === 0 || worstDD === 0) return themedCell('#ffffff');
                               const pos = dd / worstDD; // 0 = at ATH, 1 = worst drawdown
                               const r = Math.round(255 - pos * (255 - 205));  // 255 → 205
                               const g = Math.round(255 - pos * (255 - 130));  // 255 → 130
                               const b = Math.round(255 - pos * (255 - 130));  // 255 → 130
-                              return `rgb(${r}, ${g}, ${b})`;
+                              return themedCell(`rgb(${r}, ${g}, ${b})`);
                             };
 
                             // Max ATH count for green heatmap scaling
@@ -15136,12 +15217,12 @@ const PortfolioBacktester = () => {
                             // Green heatmap for ATHs: white (0) → muted green (max ATHs)
                             // Aligned with getPriceHeatmap green end: rgb(120, 190, 120)
                             const getATHColor = (count: number): string => {
-                              if (count === 0 || maxATHs === 0) return '#ffffff';
+                              if (count === 0 || maxATHs === 0) return themedCell('#ffffff');
                               const pos = count / maxATHs;
                               const r = Math.round(255 - pos * (255 - 120));  // 255 → 120
                               const g = Math.round(255 - pos * (255 - 190));  // 255 → 190
                               const b = Math.round(255 - pos * (255 - 120));  // 255 → 120
-                              return `rgb(${r}, ${g}, ${b})`;
+                              return themedCell(`rgb(${r}, ${g}, ${b})`);
                             };
 
                             const years = Object.keys(monthlyDDs)
