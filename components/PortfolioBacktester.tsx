@@ -2,12 +2,28 @@
 /*
   PORTFOLIO BACKTESTER COMPONENT
 
-  This is the main component that does all the heavy lifting.
-  It lets you:
-  1. Load historical price data from a Google Sheet
-  2. Create portfolios with different asset allocations
-  3. Run backtests to see how those portfolios would have performed
-  4. View charts and statistics
+  This is the main component that does all the heavy lifting: it loads every tab of the
+  Google Sheet (lib/fetchData.ts) and draws every page of the app. The arithmetic for the
+  bigger pages lives in lib/ (positions, cash, markets, holdings, edo); this file draws.
+
+  The pages, in left-menu order (NAV_VIEWS, further down, is the authoritative list):
+   - Backtest         build portfolios (or pick a preset from the sheet's Portfolios tab),
+                      simulate them over history with rebalancing, compare stats and charts
+   - Markets          one-screen market boards, one per SnapshotCategory in the Lookup tab,
+                      each with a Returns and a Stats view; plus EDO (Polish inflation bonds,
+                      lib/edo.ts), Country (one country's assets in its own currency) and
+                      Holdings (what you own today, cash included, lib/holdings.ts)
+   - Portfolio        your real portfolio over time: Daily NAV vs inflation and benchmarks,
+                      returns and contributions by year, and each year's profit by asset
+   - Positions        Open and Closed positions, rebuilt from the Transactions ledger
+                      (lib/positions.ts), plus cash balances (lib/cash.ts)
+   - Monthly          13 months of prices as a heatmap with 10-month SMA signals; click an
+                      asset for its detail page (stats, charts, seasonality, vs market)
+   - Annual           every asset's calendar-year returns
+   - Best To Worst    one year's assets ranked (Ranking), or many years side by side (Return Map)
+   - Graphs           a grid of price charts, one per asset
+   - Trend Following  Buy & Hold vs a 10-month SMA timing rule, per asset
+   - Correlations     correlation matrix, head-to-head pairs, and a risk/return scatter
 
   'use client' at the top tells Next.js this component needs to run
   in the browser (not on the server) because it uses:
@@ -19,7 +35,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
 import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3 } from 'lucide-react';
-import { fetchSheetData, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
+import { fetchSheetData, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
@@ -1665,13 +1681,17 @@ const PortfolioBacktester = () => {
   // Results after running backtest
   const [backtestResults, setBacktestResults] = useState<BacktestResult[] | null>(null);
 
-  // Which view is currently active: the backtest tool, assets annual returns table, or best-to-worst ranking
+  // Which page is open (the left menu, NAV_VIEWS, lists them in order):
   // 'backtest' = show the portfolio configuration and backtest results
-  // 'annualReturns' = show a table of yearly returns for all assets in the lookup table
-  // 'bestToWorst' = show assets ranked by return for a selected year
+  // 'markets' = market boards from the Lookup tab's Snapshot columns, plus the EDO, Country and Holdings pages
+  // 'portfolio' = your real portfolio: Daily NAV, returns by year, profit breakdown
+  // 'positions' = Open and Closed positions from the Transactions ledger, plus cash balances
   // 'monthlyPrices' = show monthly price heatmap with SMA signals
+  // 'annualReturns' = show a table of yearly returns for all assets in the lookup table
+  // 'bestToWorst' = assets ranked by return for a selected year (Ranking), or across years (Return Map)
+  // 'graphs' = a grid of price charts, one per asset
   // 'trendFollowing' = compare Buy & Hold vs 10-month SMA trend following strategy
-  // 'markets' = one-screen market overview (Return matrix), driven by the Lookup tab's Snapshot columns
+  // 'correlationMatrix' = correlation matrix, head-to-head pairs and the risk/return scatter
   const [activeView, setActiveView] = useState<'backtest' | 'markets' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'graphs' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'positions'>('backtest');
   // Narrow screens only: is the slide-in navigation drawer open? (Wide screens show the sidebar.)
   const [navOpen, setNavOpen] = useState(false);
@@ -1791,9 +1811,11 @@ const PortfolioBacktester = () => {
   const [selectedRebalancingPortfolio, setSelectedRebalancingPortfolio] = useState(0);
 
   // ---- Closed Positions tab state ----
-  // Raw transaction data from the "Closed" sheet in Google Sheets
+  // Closed round trips, rebuilt from the Transactions ledger by lib/positions.ts (the old
+  // "Closed"/"Exit" sheet tabs are gone). "Closed tab" below = the Closed half of Positions.
   const [closedData, setClosedData] = useState<ClosedPositionRow[]>([]);
-  // Filter state for the Closed tab (all assets selected by default after data loads)
+  // Asset filter for the Positions page, Open and Closed alike (every ticker you have ever
+  // held is selected by default after data loads)
   const [closedSelectedTickers, setClosedSelectedTickers] = useState<string[]>([]);
   const [closedOpenFilterDropdown, setClosedOpenFilterDropdown] = useState<'assets' | null>(null);
   // Which asset the user drilled into (empty string = showing summary list)
@@ -1876,8 +1898,10 @@ const PortfolioBacktester = () => {
   const [openCurrencyFilter, setOpenCurrencyFilter] = useState<string | null>(null);
   // Account filter: clicking a bar in the By Account breakdown filters Asset Class, By Currency, and Open Positions
   const [openAccountFilter, setOpenAccountFilter] = useState<string | null>(null);
-  // Toggle: when true, assets classified as "Other" (Gold + Crypto) are relabelled "Metals & Crypto"
-  // as an asset class AND pulled out of their fiat currency bucket into a "M&C" pseudo-currency.
+  // Toggle: when true, each asset is shown under its PortfolioClass from the Lookup tab (blank =
+  // its Asset Class; see portfolioClassOf in lib/holdings.ts), so gold, silver and crypto sit
+  // together under "Metals & Crypto" — and those are pulled out of their fiat currency bucket
+  // into a "M&C" pseudo-currency.
   const [groupMetalsCrypto, setGroupMetalsCrypto] = useState(true);
   // Ref for the "select all" checkbox in open position detail view
   const openSelectAllRef = useRef<HTMLInputElement>(null);
@@ -8008,6 +8032,7 @@ const PortfolioBacktester = () => {
             <button
               type="button"
               onClick={() => { setActiveView(view); setNavOpen(false); }}
+              aria-current={isActive ? 'page' : undefined}
               className={`w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
                 isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'
               }`}
@@ -8022,7 +8047,11 @@ const PortfolioBacktester = () => {
                     key={s.key}
                     type="button"
                     onClick={() => { setActiveView(view); sections.select(s.key); setNavOpen(false); }}
-                    className={`w-full text-left px-2 py-1 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
+                    aria-current={isActive && sections.active === s.key ? 'true' : undefined}
+                    // Markets' names come from the sheet, so a long one is cut with "…" (full name on hover)
+                    // rather than pushing past the edge of the narrow panel.
+                    title={s.label}
+                    className={`w-full text-left px-2 py-1 rounded-md text-sm font-medium truncate transition-colors ${
                       isActive && sections.active === s.key
                         ? 'bg-white/10 text-white'
                         : 'text-slate-400 hover:bg-white/5 hover:text-white'
@@ -8040,26 +8069,25 @@ const PortfolioBacktester = () => {
   );
 
   // Footer card at the bottom of the menu: how fresh the data is.
-  //   "Data as of" — the newest date in the Daily sheet (or, failing that, the price sheet), so a
-  //                  sheet that stopped updating shows up here even after a fresh fetch. Dates
-  //                  after today are ignored: the sheet pre-fills the coming week's rows with
-  //                  the latest value repeated, which would otherwise show a future date.
-  //   "Fetched"    — when the app last pulled from Google; the date is added if it wasn't today.
+  //   "Data as of" — the last row of the Daily sheet, so a sheet that stopped updating shows up
+  //                  here even after a fresh fetch. (Its pre-filled future rows are already
+  //                  dropped when it is read, in lib/fetchData.ts.) If the Daily tab failed, the
+  //                  price sheet's last row instead — capped at today, because that row is labelled
+  //                  with the current month's END date while holding month-to-date prices.
+  //   "Fetched"    — when the app last pulled from Google. Always with its date, so a page left
+  //                  open overnight can't pass yesterday's fetch off as today's.
   const fmtNavDate = (iso: string) => {
     // Built from the "YYYY-MM-DD" parts directly, so no timezone can shift it by a day
     const [y, m, d] = iso.split('-').map(Number);
-    return `${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]} ${y}`;
+    return `${d} ${MONTH_LABELS[m - 1]} ${y}`;
   };
-  const navNow = new Date();
-  // Today's LOCAL date (not lib/edo's todayIso(), which is UTC and lags a day before 8am in Singapore)
-  const navTodayIso = `${navNow.getFullYear()}-${String(navNow.getMonth() + 1).padStart(2, '0')}-${String(navNow.getDate()).padStart(2, '0')}`;
+  const navToday = localTodayIso();
+  const lastPriceDate = assetData && assetData.length > 0 ? assetData[assetData.length - 1].date : '';
   const latestDataDate = dailyData.length > 0
-    ? dailyData.reduce((max, r) => (r.date > max && r.date <= navTodayIso ? r.date : max), '')
-    : assetData && assetData.length > 0 ? assetData[assetData.length - 1].date : '';
+    ? dailyData[dailyData.length - 1].date
+    : lastPriceDate && lastPriceDate > navToday ? navToday : lastPriceDate;
   const fetchedLabel = lastFetchedAt
-    ? (lastFetchedAt.toDateString() === new Date().toDateString()
-        ? ''
-        : `${lastFetchedAt.getDate()} ${lastFetchedAt.toLocaleString('en-GB', { month: 'short' })}, `)
+    ? `${lastFetchedAt.getDate()} ${MONTH_LABELS[lastFetchedAt.getMonth()]} `
       + lastFetchedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
     : '';
   const navFooter = latestDataDate ? (
@@ -8091,9 +8119,9 @@ const PortfolioBacktester = () => {
   // panel itself never moves. Inside: Refresh at the top, the menu in the middle (scrolls on its
   // own if the window is too short), the "Data as of" card at the bottom.
   return (
-    <div className="min-h-screen bg-[#f1f2f4] p-4">
+    <div className="min-h-screen bg-page p-4">
       <div className="mx-auto max-w-6xl min-[1368px]:max-w-[1328px] min-[1368px]:flex min-[1368px]:items-start min-[1368px]:gap-2">
-      <nav className="hidden min-[1368px]:block w-[168px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
+      <nav aria-label="Pages" className="hidden min-[1368px]:block w-[168px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
         <div className="h-full flex flex-col p-2">
           {/* Data controls: full-width Refresh button, then the load status in small print */}
           <button
@@ -10243,7 +10271,8 @@ const PortfolioBacktester = () => {
             </div>
           )}
 
-          {/* Best To Worst Section - Shows assets ranked by return for a selected year */}
+          {/* Best To Worst Section - assets ranked by return for a selected year (Ranking), or */}
+          {/* several years side by side (Return Map); the left panel switches between the two */}
           {isConnected && assetData && activeView === 'bestToWorst' && (
             <div className="mt-2">
 
@@ -18006,8 +18035,9 @@ const PortfolioBacktester = () => {
                   </select>
                 </div>
 
-                {/* "Group M&C" toggle — when on, Gold + Crypto ("Other") become "Metals & Crypto" as
-                    both an asset class and a separate currency bar, keeping fiat bars pure */}
+                {/* "Group M&C" toggle — when on, classes come from the Lookup tab's PortfolioClass
+                    column, so gold, silver and crypto become "Metals & Crypto" as both an asset
+                    class and a separate currency bar, keeping fiat bars pure */}
                 <button
                   onClick={() => {
                     setGroupMetalsCrypto(prev => !prev);
@@ -21456,7 +21486,7 @@ const PortfolioBacktester = () => {
         <div className="fixed inset-0 z-50 min-[1368px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
           <div className="absolute inset-0 bg-black/30" onClick={() => setNavOpen(false)} />
           {/* Same dark look as the wide-screen sidebar: menu scrolls, "Data as of" card stays at the bottom */}
-          <nav className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col">
+          <nav aria-label="Pages" className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col">
             <div className="flex items-center justify-between mb-2 px-1 shrink-0">
               <span className="text-sm font-semibold text-slate-300">Views</span>
               <button

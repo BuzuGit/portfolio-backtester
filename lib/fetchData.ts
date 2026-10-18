@@ -1056,6 +1056,15 @@ function parseSheetData(csvText: string): { data: AssetRow[]; assets: string[] }
 }
 
 /**
+ * Today's date as "YYYY-MM-DD" in the user's LOCAL time zone.
+ * (lib/edo's todayIso() is UTC, which in Singapore still says yesterday until 8am.)
+ */
+export const localTodayIso = (): string => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+/**
  * Parses the "Daily" sheet CSV (gid=882618775) into DailyNavRow objects.
  *
  * This sheet has multiline column headers (e.g., "NW\nPrice"), so it uses the
@@ -1102,11 +1111,17 @@ function parseDailyData(csvText: string): DailyNavRow[] {
   // for "DD USD" (checked: rebuilding DD USD this way matches the sheet to within rounding).
   let chfPeak = 0;
 
+  // The sheet pre-fills the coming week's rows with the latest value repeated. Those are not
+  // history yet, so they are dropped here — otherwise every chart (and the menu's "Data as of"
+  // date) would run a flat line into the future.
+  const today = localTodayIso();
+
   for (let i = 1; i < lines.length; i++) {
     const values = lines[i];
 
     const date = readStr(values, 'Date');
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue; // Skip non-date rows
+    if (date > today) continue; // Skip pre-filled future rows (see above)
 
     const navPln = readNum(values, 'NW Price');
     if (navPln <= 0) continue; // Skip rows with no valid PLN NAV
