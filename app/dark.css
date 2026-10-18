@@ -220,6 +220,8 @@ html.dark [style*="color: rgb(220, 38, 38)"], html.dark [style*="color: rgb(153,
 html.dark [style*="fill: rgb(102, 102, 102)"] { fill: var(--d-text-500) !important; }
 html.dark [style*="fill: rgb(55, 65, 81)"] { fill: var(--d-text-700) !important; }
 html.dark [style*="fill: rgb(146, 96, 10)"] { fill: #fbbf24 !important; }
+/* Dark-red totals above the Portfolio tab's bars: a soft light red that stands out on the dark card */
+html.dark [style*="fill: rgb(153, 27, 27)"] { fill: #fca5a5 !important; }
 
 /* The left panel sits on a page almost as dark as itself, so give it a faint edge */
 html.dark nav[aria-label="Pages"] { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.07); }
