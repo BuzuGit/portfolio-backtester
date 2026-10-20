@@ -8203,12 +8203,13 @@ const PortfolioBacktester = () => {
 
   // Page background: flat, neutral light grey so the white cards stand out cleanly.
   //
-  // LAYOUT: the content column is max-w-6xl (1,152px), exactly as before. From 1,392px of window
-  // width there is room for a 192px sidebar + 8px gap beside it (1,152 + 8 + 192 + the page's
-  // 2×16px padding = 1,384, so 1,392 leaves a little spare), so the sidebar sits to its left and
-  // the pair is centred as one block —
+  // LAYOUT: the content column is 1,268px on every page (it was 1,152px; made 10% wider so wide
+  // tables fit without scrolling sideways). From 1,520px of window width there is room for a 192px
+  // sidebar + 8px gap beside it (1,268 + 8 + 192 + the page's 2×16px padding = 1,500, plus ~17px
+  // for the strip always kept free for the vertical scrollbar, see globals.css = 1,517), so the
+  // sidebar sits to its left and the pair is centred as one block —
   // the content keeps its full width and the sidebar uses what used to be empty grey margin.
-  // Below 1,392px the sidebar disappears and a "Menu" button opens the drawer instead, so the
+  // Below 1,520px the sidebar disappears and a "Menu" button opens the drawer instead, so the
   // content never gives up width to navigation.
   // (The sidebar was 168px; it grew to 192px so the dark-mode icon fits beside Refresh Data.)
   //
@@ -8218,8 +8219,8 @@ const PortfolioBacktester = () => {
   // own if the window is too short), the "Data as of" card at the bottom.
   return (
     <div className="min-h-screen bg-page p-4">
-      <div className="mx-auto max-w-6xl min-[1392px]:max-w-[1352px] min-[1392px]:flex min-[1392px]:items-start min-[1392px]:gap-2">
-      <nav aria-label="Pages" className="hidden min-[1392px]:block w-[192px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
+      <div className="mx-auto max-w-[1268px] min-[1520px]:max-w-[1468px] min-[1520px]:flex min-[1520px]:items-start min-[1520px]:gap-2">
+      <nav aria-label="Pages" className="hidden min-[1520px]:block w-[192px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
         <div className="h-full flex flex-col p-2">
           {/* Data controls: Refresh button with the dark-mode icon beside it, then the load status in small print */}
           <div className="flex gap-1.5 shrink-0">
@@ -8248,14 +8249,14 @@ const PortfolioBacktester = () => {
           {navFooter}
         </div>
       </nav>
-      <div className="min-w-0 min-[1392px]:w-[1152px] min-[1392px]:shrink-0">
+      <div className="min-w-0 min-[1520px]:w-[1268px] min-[1520px]:shrink-0">
         {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy).
             On wide screens no bottom margin, so it ends level with the dark sidebar beside it. */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1392px]:mb-0">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1520px]:mb-0">
 
           {/* Data Status Section - compact single row. Narrow screens only: wide screens show
               the same Refresh button and status at the top of the sidebar instead. */}
-          <div className="mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between min-[1392px]:hidden">
+          <div className="mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between min-[1520px]:hidden">
             <div className="flex items-center gap-3">
               <h2 className="text-lg font-semibold text-gray-700">Data</h2>
               <span className={`text-sm ${
@@ -8333,7 +8334,7 @@ const PortfolioBacktester = () => {
               instead, so this button hides there. Tapping it slides the same list in from the
               left (see the drawer at the bottom of the page). */}
           {isConnected && assetData && (
-            <div className="mb-6 min-[1392px]:hidden">
+            <div className="mb-6 min-[1520px]:hidden">
               <button
                 type="button"
                 onClick={() => setNavOpen(true)}
@@ -21565,7 +21566,7 @@ const PortfolioBacktester = () => {
       {/* Slide-in navigation drawer (narrow screens), opened by the "Menu" button. Tapping the
           dimmed backdrop, the close button, or any view closes it. */}
       {navOpen && (
-        <div className="fixed inset-0 z-50 min-[1392px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
+        <div className="fixed inset-0 z-50 min-[1520px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
           <div className="absolute inset-0 bg-black/30" onClick={() => setNavOpen(false)} />
           {/* Same dark look as the wide-screen sidebar: menu scrolls, "Data as of" card stays at the bottom */}
           <nav aria-label="Pages" className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col">
