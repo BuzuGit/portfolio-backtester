@@ -12,6 +12,9 @@
   default branch is, so it does not care that StooqAnalyzer uses "master" while the others
   use "main".
 
+  A repo with tests (a package.json "test" script, or *.test.js files) must pass them first:
+  a failing test stops the publish before anything is committed.
+
   Network calls are retried, because DNS resolution to github.com on this machine fails
   intermittently. Retries live in here rather than in shell loops, since shell loops are what
   used to defeat the permission allowlist.
@@ -185,6 +188,41 @@ if ($remote.Out -notmatch 'github\.com[/:]([^/]+)/([^/\s]+?)(\.git)?$') {
 $owner = $Matches[1]
 $repo  = $Matches[2]
 Write-Ok "$owner/$repo  ($repoRoot)"
+
+# ---------------------------------------------------------------------------
+# Run the repo's tests
+# ---------------------------------------------------------------------------
+# A repo with tests must pass them before anything is committed: a package.json "test" script
+# runs with npm, otherwise *.test.js files (tracked, or new and not ignored) run with node --test.
+# A failure stops the publish here, before any branch or commit exists. Repos without tests
+# skip this step.
+
+$testCmd = $null
+$pkgPath = Join-Path $repoRoot "package.json"
+if ((Test-Path $pkgPath) -and (Get-Content $pkgPath -Raw | ConvertFrom-Json).scripts.test) {
+    $testCmd = @("npm.cmd", "test")
+} else {
+    $testFiles = Invoke-Git ls-files --cached --others --exclude-standard "*.test.js"
+    if ($testFiles.Ok -and $testFiles.Out) { $testCmd = @("node.exe", "--test", "--test-reporter=tap") }
+}
+if ($testCmd) {
+    Write-Step "Running tests ($($testCmd -join ' '))"
+    # Same reason as in Invoke-Git: a test runner writes to stderr, which must not abort the script.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $testOut = & $testCmd[0] $testCmd[1..($testCmd.Count - 1)] 2>&1 | ForEach-Object { "$_" }
+        $testCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    $summary = ($testOut | Where-Object { $_ -match '^# (pass|fail) \d+' } | ForEach-Object { $_.Substring(2) }) -join ', '
+    if ($testCode -ne 0) {
+        $testOut | Select-Object -Last 40 | ForEach-Object { Write-Host "    $_" }
+        Fail "Tests failed ($summary). Nothing was committed - fix the code or the test, then publish again."
+    }
+    Write-Ok $(if ($summary) { $summary } else { "passed" })
+}
 
 # ---------------------------------------------------------------------------
 # Talk to GitHub
