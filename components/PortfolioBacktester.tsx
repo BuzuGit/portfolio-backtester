@@ -2083,6 +2083,70 @@ const PortfolioBacktester = () => {
   const [graphsEndDate, setGraphsEndDate] = useState('');
   // Toggle for showing 10-month SMA overlay on all Graphs tab charts
   const [graphsShowSMA, setGraphsShowSMA] = useState(false);
+
+  // PHONES: OPEN WHERE YOU LEFT OFF. An app reopens on the page you last used, with the same
+  // choices, instead of starting from the first page every time. So on a phone the open page and
+  // its main choices (section, currency, period) are kept in the browser's small storage
+  // (localStorage) after every change, and put back when the app opens. Desktop neither saves nor
+  // restores anything, so it still always opens on Backtest with the defaults.
+  // A saved value that no longer makes sense (a Markets section the sheet dropped, say) is
+  // harmless: each page already falls back to its default for a value it doesn't recognise.
+  // PHONES: WORKS WITH NO SIGNAL. Installs the service worker (public/sw.js), which keeps the app's
+  // own files on the phone so it opens at once, even offline; the data then comes from the saved
+  // copy (lib/savedSheet.ts). A phone here = narrow screen AND a touch screen, so a desktop window
+  // that happens to be narrow never gets it, and anywhere else it is removed if it was ever there.
+  // Only in the published app: on the local dev server it would keep serving yesterday's code.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const phone = isPhoneScreen() && window.matchMedia('(pointer: coarse)').matches;
+    if (phone && process.env.NODE_ENV === 'production') {
+      navigator.serviceWorker.register('/sw.js').catch(() => { /* not installed: the app works as before */ });
+    } else if (!phone) {
+      navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister())).catch(() => {});
+    }
+  }, []);
+
+  const phoneMemoryFirstSave = useRef(true);
+  useEffect(() => {
+    if (!isPhoneScreen()) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem('phoneState') ?? 'null');
+      if (saved && typeof saved === 'object') {
+        if (saved.view) setActiveView(saved.view);
+        if (typeof saved.marketsCategory === 'string') setMarketsCategory(saved.marketsCategory);
+        if (saved.marketsCurrency) setMarketsCurrency(saved.marketsCurrency);
+        if (saved.marketsView && saved.marketsPeriod) {
+          setMarketsView(saved.marketsView);
+          setMarketsPeriod(saved.marketsPeriod);
+          // Markets parks each view's period here when you switch view, so keep it in step
+          marketsSavedPeriod.current[saved.marketsView as 'returns' | 'stats'] = saved.marketsPeriod;
+        }
+        if (saved.marketsTrendPeriod) setMarketsTrendPeriod(saved.marketsTrendPeriod);
+        if (saved.bestToWorstLayout) setBestToWorstLayout(saved.bestToWorstLayout);
+        if (saved.portfolioCurrency) setPortfolioCurrency(saved.portfolioCurrency);
+        if (saved.positionsCurrency) setPositionsCurrency(saved.positionsCurrency);
+        if (saved.holdingsCurrency) setHoldingsCurrency(saved.holdingsCurrency);
+        if (saved.dailyNavCurrency) setDailyNavCurrency(saved.dailyNavCurrency);
+        if (saved.dailyNavPeriod) setDailyNavPeriod(saved.dailyNavPeriod);
+        if (saved.graphsPeriod) setGraphsPeriod(saved.graphsPeriod);
+      }
+    } catch { /* nothing saved, or storage blocked: open on the defaults */ }
+  }, []);
+  useEffect(() => {
+    // Skip the very first run: it happens before the restore above has taken effect, so it would
+    // save the defaults over the remembered choices
+    if (phoneMemoryFirstSave.current) { phoneMemoryFirstSave.current = false; return; }
+    if (!isPhoneScreen()) return;
+    try {
+      localStorage.setItem('phoneState', JSON.stringify({
+        view: activeView, marketsCategory, marketsCurrency, marketsView, marketsPeriod, marketsTrendPeriod,
+        bestToWorstLayout, portfolioCurrency, positionsCurrency, holdingsCurrency,
+        dailyNavCurrency, dailyNavPeriod, graphsPeriod,
+      }));
+    } catch { /* private window: just don't remember */ }
+  }, [activeView, marketsCategory, marketsCurrency, marketsView, marketsPeriod, marketsTrendPeriod,
+      bestToWorstLayout, portfolioCurrency, positionsCurrency, holdingsCurrency,
+      dailyNavCurrency, dailyNavPeriod, graphsPeriod]);
   // Monthly Prices tab: toggle between price view and monthly return (%) view
   const [monthlyViewMode, setMonthlyViewMode] = useState<'prices' | 'returns'>('prices');
   // Monthly Prices tab: end date filter ('' = latest month in data)
@@ -2312,6 +2376,10 @@ const PortfolioBacktester = () => {
       if (savedShown) {
         // Keep the saved copy on screen rather than an empty page, and say plainly it is old
         setLoadingMessage(`Error updating, showing the copy saved ${fmtStamp(savedShown.savedAt)}`);
+      } else if (phone && assetData && lastFetchedAt) {
+        // Phone, pulled down to refresh with no signal: keep what's on screen (desktop still
+        // clears the page on a failed refresh, as it always has)
+        setLoadingMessage(`Error updating, showing data from ${fmtStamp(lastFetchedAt)}`);
       } else {
         setLoadingMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
         setIsConnected(false);
@@ -2320,6 +2388,87 @@ const PortfolioBacktester = () => {
 
     setIsLoading(false);
   };
+
+  // PHONES: PULL DOWN TO REFRESH. At the top of a page, drag down and let go: a round arrow follows
+  // your finger down from the top edge, and once it has come far enough, letting go fetches fresh
+  // data (the arrow spins until it's in). Letting go sooner just slides it back.
+  // The arrow is moved by setting its style directly rather than through React state: this
+  // component is very large, and redrawing all of it on every finger movement would stutter.
+  // The browser's own pull-to-refresh (which reloads the whole page) is switched off in globals.css.
+  const pullIndicatorRef = useRef<HTMLDivElement>(null);
+  const pullSpinningRef = useRef(false);
+  // The latest versions of these, for the touch handlers below (set up once, so they'd otherwise
+  // keep seeing the values from the very first render)
+  const pullRefreshRef = useRef<() => void>(() => {});
+  pullRefreshRef.current = () => { if (!isLoading) loadDataFromSheet(); };
+  const pullBlockedRef = useRef(false);
+  pullBlockedRef.current = navOpen || !isConnected;
+  useEffect(() => {
+    if (!isPhoneScreen()) return;
+    const PULL_TO_REFRESH = 64; // how far (in px) the arrow must come down before letting go refreshes
+    let startX = 0, startY = 0, pulling = false, distance = 0;
+    // Place the arrow: "distance" px down from just above the screen, turning as it comes
+    const place = (d: number, animate: boolean) => {
+      const el = pullIndicatorRef.current;
+      if (!el) return;
+      el.style.transition = animate ? 'transform 0.2s, opacity 0.2s' : 'none';
+      el.style.transform = `translateY(${d}px)`;
+      el.style.opacity = String(Math.min(1, d / PULL_TO_REFRESH));
+      const icon = el.querySelector('svg');
+      if (icon && !pullSpinningRef.current) icon.style.transform = `rotate(${d * 4}deg)`;
+    };
+    const onStart = (e: TouchEvent) => {
+      // Only a one-finger drag that starts with the page scrolled right to the top
+      pulling = window.scrollY <= 0 && e.touches.length === 1 && !pullBlockedRef.current && !pullSpinningRef.current;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      distance = 0;
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!pulling) return;
+      const dy = e.touches[0].clientY - startY;
+      const dx = e.touches[0].clientX - startX;
+      // A sideways swipe (a table or a row of buttons scrolling) or a scroll up is not a pull
+      if (distance === 0 && (dy <= 0 || Math.abs(dx) > dy)) { pulling = false; return; }
+      distance = Math.max(0, Math.min(dy * 0.5, 100)); // the arrow moves at half the finger's speed
+      place(distance, false);
+    };
+    const onEnd = () => {
+      if (!pulling) return;
+      pulling = false;
+      if (distance >= PULL_TO_REFRESH) {
+        // Park it in view and spin until the data is in (see the effect below)
+        pullSpinningRef.current = true;
+        const icon = pullIndicatorRef.current?.querySelector('svg');
+        if (icon) { icon.style.transform = ''; icon.classList.add('animate-spin'); }
+        place(PULL_TO_REFRESH, true);
+        pullRefreshRef.current();
+      } else {
+        place(0, true);
+      }
+    };
+    window.addEventListener('touchstart', onStart, { passive: true });
+    window.addEventListener('touchmove', onMove, { passive: true });
+    window.addEventListener('touchend', onEnd);
+    window.addEventListener('touchcancel', onEnd);
+    return () => {
+      window.removeEventListener('touchstart', onStart);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+      window.removeEventListener('touchcancel', onEnd);
+    };
+  }, []);
+  // Once the refresh has finished, stop the arrow spinning and slide it away
+  useEffect(() => {
+    if (isLoading || !pullSpinningRef.current) return;
+    pullSpinningRef.current = false;
+    const el = pullIndicatorRef.current;
+    if (!el) return;
+    el.querySelector('svg')?.classList.remove('animate-spin');
+    el.style.transition = 'transform 0.2s, opacity 0.2s';
+    el.style.transform = 'translateY(0px)';
+    el.style.opacity = '0';
+  }, [isLoading]);
 
   // ----------------------------------------
   // COMPUTED VALUES
@@ -8307,9 +8456,9 @@ const PortfolioBacktester = () => {
   //
   // PHONES (below 768px): 16px of grey page edge + 16px of card padding used up 64px of a ~375px
   // screen, so both are thinner there; the extra bottom padding keeps the last rows clear of the
-  // floating menu button.
+  // tab bar along the bottom (56px, plus the iPhone home bar's strip when there is one).
   return (
-    <div className="min-h-screen bg-page p-4 max-md:p-2 max-md:pb-24">
+    <div className="min-h-screen bg-page p-4 max-md:p-2 max-md:pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-[1268px] min-[1520px]:max-w-[1468px] min-[1520px]:flex min-[1520px]:items-start min-[1520px]:gap-2">
       <nav aria-label="Pages" className="hidden min-[1520px]:block w-[192px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
         <div className="h-full flex flex-col p-2">
@@ -8346,9 +8495,9 @@ const PortfolioBacktester = () => {
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1520px]:mb-0 max-md:p-3">
 
           {/* Phones only: one slim line instead of the Data box and Menu button below (together they
-              took about a quarter of the first screen). The page's name on the left with the load
-              status in small print under it, a round Refresh button on the right. The menu itself
-              opens from the floating button at the bottom right, within reach of the thumb. */}
+              took about a quarter of the first screen): the page's name with the load status in
+              small print under it. Pages are switched from the tab bar at the bottom, and the data
+              is refreshed by pulling the page down, as in other apps. */}
           <div className="hidden max-md:flex items-center justify-between gap-3 mb-3">
             <div className="min-w-0">
               <div className="text-base font-semibold text-gray-900 truncate">
@@ -8366,16 +8515,6 @@ const PortfolioBacktester = () => {
                 {loadingMessage || 'Ready'}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={loadDataFromSheet}
-              disabled={isLoading}
-              aria-label="Refresh data"
-              title="Refresh data"
-              className="shrink-0 w-10 h-10 rounded-full bg-gray-100 text-gray-700 hover:bg-gray-200 flex items-center justify-center disabled:opacity-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-            </button>
           </div>
 
           {/* Data Status Section - compact single row. Narrow screens only: wide screens show
@@ -21705,7 +21844,7 @@ const PortfolioBacktester = () => {
         <div className="fixed inset-0 z-50 min-[1520px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
           <div className="absolute inset-0 bg-black/30" onClick={() => setNavOpen(false)} />
           {/* Same dark look as the wide-screen sidebar: menu scrolls, "Data as of" card stays at the bottom.
-              On a phone it slides in from the RIGHT, the side of the floating button and the thumb. */}
+              On a phone ("More" in the tab bar) it slides in from the RIGHT, the thumb's side. */}
           <nav aria-label="Pages" className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col max-md:left-auto max-md:right-0 max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
             <div className="flex items-center justify-between mb-2 px-1 shrink-0">
               <span className="text-sm font-semibold text-slate-300">Views</span>
@@ -21729,19 +21868,63 @@ const PortfolioBacktester = () => {
         </div>
       )}
 
-      {/* Phones only: a round menu button floating at the bottom right, where the thumb already is
-          (the top of a big phone is a stretch). It opens the same drawer as the Menu button.
-          env(safe-area-inset-bottom) lifts it above the iPhone's home bar when the app runs full screen. */}
-      {isConnected && assetData && (
-        <button
-          type="button"
-          onClick={() => setNavOpen(true)}
-          aria-label="Open menu"
-          className="hidden max-md:flex fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40 w-14 h-14 rounded-full bg-slate-900 text-white shadow-lg items-center justify-center active:scale-95 transition-transform"
-        >
-          <Menu className="w-6 h-6" />
-        </button>
-      )}
+      {/* Phones only: the pull-to-refresh arrow. It waits just above the top edge, invisible, and
+          is moved into view by the touch handlers next to loadDataFromSheet. */}
+      <div
+        ref={pullIndicatorRef}
+        aria-hidden="true"
+        className="hidden max-md:flex fixed left-1/2 -ml-5 -top-11 z-50 w-10 h-10 rounded-full bg-white border border-gray-200 shadow-md text-gray-700 items-center justify-center pointer-events-none"
+        style={{ opacity: 0 }}
+      >
+        <RefreshCw className="w-5 h-5" />
+      </div>
+
+      {/* Phones only: the tab bar along the bottom, like most phone apps. The four most-used pages
+          are one tap away; "More" opens the full menu (the drawer) for the rest, and is the one
+          lit up while you're on one of those other pages. Tapping the page you're already on
+          scrolls back to its top, as apps do.
+          env(safe-area-inset-bottom) keeps it above the iPhone's home bar when the app runs full
+          screen. (Its aria-label is deliberately not "Pages": app/dark.css styles that one.) */}
+      {isConnected && assetData && (() => {
+        const tabs: { label: string; icon: React.ElementType; active: boolean; go: () => void }[] = [
+          { label: 'Portfolio', icon: Briefcase, active: activeView === 'portfolio', go: () => setActiveView('portfolio') },
+          { label: 'Positions', icon: Layers, active: activeView === 'positions', go: () => setActiveView('positions') },
+          { label: 'Markets', icon: Globe, active: activeView === 'markets', go: () => setActiveView('markets') },
+          {
+            label: 'Ranking', icon: ArrowDownWideNarrow,
+            active: activeView === 'bestToWorst' && bestToWorstLayout === 'ranking',
+            go: () => { setActiveView('bestToWorst'); setBestToWorstLayout('ranking'); },
+          },
+        ];
+        const onOtherPage = !tabs.some(t => t.active);
+        return (
+          <nav
+            aria-label="Main pages"
+            className="hidden max-md:grid grid-cols-5 fixed inset-x-0 bottom-0 z-40 bg-white border-t border-gray-200 pb-[env(safe-area-inset-bottom)]"
+          >
+            {[...tabs, { label: 'More', icon: Menu, active: onOtherPage, go: () => setNavOpen(true) }].map(({ label, icon: Icon, active, go }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => {
+                  if (active && label !== 'More') { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+                  go();
+                  // A new page starts at its top, not wherever the last one was scrolled to
+                  if (label !== 'More') window.scrollTo({ top: 0 });
+                }}
+                aria-current={active && label !== 'More' ? 'page' : undefined}
+                className={`h-14 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium ${active ? 'text-slate-900' : 'text-gray-500'}`}
+              >
+                {/* The open page's icon sits in a soft grey pill */}
+                <span className={`px-4 py-0.5 rounded-full ${active ? 'bg-gray-100' : ''}`}>
+                  <Icon className="w-5 h-5" />
+                </span>
+                {label}
+              </button>
+            ))}
+          </nav>
+        );
+      })()}
     </div>
   );
 };

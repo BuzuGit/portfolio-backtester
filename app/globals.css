@@ -44,6 +44,35 @@ html {
   }
 }
 
+/* Phones: drop the little habits that give a web page away, so it feels like an app.
+   Desktop is untouched (phone width only, same 767px line as the "max-md:" classes). */
+@media (max-width: 767px) {
+  html, body {
+    /* No stretch / glow when scrolling past the top or bottom, and no browser pull-to-refresh
+       (the app has its own, which refreshes just the data instead of reloading the whole page) */
+    overscroll-behavior-y: none;
+    /* No blue/grey box flashing over whatever you tap (Android) */
+    -webkit-tap-highlight-color: transparent;
+    /* A double tap no longer zooms the page (pinching with two fingers still does) */
+    touch-action: manipulation;
+  }
+  body {
+    /* A long press no longer selects text or pops up "Copy / Share" (iPhone: the callout menu) */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  input, textarea {
+    /* ...except in boxes you type into, which still need it */
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  /* Instead of the flash: the button you are pressing fades a little, like app buttons do */
+  button:not(:disabled):active {
+    opacity: 0.6;
+  }
+}
+
 /* Custom scrollbar for tables (makes them look cleaner) */
 .overflow-x-auto::-webkit-scrollbar {
   height: 6px;
