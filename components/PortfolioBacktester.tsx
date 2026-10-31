@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 /*
   PORTFOLIO BACKTESTER COMPONENT
 
@@ -37,7 +37,7 @@ import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, Cartesia
 import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun } from 'lucide-react';
 import { fetchSheetData, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData } from '@/lib/fetchData';
 import { isPhoneScreen, readSavedSheet, saveSheet } from '@/lib/savedSheet';
-import { BottomSheet, PhoneChoice, PhoneSelectSheets, periodOptions } from '@/components/PhoneSheet';
+import { BottomSheet, PhoneCheckSheet, PhoneChoice, PhoneSelectSheets, periodOptions } from '@/components/PhoneSheet';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
@@ -2210,6 +2210,8 @@ const PortfolioBacktester = () => {
   // Close Years dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
+      // A tap inside the phone's slide-up panel isn't "outside": the panel lives elsewhere on the page
+      if ((event.target as Element).closest?.('[role="dialog"]')) return;
       if (yearsDropdownRef.current && !yearsDropdownRef.current.contains(event.target as Node)) {
         setYearsDropdownOpen(false);
       }
@@ -2223,6 +2225,8 @@ const PortfolioBacktester = () => {
   // Close Closed tab filter dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
+      // A tap inside the phone's slide-up panel isn't "outside": the panel lives elsewhere on the page
+      if ((event.target as Element).closest?.('[role="dialog"]')) return;
       if (closedFilterRef.current && !closedFilterRef.current.contains(event.target as Node)) {
         setClosedOpenFilterDropdown(null);
       }
@@ -8084,6 +8088,8 @@ const PortfolioBacktester = () => {
     // Close dropdown when clicking outside
     useEffect(() => {
       const handleClickOutside = (event: MouseEvent) => {
+        // A tap inside the phone's slide-up panel isn't "outside": the panel lives elsewhere on the page
+        if ((event.target as Element).closest?.('[role="dialog"]')) return;
         if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
           setOpenFilterDropdown(null);
         }
@@ -8116,14 +8122,14 @@ const PortfolioBacktester = () => {
 
     // PHONES: the four filter buttons become two-line boxes on a 2×2 grid, like the other choice
     // boxes on a phone ("phone-filter-grid" / "phone-filter-box" in globals.css). Their checkbox
-    // lists then open full width under the grid ("max-md:static" moves their anchor from the
-    // button to the grid), so a list from a box on the right can't run off the screen.
+    // lists are hidden there ("max-md:hidden"): a phone gets the same list as a slide-up panel
+    // instead, like every other choice (drawn next to <PhoneSelectSheets /> at the bottom).
     // On desktop the grid wrapper is "contents": it vanishes and the buttons sit in the row as before.
     return (
       <div ref={filterRef} className="flex flex-wrap gap-2 mb-4">
         <div className="contents phone-filter-grid">
         {/* Assets Dropdown */}
-        <div className="relative max-md:static">
+        <div className="relative">
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assets' ? null : 'assets')}
             className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
@@ -8137,7 +8143,7 @@ const PortfolioBacktester = () => {
             </svg>
           </button>
           {openFilterDropdown === 'assets' && (
-            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[280px] max-md:right-0 max-md:min-w-0">
+            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[280px] max-md:hidden">
               <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                 <span className="text-sm font-medium text-gray-700">Select Assets</span>
                 <button
@@ -8170,7 +8176,7 @@ const PortfolioBacktester = () => {
         </div>
 
         {/* Asset Class Dropdown */}
-        <div className="relative max-md:static">
+        <div className="relative">
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetClass' ? null : 'assetClass')}
             className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
@@ -8184,7 +8190,7 @@ const PortfolioBacktester = () => {
             </svg>
           </button>
           {openFilterDropdown === 'assetClass' && (
-            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[200px] max-md:right-0 max-md:min-w-0">
+            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[200px] max-md:hidden">
               <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                 <span className="text-sm font-medium text-gray-700">Select Classes</span>
                 <button
@@ -8217,7 +8223,7 @@ const PortfolioBacktester = () => {
         </div>
 
         {/* Currency Dropdown */}
-        <div className="relative max-md:static">
+        <div className="relative">
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'currency' ? null : 'currency')}
             className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
@@ -8231,7 +8237,7 @@ const PortfolioBacktester = () => {
             </svg>
           </button>
           {openFilterDropdown === 'currency' && (
-            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px] max-md:right-0 max-md:min-w-0">
+            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px] max-md:hidden">
               <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                 <span className="text-sm font-medium text-gray-700">Select Currencies</span>
                 <button
@@ -8264,7 +8270,7 @@ const PortfolioBacktester = () => {
         </div>
         {/* Asset Subcategory Dropdown */}
         {assetSubcategories.length > 0 && (
-          <div className="relative max-md:static">
+          <div className="relative">
             <button
               onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetSubcategory' ? null : 'assetSubcategory')}
               className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
@@ -8278,7 +8284,7 @@ const PortfolioBacktester = () => {
               </svg>
             </button>
             {openFilterDropdown === 'assetSubcategory' && (
-              <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[220px] max-md:right-0 max-md:min-w-0">
+              <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[220px] max-md:hidden">
                 <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                   <span className="text-sm font-medium text-gray-700">Select Subcategories</span>
                   <button
@@ -10195,7 +10201,7 @@ const PortfolioBacktester = () => {
                         </svg>
                       </button>
                       {yearsDropdownOpen && (
-                        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px]">
+                        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px] max-md:hidden">
                           <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                             <span className="text-sm font-medium text-gray-700">Select Years</span>
                             <button
@@ -10250,6 +10256,26 @@ const PortfolioBacktester = () => {
                       )}
                     </div>
                   </AssetFilterControls>
+
+                {/* Phones: the Years tick list as a slide-up panel (its drop-down list is hidden there).
+                    Here rather than next to the Years button, which is inside AssetFilterControls:
+                    that is rebuilt on every tick, which would replay the panel's slide-in each time. */}
+                {yearsDropdownOpen && isPhoneScreen() && (
+                  <PhoneCheckSheet
+                    title="Years"
+                    options={years.map(y => ({ value: String(y), label: String(y) }))}
+                    checked={(selectedYears ?? years).map(String)}
+                    onToggle={v => {
+                      const year = years.find(y => String(y) === v)!;
+                      const current = selectedYears ?? years;
+                      const next = current.includes(year) ? current.filter(y => y !== year) : [...current, year];
+                      // All ticked again = back to "all" (null), as on desktop
+                      setSelectedYears(next.length === years.length ? null : next);
+                    }}
+                    onSetAll={all => setSelectedYears(all ? null : [])}
+                    onClose={() => setYearsDropdownOpen(false)}
+                  />
+                )}
 
                 {(() => {
                 // Filter years based on user selection (null = show all)
@@ -18742,7 +18768,7 @@ const PortfolioBacktester = () => {
                         </svg>
                       </button>
                       {closedOpenFilterDropdown === 'assets' && (
-                        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[280px]">
+                        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[280px] max-md:hidden">
                           <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                             <span className="text-sm font-medium text-gray-700">Select Assets</span>
                             <button onClick={() => toggleAllPositionAssets(!allAssetsSelected)} className="text-xs text-blue-600 hover:underline">
@@ -22365,6 +22391,46 @@ const PortfolioBacktester = () => {
 
       {/* Phones only: every dropdown opens a slide-up panel instead of the browser's list */}
       <PhoneSelectSheets />
+
+      {/* Phones: the tick lists of the shared asset filters (AssetFilterControls, on Ranking,
+          Graphs, Monthly...) and of the Positions tab's Assets filter, as slide-up panels like
+          every other choice; their drop-down lists are hidden on phones. Drawn here rather than
+          inside AssetFilterControls, which is rebuilt from scratch on every tick (it's defined
+          inside this component) and would replay the panel's slide-in each time. */}
+      {openFilterDropdown && isPhoneScreen() && (() => {
+        const lists = {
+          assets: { title: 'Assets', options: assetLookup.map(a => ({ value: a.ticker, label: a.ticker, hint: a.name })),
+            checked: selectedAssetTickers, set: setSelectedAssetTickers, setAll: toggleAllAssets },
+          assetClass: { title: 'Class', options: getUniqueAssetClasses().map(v => ({ value: v, label: v })),
+            checked: selectedAssetClasses, set: setSelectedAssetClasses, setAll: toggleAllAssetClasses },
+          currency: { title: 'Currency', options: getUniqueCurrencies().map(v => ({ value: v, label: v })),
+            checked: selectedCurrencies, set: setSelectedCurrencies, setAll: toggleAllCurrencies },
+          assetSubcategory: { title: 'Subcategory', options: getUniqueAssetSubcategories().map(v => ({ value: v, label: v })),
+            checked: selectedAssetSubcategories, set: setSelectedAssetSubcategories, setAll: toggleAllAssetSubcategories },
+        };
+        const list = lists[openFilterDropdown];
+        return (
+          <PhoneCheckSheet
+            title={list.title}
+            options={list.options}
+            checked={list.checked}
+            onToggle={v => list.set(list.checked.includes(v) ? list.checked.filter(x => x !== v) : [...list.checked, v])}
+            onSetAll={list.setAll}
+            onClose={() => setOpenFilterDropdown(null)}
+          />
+        );
+      })()}
+      {closedOpenFilterDropdown === 'assets' && isPhoneScreen() && (
+        <PhoneCheckSheet
+          title="Assets"
+          options={getPositionsTabLookup().map(a => ({ value: a.ticker, label: a.ticker, hint: a.name }))}
+          checked={closedSelectedTickers}
+          onToggle={v => setClosedSelectedTickers(closedSelectedTickers.includes(v)
+            ? closedSelectedTickers.filter(t => t !== v) : [...closedSelectedTickers, v])}
+          onSetAll={toggleAllPositionAssets}
+          onClose={() => setClosedOpenFilterDropdown(null)}
+        />
+      )}
 
       {/* Phones only: the pull-to-refresh arrow. It waits just above the top edge, invisible, and
           is moved into view by the touch handlers next to loadDataFromSheet. */}

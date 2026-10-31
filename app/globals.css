@@ -115,8 +115,8 @@ html {
 /* Phones: the shared asset filters (Assets / Class / Currency / Subcategory, on Ranking, Graphs,
    Monthly, Annual, Correlations...) as two-line boxes on a 2x2 grid, the same look as the other
    choice boxes on a phone (components/PhoneSheet.tsx): small grey label on top, the value in bold
-   under it, the arrow on the right. The grid is also where their checkbox lists hang from, full
-   width. Written as CSS rather than Tailwind classes so the dark-mode colours can be given here
+   under it, the arrow on the right. (Their checkbox lists open as slide-up panels on a phone.)
+   Written as CSS rather than Tailwind classes so the dark-mode colours can be given here
    too: dark.css only translates the plain colour classes, not phone-only ones. "button." and
    "html.dark button." add the weight needed to beat the buttons' own classes and dark.css. */
 @media (max-width: 767px) {
@@ -125,7 +125,6 @@ html {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     width: 100%;
-    position: relative;
   }
   button.phone-filter-box {
     position: relative;
