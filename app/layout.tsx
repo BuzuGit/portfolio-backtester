@@ -40,6 +40,9 @@ const phoneBarColours = `try{if(matchMedia('(max-width: 767px)').matches){var d=
 // Android: the app-info file (public/manifest.webmanifest) that lets Chrome offer "Install app" and
 // open it full screen with its own icon. Linked only on a phone-width screen, so desktop Chrome never
 // sees it and shows no install button in its address bar; desktop stays exactly as it was.
+// It deliberately has no "theme_color": an installed Android app paints its bottom button bar in
+// that one fixed colour, which can't follow the dark-mode button (white under a dark page).
+// Without it the bar follows the phone's own light/dark setting.
 const linkPhoneManifest = `try{if(matchMedia('(max-width: 767px)').matches){var l=document.createElement('link');l.rel='manifest';l.href='/manifest.webmanifest';document.head.appendChild(l)}}catch(e){}`
 
 // Runs in the browser before anything is painted: if dark mode was chosen last time, switch it on
