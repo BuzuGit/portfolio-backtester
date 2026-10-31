@@ -16932,22 +16932,15 @@ const PortfolioBacktester = () => {
                 </div>
               ) : (
                 <>
-                  {/* Currency buttons — affects Charts 1 & 2 only; single-select (phones: one box) */}
-                  <div className="hidden max-md:flex mb-4 w-1/2">
-                    <PhoneChoice
-                      label="Currency"
-                      options={(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => ({ value: c, label: c }))}
-                      selected={portfolioCurrency}
-                      onPick={c => setPortfolioCurrency(c as typeof portfolioCurrency)}
-                    />
-                  </div>
-                  <div className="mb-4 flex items-center gap-1 max-md:hidden">
+                  {/* Currency buttons — affects Charts 1 & 2 only; single-select. Kept as buttons on
+                      phones too (all five fit on one line there), a little taller for the thumb. */}
+                  <div className="mb-4 flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
                     {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
                       <button
                         key={c}
                         onClick={() => setPortfolioCurrency(c)}
-                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                        className={`px-2.5 py-1 max-md:py-1.5 rounded text-xs font-medium transition-colors ${
                           portfolioCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                         }`}
                       >{c}</button>
