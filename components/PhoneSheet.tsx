@@ -30,6 +30,8 @@ export interface SheetOption {
   hint?: string;      // small grey text after the label ("3 years")
   group?: string;     // a heading is drawn above the first choice of each group
   disabled?: boolean;
+  icon?: React.ElementType; // a small icon before the label (the page menu)
+  indent?: boolean;   // a sub-choice of the row above it, drawn indented and a little smaller
 }
 
 /** The small explanation after a period's name in a panel: "3Y" → "3 years", "YTD" → "since 1 Jan". */
@@ -51,13 +53,15 @@ export const periodOptions = (periods: readonly string[], labels?: (p: string) =
 // Same width as Tailwind's "max-md:" classes, which every phone-only style in the app uses
 const isPhone = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
 
-export function BottomSheet({ title, subtitle, options, selected, onPick, onClose }: {
+export function BottomSheet({ title, subtitle, options, selected, onPick, onClose, headerExtra, footer }: {
   title: string;
   subtitle?: string;
   options: SheetOption[];
   selected?: string;
   onPick: (value: string) => void;
   onClose: () => void;
+  headerExtra?: React.ReactNode; // shown at the right of the title (e.g. the dark-mode button)
+  footer?: React.ReactNode;      // a line kept under the list, which doesn't scroll with it
 }) {
   const sheetRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -131,18 +135,20 @@ export function BottomSheet({ title, subtitle, options, selected, onPick, onClos
         {/* Grab handle and title */}
         <div className="shrink-0 pt-2 pb-2">
           <div className="mx-auto mb-2.5 h-1 w-10 rounded-full bg-gray-300" />
-          <div className="flex items-baseline justify-between gap-3 px-5">
+          <div className="flex items-center justify-between gap-3 px-5 min-h-[28px]">
             <span className="text-[17px] font-semibold text-gray-900">{title}</span>
             {subtitle && <span className="text-[13px] text-gray-500 truncate">{subtitle}</span>}
+            {headerExtra}
           </div>
         </div>
         {/* The choices; the list scrolls on its own when there are many (overscroll-contain stops
             the scroll from passing on to the page when it reaches the end) */}
-        <div ref={listRef} className="overflow-y-auto overscroll-contain pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+        <div ref={listRef} className={`overflow-y-auto overscroll-contain ${footer ? '' : 'pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}`}>
           {options.map(o => {
             const isSel = o.value === selected;
             const heading = o.group && o.group !== lastGroup ? o.group : null;
             lastGroup = o.group;
+            const Icon = o.icon;
             return (
               <React.Fragment key={o.value}>
                 {heading && (
@@ -154,9 +160,12 @@ export function BottomSheet({ title, subtitle, options, selected, onPick, onClos
                   aria-selected={isSel}
                   disabled={o.disabled}
                   onClick={() => { onPick(o.value); close(); }}
-                  className={`w-full min-h-[52px] flex items-center justify-between gap-3 px-5 border-t border-gray-200 text-left text-base text-gray-900 disabled:opacity-40 ${isSel ? 'font-semibold' : ''}`}
+                  className={`w-full flex items-center justify-between gap-3 pr-5 text-left text-gray-900 disabled:opacity-40 ${
+                    o.indent ? 'min-h-[44px] pl-[52px] text-[15px]' : 'min-h-[52px] pl-5 text-base border-t border-gray-200'
+                  } ${isSel ? 'font-semibold' : ''}`}
                 >
-                  <span className="min-w-0">
+                  <span className="min-w-0 flex items-center gap-3">
+                    {Icon && <Icon className="w-5 h-5 shrink-0 text-gray-500" />}
                     {o.label}
                     {o.hint && <span className="ml-2.5 text-[13px] font-normal text-gray-500">{o.hint}</span>}
                   </span>
@@ -170,6 +179,9 @@ export function BottomSheet({ title, subtitle, options, selected, onPick, onClos
             );
           })}
         </div>
+        {footer && (
+          <div className="shrink-0 border-t border-gray-200 px-5 pt-2.5 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">{footer}</div>
+        )}
       </div>
     </div>,
     document.body,

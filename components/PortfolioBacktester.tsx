@@ -37,7 +37,7 @@ import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, Cartesia
 import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun } from 'lucide-react';
 import { fetchSheetData, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData } from '@/lib/fetchData';
 import { isPhoneScreen, readSavedSheet, saveSheet } from '@/lib/savedSheet';
-import { PhoneChoice, PhoneSelectSheets, periodOptions } from '@/components/PhoneSheet';
+import { BottomSheet, PhoneChoice, PhoneSelectSheets, periodOptions } from '@/components/PhoneSheet';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
@@ -8425,7 +8425,8 @@ const PortfolioBacktester = () => {
   );
 
   // Dark / light mode switch: a small icon-only button. Sits beside Refresh Data in the sidebar and
-  // beside the close button in the narrow-screen drawer (className gives each spot its own look).
+  // beside the close button in the narrow-screen drawer, and beside the title of the phone's page
+  // menu (className gives each spot its own look).
   // The icon shows the mode it switches TO (moon = go dark, sun = go light).
   // Both icons are always there and the "dark:" classes show the right one straight from the class
   // on <html>, so a reload in dark mode shows the sun from the very first frame (no moon flicker
@@ -22069,20 +22070,49 @@ const PortfolioBacktester = () => {
       </div>
       </div>
 
-      {/* Slide-in navigation drawer (narrow screens), opened by the "Menu" button. Tapping the
-          dimmed backdrop, the close button, or any view closes it. */}
-      {navOpen && (
+      {/* Phones: "More" in the tab bar opens the page menu as a slide-up panel, like every other
+          choice on a phone: each page with its icon, the sections of Markets and Best To Worst
+          indented under it, a tick on the one that's open. The dark-mode button sits beside the
+          title, and how fresh the data is fits on one line at the bottom. */}
+      {navOpen && isPhoneScreen() && (
+        <BottomSheet
+          title="Pages"
+          options={NAV_VIEWS.flatMap(({ view, label, icon }) => [
+            { value: `v:${view}`, label, icon },
+            ...(navSections(view)?.items ?? []).map(s => ({ value: `s:${view}:${s.key}`, label: s.label, indent: true })),
+          ])}
+          selected={(() => {
+            const sections = navSections(activeView);
+            return sections && sections.items.length > 0 ? `s:${activeView}:${sections.active}` : `v:${activeView}`;
+          })()}
+          onPick={value => {
+            // "v:markets" = a page; "s:markets:Equities" = a section of it (a name may contain ":")
+            const [kind, view, ...rest] = value.split(':');
+            setActiveView(view as typeof activeView);
+            if (kind === 's') navSections(view as typeof activeView)?.select(rest.join(':'));
+          }}
+          onClose={() => setNavOpen(false)}
+          headerExtra={themeToggle('p-2 text-gray-600 bg-gray-100 border border-gray-200 [&_svg]:w-5 [&_svg]:h-5')}
+          footer={latestDataDate ? (
+            <div className="text-xs text-gray-500 truncate">
+              Data as of <span className="font-medium text-gray-900">{fmtNavDate(latestDataDate)}</span>
+              {fetchedLabel && ` · Fetched ${fetchedLabel}`}
+            </div>
+          ) : undefined}
+        />
+      )}
+
+      {/* Slide-in navigation drawer (narrow screens other than phones), opened by the "Menu" button.
+          Tapping the dimmed backdrop, the close button, or any view closes it. */}
+      {navOpen && !isPhoneScreen() && (
         <div className="fixed inset-0 z-50 min-[1520px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
           <div className="absolute inset-0 bg-black/30" onClick={() => setNavOpen(false)} />
-          {/* Same dark look as the wide-screen sidebar: menu scrolls, "Data as of" card stays at the bottom.
-              On a phone ("More" in the tab bar) it slides in from the RIGHT, the thumb's side. */}
-          <nav aria-label="Pages" className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col max-md:left-auto max-md:right-0 max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+          {/* Same dark look as the wide-screen sidebar: menu scrolls, "Data as of" card stays at the bottom. */}
+          <nav aria-label="Pages" className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col">
             <div className="flex items-center justify-between mb-2 px-1 shrink-0">
               <span className="text-sm font-semibold text-slate-300">Views</span>
               <div className="flex items-center gap-1">
-              {/* On a phone it's a bigger, outlined button with a bigger icon, easy to hit with a thumb
-                  ("[&_svg]" = the icon inside). Wider screens keep the small one. */}
-              {themeToggle('p-1.5 text-slate-400 hover:bg-white/10 hover:text-white max-md:p-2.5 max-md:mr-1 max-md:bg-white/10 max-md:border max-md:border-white/10 max-md:text-slate-200 max-md:[&_svg]:w-6 max-md:[&_svg]:h-6')}
+              {themeToggle('p-1.5 text-slate-400 hover:bg-white/10 hover:text-white')}
               <button
                 type="button"
                 onClick={() => setNavOpen(false)}
