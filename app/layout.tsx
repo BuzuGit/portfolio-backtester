@@ -15,7 +15,19 @@ import './dark.css'
 export const metadata: Metadata = {
   title: 'Portfolio Backtester',
   description: 'Backtest investment portfolios with historical data',
+  // iPhone: "Share > Add to Home Screen" then opens the app full screen, without Safari's address
+  // bar, under the name "Backtester" with the icon in public/icons. Desktop browsers ignore these.
+  // (The icons are plain PNG files, drawn once by a small script: a dark slate-to-black square with
+  // a white rising line. There is deliberately no app/icon file, which Next.js would also turn
+  // into the desktop browser-tab icon.)
+  appleWebApp: { capable: true, title: 'Backtester', statusBarStyle: 'default' },
+  icons: { apple: '/icons/apple-touch-icon.png' },
 }
+
+// Android: the app-info file (public/manifest.webmanifest) that lets Chrome offer "Install app" and
+// open it full screen with its own icon. Linked only on a phone-width screen, so desktop Chrome never
+// sees it and shows no install button in its address bar; desktop stays exactly as it was.
+const linkPhoneManifest = `try{if(matchMedia('(max-width: 767px)').matches){var l=document.createElement('link');l.rel='manifest';l.href='/manifest.webmanifest';document.head.appendChild(l)}}catch(e){}`
 
 // Runs in the browser before anything is painted: if dark mode was chosen last time, switch it on
 // now. Done here rather than in React because React only starts after the page has been shown
@@ -34,6 +46,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: applySavedTheme }} />
+        <script dangerouslySetInnerHTML={{ __html: linkPhoneManifest }} />
       </head>
       {/*
         The body tag wraps all content.

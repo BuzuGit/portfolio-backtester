@@ -35,7 +35,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
 import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun } from 'lucide-react';
-import { fetchSheetData, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND } from '@/lib/fetchData';
+import { fetchSheetData, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData } from '@/lib/fetchData';
+import { isPhoneScreen, readSavedSheet, saveSheet } from '@/lib/savedSheet';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
@@ -2149,16 +2150,15 @@ const PortfolioBacktester = () => {
   // ----------------------------------------
 
   /**
-   * Fetches fresh data from the Google Sheet.
-   * Called automatically on page load and when user clicks "Refresh Data"
+   * Puts one download of the sheet into the app: works out positions and cash from it and stores
+   * everything the pages read. Used for every fresh download and, on a phone, for the copy saved
+   * on the phone last time (see loadDataFromSheet below).
+   * resetSelections: also select every asset, class and currency again (what a load has always
+   * done). Off only when a phone swaps its saved copy for the fresh download of the same assets,
+   * so a filter tapped in the meantime isn't undone a few seconds later.
    */
-  const loadDataFromSheet = async () => {
-    setIsLoading(true);
-    setLoadingMessage('Fetching data from Google Sheets...');
-
-    try {
-      // Fetch and parse the CSV data from all sheets
-      const { data, assets, lookup, yearsData: fetchedYearsData, dailyData: fetchedDailyData, ledgerData: fetchedLedgerData, presetPortfolios: fetchedPresets, edo: fetchedEdo } = await fetchSheetData();
+  const applySheetData = (parsed: ParsedData, resetSelections: boolean) => {
+      const { data, assets, lookup, yearsData: fetchedYearsData, dailyData: fetchedDailyData, ledgerData: fetchedLedgerData, presetPortfolios: fetchedPresets, edo: fetchedEdo } = parsed;
 
       // ---- Derive positions from the ledger -------------------------------
       // Replay the Transactions tab to work out what is still held, what was sold,
@@ -2204,22 +2204,26 @@ const PortfolioBacktester = () => {
       setDailyData(fetchedDailyData);
       setPresetPortfolios(fetchedPresets);
       setEdoData(fetchedEdo);
-      // Auto-select all position tickers (both open and closed) by default
-      const closedTickers = new Set(effectiveClosed.map((row: ClosedPositionRow) => row.ticker));
-      // Open tickers come from the ledger replay, which correctly keeps a position open
-      // when it was only PARTLY sold. The old rule — "bought and never sold" — dropped
-      // those entirely, which is what hid BCASH, MBHTR and ETHSGD.
-      const openTickers = new Set(model.open.map(o => o.ticker));
-      const allPositionTickers = new Set([...Array.from(closedTickers), ...Array.from(openTickers)]);
-      setClosedSelectedTickers(lookup.filter(a => allPositionTickers.has(a.ticker)).map(a => a.ticker));
+      if (resetSelections) {
+        // Auto-select all position tickers (both open and closed) by default
+        const closedTickers = new Set(effectiveClosed.map((row: ClosedPositionRow) => row.ticker));
+        // Open tickers come from the ledger replay, which correctly keeps a position open
+        // when it was only PARTLY sold. The old rule — "bought and never sold" — dropped
+        // those entirely, which is what hid BCASH, MBHTR and ETHSGD.
+        const openTickers = new Set(model.open.map(o => o.ticker));
+        const allPositionTickers = new Set([...Array.from(closedTickers), ...Array.from(openTickers)]);
+        setClosedSelectedTickers(lookup.filter(a => allPositionTickers.has(a.ticker)).map(a => a.ticker));
+      }
       setIsConnected(true);
 
-      // Initialize filters to "all selected" when data loads
-      // This ensures all assets are visible by default
-      setSelectedAssetTickers(lookup.map(a => a.ticker));
-      setSelectedAssetClasses(Array.from(new Set(lookup.map(a => a.assetClass).filter(Boolean))));
-      setSelectedCurrencies(Array.from(new Set(lookup.map(a => a.currency).filter(Boolean))));
-      setSelectedAssetSubcategories(['Basic']);
+      if (resetSelections) {
+        // Initialize filters to "all selected" when data loads
+        // This ensures all assets are visible by default
+        setSelectedAssetTickers(lookup.map(a => a.ticker));
+        setSelectedAssetClasses(Array.from(new Set(lookup.map(a => a.assetClass).filter(Boolean))));
+        setSelectedCurrencies(Array.from(new Set(lookup.map(a => a.currency).filter(Boolean))));
+        setSelectedAssetSubcategories(['Basic']);
+      }
 
       // Set the date range based on the data
       if (data.length > 0) {
@@ -2229,14 +2233,76 @@ const PortfolioBacktester = () => {
         });
       }
 
+  };
+
+  // Phones only: has this visit already looked for the copy saved on the phone? (Only the first
+  // load does; pressing Refresh later just downloads.)
+  const triedSavedSheetRef = useRef(false);
+  // "30 Oct 21:14", the same style as the "Fetched" line in the menu
+  const fmtStamp = (d: Date) =>
+    `${d.getDate()} ${MONTH_LABELS[d.getMonth()]} ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
+
+  /**
+   * Fetches fresh data from the Google Sheet.
+   * Called automatically on page load and when user clicks "Refresh Data"
+   *
+   * On a phone, the first load also shows the copy saved on the phone last time while the download
+   * runs ("Saved copy from ... · updating..."), then swaps in the fresh data and saves that for
+   * next time. If the download fails, the saved copy stays on screen with the error above it.
+   * Desktop does exactly what it always did: wait for the download, then show it.
+   */
+  const loadDataFromSheet = async () => {
+    setIsLoading(true);
+    setLoadingMessage('Fetching data from Google Sheets...');
+
+    const phone = isPhoneScreen();
+    // Start the download first, so reading the saved copy doesn't hold it up
+    const freshRequest = fetchSheetData();
+    let freshSettled = false;
+    // (The second handler also stops the browser warning about a failure nobody is waiting for yet;
+    // the failure itself is still caught below.)
+    freshRequest.then(() => { freshSettled = true; }, () => { freshSettled = true; });
+
+    let savedShown: { data: ParsedData; savedAt: Date } | null = null;
+    if (phone && !triedSavedSheetRef.current) {
+      triedSavedSheetRef.current = true;
+      const saved = await readSavedSheet();
+      // Skip it if the download already beat it (it never should, but stale must not win)
+      if (saved && !freshSettled) {
+        try {
+          applySheetData(saved.data, true);
+          setLastFetchedAt(saved.savedAt);
+          setLoadingMessage(`Saved copy from ${fmtStamp(saved.savedAt)} · updating…`);
+          savedShown = saved;
+        } catch (err) {
+          // A saved copy the current code can't read: ignore it and wait for the download
+          console.warn('Saved copy of the sheet could not be shown:', err);
+        }
+      }
+    }
+
+    try {
+      const parsed = await freshRequest;
+      const { data, assets, edo: fetchedEdo } = parsed;
+      // Swapping the saved copy for fresh data of the SAME assets: keep the selections as they are
+      const sameAssets = savedShown !== null
+        && savedShown.data.lookup.map(a => a.ticker).join('|') === parsed.lookup.map(a => a.ticker).join('|');
+      applySheetData(parsed, !sameAssets);
+
       // A failed EDO tab is not fatal, but it must not be silent: it also takes away the price of
       // any EDO bond held in Positions / Holdings. (Shown as a third status line.)
       setLoadingMessage(`Loaded ${assets.length} assets, ${data.length} data points${fetchedEdo ? '' : ', EDO tab missing: Refresh'}`);
       setLastFetchedAt(new Date());
+      if (phone) saveSheet(parsed); // in the background; nothing waits for it
     } catch (error) {
       console.error('Failed to load data:', error);
-      setLoadingMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      setIsConnected(false);
+      if (savedShown) {
+        // Keep the saved copy on screen rather than an empty page, and say plainly it is old
+        setLoadingMessage(`Error updating, showing the copy saved ${fmtStamp(savedShown.savedAt)}`);
+      } else {
+        setLoadingMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        setIsConnected(false);
+      }
     }
 
     setIsLoading(false);
@@ -8045,6 +8111,14 @@ const PortfolioBacktester = () => {
   // shorter box scrolls away.
   const PINNED_FILTERS = 'sticky top-0 z-40 bg-white pt-2 pb-1';
 
+  // PHONES ONLY (every "max-md:" class applies below 768px of width and nowhere else, so none of
+  // the phone fixes below can change the desktop or laptop layout).
+  // A row of small option buttons (Currency, Period...) wider than a phone screen used to push past
+  // the right edge, and then the browser zooms the WHOLE page out, or lets it slide sideways, to
+  // show it. On a phone such a row instead scrolls sideways on its own, like a strip of chips,
+  // and the rest of the page stays put.
+  const PHONE_SCROLL_ROW = 'max-md:overflow-x-auto max-md:max-w-full';
+
   // EDO bonds held (Lookup tickers named like a series, e.g. "EDO0734") get their price from the
   // EDO tab. If that tab failed to load, say so on the pages that value them, rather than letting
   // the holding quietly show no price.
@@ -8217,8 +8291,12 @@ const PortfolioBacktester = () => {
   // pinned in place while the page scrolls, so its rounded corners always stay on screen and the
   // panel itself never moves. Inside: Refresh at the top, the menu in the middle (scrolls on its
   // own if the window is too short), the "Data as of" card at the bottom.
+  //
+  // PHONES (below 768px): 16px of grey page edge + 16px of card padding used up 64px of a ~375px
+  // screen, so both are thinner there; the extra bottom padding keeps the last rows clear of the
+  // floating menu button.
   return (
-    <div className="min-h-screen bg-page p-4">
+    <div className="min-h-screen bg-page p-4 max-md:p-2 max-md:pb-24">
       <div className="mx-auto max-w-[1268px] min-[1520px]:max-w-[1468px] min-[1520px]:flex min-[1520px]:items-start min-[1520px]:gap-2">
       <nav aria-label="Pages" className="hidden min-[1520px]:block w-[192px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
         <div className="h-full flex flex-col p-2">
@@ -8252,11 +8330,45 @@ const PortfolioBacktester = () => {
       <div className="min-w-0 min-[1520px]:w-[1268px] min-[1520px]:shrink-0">
         {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy).
             On wide screens no bottom margin, so it ends level with the dark sidebar beside it. */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1520px]:mb-0">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1520px]:mb-0 max-md:p-3">
+
+          {/* Phones only: one slim line instead of the Data box and Menu button below (together they
+              took about a quarter of the first screen). The page's name on the left with the load
+              status in small print under it, a round Refresh button on the right. The menu itself
+              opens from the floating button at the bottom right, within reach of the thumb. */}
+          <div className="hidden max-md:flex items-center justify-between gap-3 mb-3">
+            <div className="min-w-0">
+              <div className="text-base font-semibold text-gray-900 truncate">
+                {isConnected && assetData
+                  ? (() => {
+                      // Page name, plus the open section where the page has some ("Markets · Equities")
+                      const label = NAV_VIEWS.find(v => v.view === activeView)?.label;
+                      const sections = navSections(activeView);
+                      const section = sections?.items.find(s => s.key === sections.active)?.label;
+                      return section ? `${label} · ${section}` : label;
+                    })()
+                  : 'Portfolio Backtester'}
+              </div>
+              <div className={`text-[11px] leading-snug ${loadingMessage.includes('Error') ? 'text-red-600' : 'text-gray-500'}`}>
+                {loadingMessage || 'Ready'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={loadDataFromSheet}
+              disabled={isLoading}
+              aria-label="Refresh data"
+              title="Refresh data"
+              className="shrink-0 w-10 h-10 rounded-full bg-gray-100 text-gray-700 hover:bg-gray-200 flex items-center justify-center disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
 
           {/* Data Status Section - compact single row. Narrow screens only: wide screens show
-              the same Refresh button and status at the top of the sidebar instead. */}
-          <div className="mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between min-[1520px]:hidden">
+              the same Refresh button and status at the top of the sidebar instead.
+              (Phones show the slim line above instead.) */}
+          <div className="mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between min-[1520px]:hidden max-md:hidden">
             <div className="flex items-center gap-3">
               <h2 className="text-lg font-semibold text-gray-700">Data</h2>
               <span className={`text-sm ${
@@ -8332,9 +8444,9 @@ const PortfolioBacktester = () => {
 
           {/* Navigation on narrow screens. Wide screens (1,392px+) get the sidebar on the left
               instead, so this button hides there. Tapping it slides the same list in from the
-              left (see the drawer at the bottom of the page). */}
+              left (see the drawer at the bottom of the page). Phones use the floating button instead. */}
           {isConnected && assetData && (
-            <div className="mb-6 min-[1520px]:hidden">
+            <div className="mb-6 min-[1520px]:hidden max-md:hidden">
               <button
                 type="button"
                 onClick={() => setNavOpen(true)}
@@ -8357,7 +8469,7 @@ const PortfolioBacktester = () => {
                 <div className="flex justify-between items-center mb-2">
                   <h2 className="text-sm font-semibold text-gray-700">Parameters</h2>
                   {/* Quick date range presets */}
-                  <div className="flex gap-1">
+                  <div className={`flex gap-1 ${PHONE_SCROLL_ROW}`}>
                     {(['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'] as const).map(preset => (
                       <button
                         key={preset}
@@ -10465,7 +10577,7 @@ const PortfolioBacktester = () => {
                       </select>
                     </div>
                     {/* Period Buttons */}
-                    <div className="flex gap-1">
+                    <div className={`flex gap-1 ${PHONE_SCROLL_ROW}`}>
                       {([1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const).map(period => (
                         <button
                           key={period}
@@ -11038,7 +11150,7 @@ const PortfolioBacktester = () => {
                 {/* Page-level filters: currency for every return figure, period for the bars and tiles. */}
                 {/* "Native" = no conversion. Which category is shown is chosen in the left panel. */}
                 <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
-                  <div className="flex items-center gap-1">
+                  <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW}`}>
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
                     {marketsIsCountry
                       // Country page: the currency IS the country (PLN = Poland...), so no "Native",
@@ -11063,7 +11175,7 @@ const PortfolioBacktester = () => {
                           >{c}</button>
                         ))}
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW}`}>
                     <span className="text-xs text-gray-500 mr-1">Period:</span>
                     {MARKETS_PERIODS.map(p => (
                       <button
@@ -15309,7 +15421,8 @@ const PortfolioBacktester = () => {
           {isConnected && assetData && activeView === 'graphs' && (
             <div className="mt-2">
               {/* Controls row: filters + SMA toggle on left, period buttons on right (pinned while scrolling) */}
-              <div className={`${PINNED_FILTERS} flex justify-between items-start mb-4`}>
+              {/* On a phone the filters and the period row stack instead of sitting side by side */}
+              <div className={`${PINNED_FILTERS} flex justify-between items-start mb-4 max-md:flex-col max-md:gap-2`}>
                 <AssetFilterControls>
                   {/* SMA toggle — rendered inside the filter flex container for perfect alignment */}
                   <button
@@ -15323,7 +15436,7 @@ const PortfolioBacktester = () => {
                     10m SMA
                   </button>
                 </AssetFilterControls>
-                <div className="flex items-center gap-3">
+                <div className={`flex items-center gap-3 ${PHONE_SCROLL_ROW}`}>
                   {/* End Date selector — pick which month the charts end at */}
                   <select
                     value={graphsEndDate}
@@ -16548,6 +16661,11 @@ const PortfolioBacktester = () => {
                     return (
                   <div className="bg-white p-4 rounded-lg shadow mb-4">
                     <h3 className="text-md font-semibold text-gray-700 mb-2">Contributions and Profit by Year ({CURRENCY_SYMBOLS[portfolioCurrency]})</h3>
+                    {/* On a phone one bar per year is too thin for its labels, and the FX row below
+                        ran off the screen: there the chart keeps a 560px width and you swipe it
+                        sideways. (These two wrappers do nothing on wider screens.) */}
+                    <div className="max-md:overflow-x-auto">
+                    <div className="max-md:min-w-[560px]">
                     <ResponsiveContainer width="100%" height={350}>
                       <ComposedChart
                         data={cpChartData}
@@ -16669,6 +16787,8 @@ const PortfolioBacktester = () => {
                       </div>
                     </div>
                     )}
+                    </div>
+                    </div>
                   </div>
                     );
                   })()}
@@ -17508,7 +17628,7 @@ const PortfolioBacktester = () => {
 
                         {/* Currency + Period selectors */}
                         <div className="flex items-center gap-5 mb-4 flex-wrap">
-                          <div className="flex items-center gap-1">
+                          <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW}`}>
                             <span className="text-xs text-gray-500 mr-1">Currency:</span>
                             {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => (
                               <button key={c} onClick={() => setDailyNavCurrency(c)}
@@ -17517,7 +17637,7 @@ const PortfolioBacktester = () => {
                             ))}
                           </div>
                           {/* Benchmark buttons — one at a time; clicking the active one hides it again */}
-                          <div className="flex items-center gap-1">
+                          <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW}`}>
                             <span className="text-xs text-gray-500 mr-1">Benchmark:</span>
                             {DAILY_NAV_BENCHMARKS.map(b => (
                               <button key={b.id} title={b.note}
@@ -18511,7 +18631,9 @@ const PortfolioBacktester = () => {
                             <span className="text-xs font-normal text-amber-600">— {openCurrencyFilter} positions only</span>
                           )}
                         </h4>
-                        <div className="flex gap-6 items-start">
+                        {/* Phones: the table above, the pie centred under it (side by side there is no
+                            room - the table was squeezed to a sliver) */}
+                        <div className="flex gap-6 items-start max-md:flex-col max-md:items-stretch max-md:gap-3">
                           <div className="overflow-x-auto flex-1">
                             <table className="w-full text-xs border-collapse">
                               <thead>
@@ -18599,7 +18721,7 @@ const PortfolioBacktester = () => {
                               </tfoot>
                             </table>
                           </div>
-                          <div style={{ width: 220, height: 200, flexShrink: 0 }}>
+                          <div className="max-md:self-center" style={{ width: 220, height: 200, flexShrink: 0 }}>
                             <ResponsiveContainer width="100%" height="100%">
                               <PieChart>
                                 {/* isAnimationActive={false} = draw instantly instead of sweeping in on tab open */}
@@ -18653,7 +18775,7 @@ const PortfolioBacktester = () => {
                           )}
                         </h4>
                         {/* flex gap-6 mirrors the Asset Class layout: bars take flex-1, spacer = 220px for visual alignment */}
-                        <div className="flex gap-6 items-start">
+                        <div className="flex gap-6 items-start max-md:flex-col max-md:items-stretch max-md:gap-3">
                           <div className="flex-1 space-y-2">
                             {activeCurrencyData.map(ccyRow => {
                               const isSelected = openCurrencyFilter === ccyRow.currency;
@@ -18696,7 +18818,7 @@ const PortfolioBacktester = () => {
                             })}
                           </div>
                           {/* Pie chart — same dimensions as By Asset Class, colors match the bars */}
-                          <div style={{ width: 220, height: 200, flexShrink: 0 }}>
+                          <div className="max-md:self-center" style={{ width: 220, height: 200, flexShrink: 0 }}>
                             <ResponsiveContainer width="100%" height="100%">
                               <PieChart>
                                 {/* isAnimationActive={false} = draw instantly instead of sweeping in on tab open */}
@@ -18808,7 +18930,7 @@ const PortfolioBacktester = () => {
                               <span className="text-xs font-normal text-amber-600">— {openCurrencyFilter} positions only</span>
                             )}
                           </h4>
-                          <div className="flex gap-6 items-start">
+                          <div className="flex gap-6 items-start max-md:flex-col max-md:items-stretch max-md:gap-3">
                             <div className="flex-1 space-y-2">
                               {accountRollup.map((acctRow, idx) => {
                                 const isSelected = openAccountFilter === acctRow.account;
@@ -18836,7 +18958,8 @@ const PortfolioBacktester = () => {
                                     }`}
                                     onClick={() => setOpenAccountFilter(prev => prev === acctRow.account ? null : acctRow.account)}
                                   >
-                                    <span className="text-xs font-mono text-gray-600 text-right flex-shrink-0" style={{ minWidth: 160 }}>{acctRow.account}</span>
+                                    {/* Name column 160px wide (96px on a phone, so the bar keeps some room) */}
+                                    <span className="text-xs font-mono text-gray-600 text-right flex-shrink-0 min-w-[160px] max-md:min-w-[96px]">{acctRow.account}</span>
                                     <div className="relative flex-1 h-5 bg-gray-100 rounded">
                                       <div
                                         className="h-full rounded flex items-center pl-1.5"
@@ -18857,7 +18980,7 @@ const PortfolioBacktester = () => {
                               })}
                             </div>
                             {/* Pie chart — colors match the account bars by index */}
-                            <div style={{ width: 220, height: 200, flexShrink: 0 }}>
+                            <div className="max-md:self-center" style={{ width: 220, height: 200, flexShrink: 0 }}>
                               <ResponsiveContainer width="100%" height="100%">
                                 <PieChart>
                                   {/* isAnimationActive={false} = draw instantly instead of sweeping in on tab open */}
@@ -21568,8 +21691,9 @@ const PortfolioBacktester = () => {
       {navOpen && (
         <div className="fixed inset-0 z-50 min-[1520px]:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
           <div className="absolute inset-0 bg-black/30" onClick={() => setNavOpen(false)} />
-          {/* Same dark look as the wide-screen sidebar: menu scrolls, "Data as of" card stays at the bottom */}
-          <nav aria-label="Pages" className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col">
+          {/* Same dark look as the wide-screen sidebar: menu scrolls, "Data as of" card stays at the bottom.
+              On a phone it slides in from the RIGHT, the side of the floating button and the thumb. */}
+          <nav aria-label="Pages" className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] bg-gradient-to-b from-slate-900 to-black shadow-xl p-3 flex flex-col max-md:left-auto max-md:right-0 max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
             <div className="flex items-center justify-between mb-2 px-1 shrink-0">
               <span className="text-sm font-semibold text-slate-300">Views</span>
               <div className="flex items-center gap-1">
@@ -21588,6 +21712,20 @@ const PortfolioBacktester = () => {
             {navFooter}
           </nav>
         </div>
+      )}
+
+      {/* Phones only: a round menu button floating at the bottom right, where the thumb already is
+          (the top of a big phone is a stretch). It opens the same drawer as the Menu button.
+          env(safe-area-inset-bottom) lifts it above the iPhone's home bar when the app runs full screen. */}
+      {isConnected && assetData && (
+        <button
+          type="button"
+          onClick={() => setNavOpen(true)}
+          aria-label="Open menu"
+          className="hidden max-md:flex fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40 w-14 h-14 rounded-full bg-slate-900 text-white shadow-lg items-center justify-center active:scale-95 transition-transform"
+        >
+          <Menu className="w-6 h-6" />
+        </button>
       )}
     </div>
   );
