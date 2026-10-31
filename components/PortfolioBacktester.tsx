@@ -32,11 +32,12 @@
   - User interactions
 */
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
 import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun } from 'lucide-react';
 import { fetchSheetData, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData } from '@/lib/fetchData';
 import { isPhoneScreen, readSavedSheet, saveSheet } from '@/lib/savedSheet';
+import { PhoneChoice, PhoneSelectSheets, periodOptions } from '@/components/PhoneSheet';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
@@ -1683,6 +1684,16 @@ const COMMISSION_OPTIONS = [
   { value: 0.005, label: '0.50%' },
 ];
 
+// Phones: the returns-chart choices (Backtest and Monthly tabs) as slide-up panel choices, in the
+// same three groups the separators split the buttons into on desktop
+const RETURNS_PERIOD_CHOICES = [
+  { value: 'monthly', label: 'Monthly', group: 'Returns' },
+  { value: 'quarterly', label: 'Quarterly', group: 'Returns' },
+  { value: 'annual', label: 'Annual', group: 'Returns' },
+  ...ROLLING_RETURN_YEARS.map(r => ({ value: r.period, label: `Rolling ${r.years}Y`, hint: 'annualised', group: 'Rolling returns' })),
+  ...STREAK_VIEWS.map(s => ({ value: s.period, label: s.label, group: 'Streaks' })),
+];
+
 const PortfolioBacktester = () => {
   // ----------------------------------------
   // STATE VARIABLES
@@ -2147,6 +2158,37 @@ const PortfolioBacktester = () => {
   }, [activeView, marketsCategory, marketsCurrency, marketsView, marketsPeriod, marketsTrendPeriod,
       bestToWorstLayout, portfolioCurrency, positionsCurrency, holdingsCurrency,
       dailyNavCurrency, dailyNavPeriod, graphsPeriod]);
+
+  // PHONES: EACH PAGE KEEPS ITS PLACE. Scroll halfway down Positions, look at Markets, come back,
+  // and Positions is where you left it, as in other apps (a page not visited yet opens at its top).
+  // How: while you scroll, the position is noted against the open page; when another page opens,
+  // it is scrolled to the position noted for it. Only kept while the app is open.
+  // Desktop doesn't note or move anything.
+  const scrollByView = useRef<Partial<Record<typeof activeView, number>>>({});
+  const scrollView = useRef(activeView);   // the page the noted positions currently belong to
+  useEffect(() => {
+    if (!isPhoneScreen()) return;
+    const onScroll = () => { scrollByView.current[scrollView.current] = window.scrollY; };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+  // A layout effect runs after the new page is in place but before it is shown, so it opens
+  // straight at its spot instead of flashing its top first
+  useLayoutEffect(() => {
+    if (scrollView.current === activeView) return;
+    scrollView.current = activeView;
+    if (!isPhoneScreen()) return;
+    const target = scrollByView.current[activeView] ?? 0;
+    // Charts draw themselves a moment later, so the page may not be tall enough yet to reach the
+    // spot: try again a few times over about a third of a second
+    let tries = 0;
+    const scrollToSpot = () => {
+      // 'instant': globals.css makes scrolling smooth by default, which would visibly slide there
+      window.scrollTo({ top: target, behavior: 'instant' });
+      if (Math.abs(window.scrollY - target) > 2 && ++tries < 6) setTimeout(scrollToSpot, 60);
+    };
+    scrollToSpot();
+  }, [activeView]);
   // Monthly Prices tab: toggle between price view and monthly return (%) view
   const [monthlyViewMode, setMonthlyViewMode] = useState<'prices' | 'returns'>('prices');
   // Monthly Prices tab: end date filter ('' = latest month in data)
@@ -2419,7 +2461,9 @@ const PortfolioBacktester = () => {
     };
     const onStart = (e: TouchEvent) => {
       // Only a one-finger drag that starts with the page scrolled right to the top
-      pulling = window.scrollY <= 0 && e.touches.length === 1 && !pullBlockedRef.current && !pullSpinningRef.current;
+      // (and not while a slide-up choice panel is open: components/PhoneSheet.tsx sets the flag)
+      pulling = window.scrollY <= 0 && e.touches.length === 1 && !pullBlockedRef.current && !pullSpinningRef.current
+        && !document.body.dataset.sheetOpen;
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
       distance = 0;
@@ -8620,8 +8664,17 @@ const PortfolioBacktester = () => {
               <div className="mb-6 p-3 bg-gray-50 rounded-lg">
                 <div className="flex justify-between items-center mb-2">
                   <h2 className="text-sm font-semibold text-gray-700">Parameters</h2>
-                  {/* Quick date range presets */}
-                  <div className={`flex gap-1 ${PHONE_SCROLL_ROW}`}>
+                  {/* Quick date range presets (phones: one box that opens a slide-up panel) */}
+                  <div className="hidden max-md:flex w-40">
+                    <PhoneChoice
+                      label="Quick range"
+                      display="Choose…"
+                      subtitle="Sets start and end date"
+                      options={['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'].map(p => ({ value: p, label: p }))}
+                      onPick={p => setDatePreset(p as Parameters<typeof setDatePreset>[0])}
+                    />
+                  </div>
+                  <div className={`flex gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
                     {(['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'] as const).map(preset => (
                       <button
                         key={preset}
@@ -8835,6 +8888,7 @@ const PortfolioBacktester = () => {
                             <div key={idx} className="flex gap-1 items-center">
                               {/* Asset Selector - min-w-0 allows shrinking, flex-1 fills remaining space */}
                               <select
+                                aria-label="Asset"
                                 value={asset.asset}
                                 onChange={(e) => updateAsset(portfolio.id, idx, 'asset', e.target.value)}
                                 className="flex-1 min-w-0 px-1 py-1 text-xs border border-gray-300 rounded"
@@ -8906,6 +8960,7 @@ const PortfolioBacktester = () => {
                             <div className="flex items-center gap-1">
                               <span className="text-xs text-gray-500" title={describeFxConversion(portfolio.assets, portfolio.baseCurrency, getAssetCurrency)}>Ccy:</span>
                               <select
+                                aria-label="Currency"
                                 value={portfolio.baseCurrency}
                                 onChange={(e) => {
                                   const newCcy = e.target.value;
@@ -8929,6 +8984,7 @@ const PortfolioBacktester = () => {
                             <div className="flex items-center gap-1">
                               <span className="text-xs text-gray-500" title="Adjust portfolio values for inflation using CPI data">Infl:</span>
                               <select
+                                aria-label="Inflation adjustment"
                                 value={portfolio.inflationAdj}
                                 onChange={(e) => {
                                   const newInflAdj = e.target.value;
@@ -9184,8 +9240,17 @@ const PortfolioBacktester = () => {
                   return (
                     <>
                       <h3 className="text-md font-semibold text-gray-700 mb-2">{heading}</h3>
-                      {/* Period buttons, laid out and styled exactly like the Monthly tab's */}
-                      <div className="flex items-center gap-2 mb-2 px-2 flex-wrap">
+                      {/* Period buttons, laid out and styled exactly like the Monthly tab's
+                          (phones: one box that opens a slide-up panel) */}
+                      <div className="hidden max-md:flex mb-2 w-1/2">
+                        <PhoneChoice
+                          label="Returns"
+                          options={RETURNS_PERIOD_CHOICES}
+                          selected={backtestReturnsPeriod}
+                          onPick={p => setBacktestReturnsPeriod(p as ReturnsChartPeriod)}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 mb-2 px-2 flex-wrap max-md:hidden">
                         <span className="text-xs font-semibold text-gray-500">Returns:</span>
                         {(['monthly', 'quarterly', 'annual'] as const).map(p => (
                           <button
@@ -9888,6 +9953,7 @@ const PortfolioBacktester = () => {
                   <h3 className="text-md font-semibold text-gray-700">Withdrawal Detail</h3>
                   {/* Dropdown to pick which portfolio's detail to show */}
                   <select
+                    aria-label="Portfolio"
                     className="border rounded px-2 py-1 text-sm"
                     value={selectedDetailPortfolio}
                     onChange={(e) => setSelectedDetailPortfolio(parseInt(e.target.value))}
@@ -9961,6 +10027,7 @@ const PortfolioBacktester = () => {
                   <h3 className="text-md font-semibold text-gray-700">Rebalancing Detail</h3>
                   {/* Dropdown to pick which portfolio's rebalancing detail to show */}
                   <select
+                    aria-label="Portfolio"
                     className="border rounded px-2 py-1 text-sm"
                     value={selectedRebalancingPortfolio}
                     onChange={(e) => setSelectedRebalancingPortfolio(parseInt(e.target.value))}
@@ -10685,7 +10752,15 @@ const PortfolioBacktester = () => {
                           ))}
                         </div>
                         {/* Return Map: currency the returns are measured (and ranked) in */}
-                        <div className="flex items-center gap-1">
+                        <div className="hidden max-md:flex w-full">
+                          <PhoneChoice
+                            label="Currency"
+                            options={(['native', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => ({ value: c, label: c === 'native' ? 'Native' : c }))}
+                            selected={returnMapCurrency}
+                            onPick={c => setReturnMapCurrency(c as typeof returnMapCurrency)}
+                          />
+                        </div>
+                        <div className="flex items-center gap-1 max-md:hidden">
                           <span className="text-xs text-gray-500 mr-1">Currency:</span>
                           {(['native', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
                             <button
@@ -10713,8 +10788,25 @@ const PortfolioBacktester = () => {
                       </>
                     )}
                     {bestToWorstLayout === 'ranking' && (<>
+                    {/* Phones: the year dropdown and the period buttons below as one box, since
+                        both choose what the ranking covers (one calendar year, or the last N years) */}
+                    <div className="hidden max-md:flex w-full">
+                      <PhoneChoice
+                        label="Ranking period"
+                        options={[
+                          ...years.slice().reverse().map(y => ({ value: `y${y}`, label: String(y), group: 'Calendar year' })),
+                          ...([1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const).map(p => ({ value: `p${p}`, label: `${p}Y`, hint: `last ${p} year${p === 1 ? '' : 's'}`, group: 'Last years' })),
+                        ]}
+                        selected={isYearMode ? `y${currentYear}` : `p${bestToWorstMode}`}
+                        onPick={v => {
+                          const n = parseInt(v.slice(1), 10);
+                          if (v[0] === 'y') { setSelectedRankingYear(n); setBestToWorstMode('year'); }
+                          else setBestToWorstMode(n as Exclude<typeof bestToWorstMode, 'year'>);
+                        }}
+                      />
+                    </div>
                     {/* Year Dropdown */}
-                    <div className="relative">
+                    <div className="relative max-md:hidden">
                       <select
                         value={currentYear}
                         onChange={(e) => {
@@ -10729,7 +10821,7 @@ const PortfolioBacktester = () => {
                       </select>
                     </div>
                     {/* Period Buttons */}
-                    <div className={`flex gap-1 ${PHONE_SCROLL_ROW}`}>
+                    <div className={`flex gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
                       {([1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const).map(period => (
                         <button
                           key={period}
@@ -11214,7 +11306,16 @@ const PortfolioBacktester = () => {
               // No title: the chart sits right under its own section, which already names it.
               const header = (
                 <div className="flex items-center justify-end mb-1">
-                  <div className="flex gap-1">
+                  {/* Phones: one box that opens a slide-up panel */}
+                  <div className="hidden max-md:flex w-1/2">
+                    <PhoneChoice
+                      label="Chart range"
+                      options={periodOptions(['1Y', '3Y', '5Y', '10Y', 'Max'])}
+                      selected={marketsChartRange}
+                      onPick={rg => setMarketsChartRange(rg as typeof marketsChartRange)}
+                    />
+                  </div>
+                  <div className="flex gap-1 max-md:hidden">
                     {(['1Y', '3Y', '5Y', '10Y', 'Max'] as const).map(rg => (
                       <button key={rg} type="button" onClick={() => setMarketsChartRange(rg)}
                         className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
@@ -11302,7 +11403,33 @@ const PortfolioBacktester = () => {
                 {/* Page-level filters: currency for every return figure, period for the bars and tiles. */}
                 {/* "Native" = no conversion. Which category is shown is chosen in the left panel. */}
                 <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
-                  <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW}`}>
+                  {/* Phones: Currency and Period as two boxes that open slide-up panels */}
+                  <div className="hidden max-md:flex w-full gap-2">
+                    {marketsIsCountry
+                      ? <PhoneChoice
+                          label="Country"
+                          options={COUNTRY_CURRENCIES.map(c => ({ value: c, label: c, hint: COUNTRY_NAMES[c] }))}
+                          selected={marketsCountry}
+                          onPick={c => setMarketsCountry(c as typeof marketsCountry)}
+                        />
+                      : <PhoneChoice
+                          label="Currency"
+                          options={(['Native', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => ({ value: c, label: c }))}
+                          selected={marketsCurrency}
+                          onPick={c => setMarketsCurrency(c as MarketsCurrency)}
+                        />}
+                    <PhoneChoice
+                      label="Period"
+                      options={periodOptions(MARKETS_PERIODS)}
+                      selected={marketsPeriod}
+                      onPick={v => {
+                        const p = v as MarketsPeriod;
+                        setMarketsPeriod(p);
+                        if (p === '1Y' || p === '3Y' || p === '5Y' || p === '10Y' || p === 'Max') setMarketsTrendPeriod(p);
+                      }}
+                    />
+                  </div>
+                  <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
                     {marketsIsCountry
                       // Country page: the currency IS the country (PLN = Poland...), so no "Native",
@@ -11327,7 +11454,7 @@ const PortfolioBacktester = () => {
                           >{c}</button>
                         ))}
                   </div>
-                  <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW}`}>
+                  <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
                     <span className="text-xs text-gray-500 mr-1">Period:</span>
                     {MARKETS_PERIODS.map(p => (
                       <button
@@ -11868,7 +11995,15 @@ const PortfolioBacktester = () => {
                 {/* Page-level filter: the one currency every money figure is converted into, or */}
                 {/* Native (each row in its own currency; totals, weights and tiles then in USD). */}
                 <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
-                  <div className="flex items-center gap-1">
+                  <div className="hidden max-md:flex w-full">
+                    <PhoneChoice
+                      label="Currency"
+                      options={HOLDINGS_CURRENCIES.map(c => ({ value: c, label: c }))}
+                      selected={holdingsCurrency}
+                      onPick={c => setHoldingsCurrency(c as HoldingsCurrency)}
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 max-md:hidden">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
                     {HOLDINGS_CURRENCIES.map(c => (
                       <button
@@ -12787,6 +12922,7 @@ const PortfolioBacktester = () => {
 
                 {/* End Date selector — pick which month the table ends at */}
                 <select
+                  aria-label="End month"
                   value={monthlyEndDate}
                   onChange={(e) => setMonthlyEndDate(e.target.value)}
                   className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
@@ -12815,6 +12951,7 @@ const PortfolioBacktester = () => {
                 {/* Seasonality screen selector — pick a calendar month to rank assets
                     by their historical loss rate in that month (best → worst). */}
                 <select
+                  aria-label="Seasonality"
                   value={seasonMonth === null ? '' : String(seasonMonth)}
                   onChange={(e) => setSeasonMonth(e.target.value === '' ? null : parseInt(e.target.value))}
                   className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
@@ -13641,7 +13778,22 @@ const PortfolioBacktester = () => {
                                 </span>
                               )}
                             </h3>
-                            <div className="flex items-center gap-2 flex-wrap justify-end">
+                            {/* Phones: currency and period as two boxes that open slide-up panels */}
+                            <div className="hidden max-md:flex w-full gap-2">
+                              <PhoneChoice
+                                label="Currency"
+                                options={(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => ({ value: c, label: c }))}
+                                selected={monthlyDisplayCurrency}
+                                onPick={setMonthlyDisplayCurrency}
+                              />
+                              <PhoneChoice
+                                label="Period"
+                                options={periodOptions(MONTHLY_CHART_PERIODS, p => (p === 'max' ? 'Max' : p))}
+                                selected={monthlyChartPeriod}
+                                onPick={p => setMonthlyChartPeriod(p as MonthlyChartPeriod)}
+                              />
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap justify-end max-md:hidden">
                               {/* Currency buttons — re-express everything below in the chosen currency.
                                   The button matching the asset's native currency is highlighted by
                                   default (that's the "original currency" view). */}
@@ -14143,8 +14295,8 @@ const PortfolioBacktester = () => {
                               or the asset against world equities. The third is hidden when the
                               selected asset IS the benchmark — comparing IWDA with itself would
                               just draw one line on top of another. */}
-                          <div className="flex justify-end gap-1 mb-1 px-2 flex-wrap">
-                            {([
+                          <div className="flex justify-end gap-1 mb-1 px-2 flex-wrap max-md:flex-nowrap max-md:items-center max-md:gap-2">
+                            {(() => { const modes = ([
                               // Price on its own: same chart as the next button without the red
                               // SMA line. A moving average of an interest rate or a GDP series
                               // says nothing, so those are better read bare.
@@ -14159,14 +14311,25 @@ const PortfolioBacktester = () => {
                                 ? [{ key: 'vsMarket', label: `vs ${STRESS_BENCHMARK}` }] as const
                                 : []),
                               { key: 'inflation', label: 'vs Inflation' },
-                            ] as const).map(opt => (
+                            ] as const);
+                            return (<>
+                            {/* Phones: the chart choice as one box that opens a slide-up panel */}
+                            <div className="hidden max-md:flex flex-1 min-w-0">
+                              <PhoneChoice
+                                label="Chart"
+                                options={modes.map(m => ({ value: m.key, label: m.label }))}
+                                selected={priceChartMode}
+                                onPick={k => setMonthlyPriceChartMode(k as (typeof modes)[number]['key'])}
+                              />
+                            </div>
+                            {modes.map(opt => (
                               <button
                                 key={opt.key}
                                 onClick={() => setMonthlyPriceChartMode(opt.key)}
                                 // Highlights the EFFECTIVE mode, so that when a vs-IWDA view falls
                                 // back (e.g. you then select IWDA itself) the highlighted button
                                 // still matches the chart on screen instead of nothing being lit.
-                                className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                                className={`px-2 py-1 text-xs font-medium rounded border transition-colors max-md:hidden ${
                                   priceChartMode === opt.key
                                     ? 'bg-slate-800 text-white border-slate-800'
                                     : 'bg-white border-gray-300 hover:bg-gray-100'
@@ -14175,6 +14338,7 @@ const PortfolioBacktester = () => {
                                 {opt.label}
                               </button>
                             ))}
+                            </>); })()}
                             {/* Axis scale, kept slightly apart because it applies to all three
                                 views above rather than being a fourth view of its own. */}
                             <div className="flex gap-1 ml-3">
@@ -14571,8 +14735,17 @@ const PortfolioBacktester = () => {
                               silently taking the buttons away with it. */}
                           {(returnsData.length > 0 || rollingView) && (
                             <div className="mt-2">
-                              {/* Toggle buttons: Monthly | Quarterly | Annual, then the rolling views */}
-                              <div className="flex items-center gap-2 mb-1 px-2 flex-wrap">
+                              {/* Toggle buttons: Monthly | Quarterly | Annual, then the rolling views
+                                  (phones: one box that opens a slide-up panel) */}
+                              <div className="hidden max-md:flex mb-1 w-1/2">
+                                <PhoneChoice
+                                  label="Returns"
+                                  options={RETURNS_PERIOD_CHOICES}
+                                  selected={returnsChartPeriod}
+                                  onPick={p => setReturnsChartPeriod(p as ReturnsChartPeriod)}
+                                />
+                              </div>
+                              <div className="flex items-center gap-2 mb-1 px-2 flex-wrap max-md:hidden">
                                 <span className="text-xs font-semibold text-gray-500">Returns:</span>
                                 {(['monthly', 'quarterly', 'annual'] as const).map(p => (
                                   <button
@@ -14886,7 +15059,19 @@ const PortfolioBacktester = () => {
 
                             return (
                               <div className="mt-4 pt-3 border-t border-gray-200">
-                                <div className="flex items-center gap-2 mb-2 px-2 flex-wrap">
+                                {/* Phones: the stress year as one box that opens a slide-up panel */}
+                                <div className="hidden max-md:flex items-center gap-2 mb-2">
+                                  <div className="w-1/2 flex">
+                                    <PhoneChoice
+                                      label="During stress"
+                                      options={STRESS_YEARS.map(y => ({ value: String(y), label: String(y) }))}
+                                      selected={String(stressYear)}
+                                      onPick={y => setStressYear(Number(y))}
+                                    />
+                                  </div>
+                                  <span className="text-xs text-gray-400">in {ccy}</span>
+                                </div>
+                                <div className="flex items-center gap-2 mb-2 px-2 flex-wrap max-md:hidden">
                                   <span className="text-xs font-semibold text-gray-700">During stress:</span>
                                   {STRESS_YEARS.map(y => (
                                     <button
@@ -15591,6 +15776,7 @@ const PortfolioBacktester = () => {
                 <div className={`flex items-center gap-3 ${PHONE_SCROLL_ROW}`}>
                   {/* End Date selector — pick which month the charts end at */}
                   <select
+                    aria-label="End month"
                     value={graphsEndDate}
                     onChange={(e) => setGraphsEndDate(e.target.value)}
                     className="px-2 py-1 text-xs border border-gray-300 rounded bg-white"
@@ -15616,8 +15802,16 @@ const PortfolioBacktester = () => {
                     })()}
                   </select>
 
-                  {/* Period buttons */}
-                  <div className="flex gap-1">
+                  {/* Period buttons (phones: one box that opens a slide-up panel) */}
+                  <div className="hidden max-md:flex flex-1 min-w-0">
+                    <PhoneChoice
+                      label="Period"
+                      options={periodOptions(['1Y', '2Y', '3Y', '4Y', '5Y', '10Y', '15Y', 'Max']).map(o => ({ ...o, value: o.value === 'Max' ? 'max' : o.value }))}
+                      selected={graphsPeriod}
+                      onPick={v => setGraphsPeriod(v as typeof graphsPeriod)}
+                    />
+                  </div>
+                  <div className="flex gap-1 max-md:hidden">
                     {(['1Y', '2Y', '3Y', '4Y', '5Y', '10Y', '15Y', 'Max'] as const).map(p => {
                       const value = p === 'Max' ? 'max' : p;
                       return (
@@ -16717,8 +16911,16 @@ const PortfolioBacktester = () => {
                 </div>
               ) : (
                 <>
-                  {/* Currency buttons — affects Charts 1 & 2 only; single-select */}
-                  <div className="mb-4 flex items-center gap-1">
+                  {/* Currency buttons — affects Charts 1 & 2 only; single-select (phones: one box) */}
+                  <div className="hidden max-md:flex mb-4 w-1/2">
+                    <PhoneChoice
+                      label="Currency"
+                      options={(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => ({ value: c, label: c }))}
+                      selected={portfolioCurrency}
+                      onPick={c => setPortfolioCurrency(c as typeof portfolioCurrency)}
+                    />
+                  </div>
+                  <div className="mb-4 flex items-center gap-1 max-md:hidden">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
                     {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
                       <button
@@ -17778,8 +17980,28 @@ const PortfolioBacktester = () => {
                           <span className="text-xs text-gray-400">Both series indexed to 100 at period start · inflation from monthly CPI, held flat within the month</span>
                         </div>
 
-                        {/* Currency + Period selectors */}
-                        <div className="flex items-center gap-5 mb-4 flex-wrap">
+                        {/* Currency + Period selectors (phones: three boxes that open slide-up panels) */}
+                        <div className="hidden max-md:flex gap-2 mb-4">
+                          <PhoneChoice
+                            label="Currency"
+                            options={(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => ({ value: c, label: c }))}
+                            selected={dailyNavCurrency}
+                            onPick={c => setDailyNavCurrency(c as typeof dailyNavCurrency)}
+                          />
+                          <PhoneChoice
+                            label="Benchmark"
+                            options={[{ value: '', label: 'None' }, ...DAILY_NAV_BENCHMARKS.map(b => ({ value: b.id, label: b.id }))]}
+                            selected={dailyNavBenchmark}
+                            onPick={b => setDailyNavBenchmark(b as typeof dailyNavBenchmark)}
+                          />
+                          <PhoneChoice
+                            label="Period"
+                            options={periodOptions(['1Y', '3Y', '5Y', 'Max'])}
+                            selected={dailyNavPeriod}
+                            onPick={p => setDailyNavPeriod(p as typeof dailyNavPeriod)}
+                          />
+                        </div>
+                        <div className="flex items-center gap-5 mb-4 flex-wrap max-md:hidden">
                           <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW}`}>
                             <span className="text-xs text-gray-500 mr-1">Currency:</span>
                             {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => (
@@ -18033,8 +18255,16 @@ const PortfolioBacktester = () => {
                             })}
                           </div>
 
-                          {/* Period buttons — same style as Daily NAV */}
-                          <div className="flex items-center gap-1">
+                          {/* Period buttons — same style as Daily NAV (phones: one box) */}
+                          <div className="hidden max-md:flex w-1/2">
+                            <PhoneChoice
+                              label="Period"
+                              options={periodOptions(['1Y', '3Y', '5Y', 'Max'])}
+                              selected={ddPeriod}
+                              onPick={p => setDdPeriod(p as typeof ddPeriod)}
+                            />
+                          </div>
+                          <div className="flex items-center gap-1 max-md:hidden">
                             <span className="text-xs text-gray-500 mr-1">Period:</span>
                             {(['1Y', '3Y', '5Y', 'Max'] as const).map(p => (
                               <button key={p} onClick={() => setDdPeriod(p)}
@@ -18379,6 +18609,7 @@ const PortfolioBacktester = () => {
                 <div className="flex items-center gap-1">
                   <span className="text-xs text-gray-500" title="Convert all position values to this currency for comparison">Ccy:</span>
                   <select
+                    aria-label="Currency"
                     value={positionsCurrency}
                     onChange={(e) => setPositionsCurrency(e.target.value)}
                     className="px-1 py-0.5 text-xs border border-gray-300 rounded"
@@ -21868,6 +22099,9 @@ const PortfolioBacktester = () => {
         </div>
       )}
 
+      {/* Phones only: every dropdown opens a slide-up panel instead of the browser's list */}
+      <PhoneSelectSheets />
+
       {/* Phones only: the pull-to-refresh arrow. It waits just above the top edge, invisible, and
           is moved into view by the touch handlers next to loadDataFromSheet. */}
       <div
@@ -21881,8 +22115,8 @@ const PortfolioBacktester = () => {
 
       {/* Phones only: the tab bar along the bottom, like most phone apps. The four most-used pages
           are one tap away; "More" opens the full menu (the drawer) for the rest, and is the one
-          lit up while you're on one of those other pages. Tapping the page you're already on
-          scrolls back to its top, as apps do.
+          lit up while you're on one of those other pages. Each page reopens where you left it;
+          tapping the page you're already on scrolls back to its top, as apps do.
           env(safe-area-inset-bottom) keeps it above the iPhone's home bar when the app runs full
           screen. (Its aria-label is deliberately not "Pages": app/dark.css styles that one.) */}
       {isConnected && assetData && (() => {
@@ -21906,11 +22140,11 @@ const PortfolioBacktester = () => {
               <button
                 key={label}
                 type="button"
+                // (The page that opens goes back to where it was scrolled last time: see
+                // "EACH PAGE KEEPS ITS PLACE")
                 onClick={() => {
                   if (active && label !== 'More') { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
                   go();
-                  // A new page starts at its top, not wherever the last one was scrolled to
-                  if (label !== 'More') window.scrollTo({ top: 0 });
                 }}
                 aria-current={active && label !== 'More' ? 'page' : undefined}
                 className={`h-14 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium ${active ? 'text-slate-900' : 'text-gray-500'}`}
