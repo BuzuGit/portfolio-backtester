@@ -543,7 +543,7 @@ function sortTableRows<T>(rows: T[], sort: TableSortState, accessors: Record<str
  * clickable at all.
  */
 const SortableTh = ({
-  col, sort, onSort, align = 'right', numeric = true, style, title, children,
+  col, sort, onSort, align = 'right', numeric = true, style, title, children, className = '',
 }: {
   col: string;                                          // this column's id, matching its accessor
   sort: TableSortState;                                 // the whole table's current sort
@@ -553,6 +553,7 @@ const SortableTh = ({
   style?: React.CSSProperties;
   title?: string;
   children: React.ReactNode;
+  className?: string;                                   // extra classes, e.g. "max-md:hidden" for a column phones skip
 }) => {
   const active = sort?.col === col;
   // Numbers start biggest-first; words and dates start A-Z / oldest-first.
@@ -574,7 +575,7 @@ const SortableTh = ({
         // A <th> is already bold by default, so the active state is a darker fill and a darker
         // ink — adding a font weight here would actually make it LIGHTER than its neighbours.
         active ? 'bg-gray-200 text-slate-900' : 'bg-gray-100 hover:bg-gray-200'
-      }`}
+      } ${className}`}
     >
       {/* The label is plain text, free to wrap onto a second line exactly as the original
           headers did ("Total / Invested").
@@ -18771,8 +18772,19 @@ const PortfolioBacktester = () => {
                   );
                 })()}
 
-                {/* Currency conversion dropdown — converts all position values to chosen currency */}
-                <div className="flex items-center gap-1">
+                {/* Currency conversion dropdown — converts all position values to chosen currency.
+                    Phones: a "Currency: USD ▾" button matching the Assets one, opening a slide-up
+                    panel ("-" = no conversion, each position in its own currency, reads "Native"). */}
+                <div className="hidden max-md:flex">
+                  <PhoneChoice
+                    variant="filter"
+                    label="Currency"
+                    options={CURRENCY_OPTIONS.map(o => ({ value: o.value, label: o.value === '' ? 'Native' : o.label, hint: o.value === '' ? 'no conversion' : undefined }))}
+                    selected={positionsCurrency}
+                    onPick={setPositionsCurrency}
+                  />
+                </div>
+                <div className="flex items-center gap-1 max-md:hidden">
                   <span className="text-xs text-gray-500" title="Convert all position values to this currency for comparison">Ccy:</span>
                   <select
                     aria-label="Currency"
@@ -19187,11 +19199,13 @@ const PortfolioBacktester = () => {
                             <table className="w-full text-xs border-collapse">
                               <thead>
                                 <tr className="border-b border-gray-200">
+                                  {/* Phones skip Invested and Return % ("max-md:hidden"); the
+                                      return is shown small under each PnL there instead */}
                                   <SortableTh col="assetClass" align="left" numeric={false} {...sortPropsFor('positionsAssetClass')}>Asset Class</SortableTh>
-                                  <SortableTh col="invested" {...sortPropsFor('positionsAssetClass')}>Invested {effectiveCcy}</SortableTh>
+                                  <SortableTh col="invested" className="max-md:hidden" {...sortPropsFor('positionsAssetClass')}>Invested {effectiveCcy}</SortableTh>
                                   <SortableTh col="currentValue" {...sortPropsFor('positionsAssetClass')}>Current Value {effectiveCcy}</SortableTh>
                                   <SortableTh col="pnl" {...sortPropsFor('positionsAssetClass')}>Total PnL {effectiveCcy}</SortableTh>
-                                  <SortableTh col="returnPct" {...sortPropsFor('positionsAssetClass')}>Return %</SortableTh>
+                                  <SortableTh col="returnPct" className="max-md:hidden" {...sortPropsFor('positionsAssetClass')}>Return %</SortableTh>
                                   <SortableTh col="weight" {...sortPropsFor('positionsAssetClass')}>Weight</SortableTh>
                                 </tr>
                               </thead>
@@ -19226,7 +19240,7 @@ const PortfolioBacktester = () => {
                                         {row.assetClass}
                                       </div>
                                     </td>
-                                    <td className="text-right py-2 px-2 font-mono">{row.invested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                    <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.invested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                     <td className="text-right py-2 px-2 font-mono">{row.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                     {/* Cash shows a dash, not "+0". A zero would read as "this
                                         broke even", when in fact profit and loss simply do not
@@ -19236,8 +19250,13 @@ const PortfolioBacktester = () => {
                                     <td className={`text-right py-2 px-2 font-mono font-medium ${row.assetClass === CASH_CLASS ? 'text-gray-400' : row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                       {row.assetClass === CASH_CLASS ? '—'
                                         : `${row.pnl >= 0 ? '+' : ''}${row.pnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                                      {row.assetClass !== CASH_CLASS && row.invested > 0 && (
+                                        <div className="hidden max-md:block text-[10px] opacity-80">
+                                          {row.pnl >= 0 ? '+' : ''}{((row.pnl / row.invested) * 100).toFixed(1)}%
+                                        </div>
+                                      )}
                                     </td>
-                                    <td className={`text-right py-2 px-2 font-mono font-medium ${row.assetClass === CASH_CLASS ? 'text-gray-400' : row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    <td className={`text-right py-2 px-2 font-mono font-medium max-md:hidden ${row.assetClass === CASH_CLASS ? 'text-gray-400' : row.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                       {row.assetClass === CASH_CLASS ? '—'
                                         : row.invested > 0 ? `${row.pnl >= 0 ? '+' : ''}${((row.pnl / row.invested) * 100).toFixed(1)}%` : '—'}
                                     </td>
@@ -19255,12 +19274,17 @@ const PortfolioBacktester = () => {
                                   return (
                                     <tr className="border-t-2 border-gray-300 font-semibold bg-gray-100">
                                       <td className="py-2 px-2 text-gray-700 font-mono">{assetClassRollup.length} Classes</td>
-                                      <td className="text-right py-2 px-2 font-mono">{totalInv.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                      <td className="text-right py-2 px-2 font-mono max-md:hidden">{totalInv.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                       <td className="text-right py-2 px-2 font-mono">{totalCur.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                       <td className={`text-right py-2 px-2 font-mono ${totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                         {totalPnL >= 0 ? '+' : ''}{totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                        {totalInv > 0 && (
+                                          <div className="hidden max-md:block text-[10px] opacity-80">
+                                            {totalPnL >= 0 ? '+' : ''}{((totalPnL / totalInv) * 100).toFixed(1)}%
+                                          </div>
+                                        )}
                                       </td>
-                                      <td className={`text-right py-2 px-2 font-mono ${totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      <td className={`text-right py-2 px-2 font-mono max-md:hidden ${totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                         {totalInv > 0 ? `${totalPnL >= 0 ? '+' : ''}${((totalPnL / totalInv) * 100).toFixed(1)}%` : '—'}
                                       </td>
                                       <td className="text-right py-2 px-2 font-mono">100.0%</td>
@@ -19666,11 +19690,13 @@ const PortfolioBacktester = () => {
                                   <SortableTh col="account" align="left" numeric={false} {...sortPropsFor('positionsCash')}>Account</SortableTh>
                                   <SortableTh col="currency" align="left" numeric={false} {...sortPropsFor('positionsCash')}>Currency</SortableTh>
                                   <SortableTh col="balance" {...sortPropsFor('positionsCash')}>Balance</SortableTh>
-                                  <SortableTh col="totalIn" {...sortPropsFor('positionsCash')} title="Every credit this account has ever received, in this currency">Total In</SortableTh>
-                                  <SortableTh col="totalOut" {...sortPropsFor('positionsCash')} title="Every debit this account has ever paid out, in this currency">Total Out</SortableTh>
-                                  <SortableTh col="movements" {...sortPropsFor('positionsCash')} title="How many individual movements make up the balance">Movements</SortableTh>
-                                  <SortableTh col="lastDate" numeric={false} {...sortPropsFor('positionsCash')}>Last Activity</SortableTh>
-                                  <SortableTh col="weight" {...sortPropsFor('positionsCash')} style={{ width: 70 }} title="Share of total cash held">Weight</SortableTh>
+                                  {/* Phones keep Account, Currency, Balance and the converted balance;
+                                      the other columns are "max-md:hidden" (tap a row for the detail) */}
+                                  <SortableTh col="totalIn" className="max-md:hidden" {...sortPropsFor('positionsCash')} title="Every credit this account has ever received, in this currency">Total In</SortableTh>
+                                  <SortableTh col="totalOut" className="max-md:hidden" {...sortPropsFor('positionsCash')} title="Every debit this account has ever paid out, in this currency">Total Out</SortableTh>
+                                  <SortableTh col="movements" className="max-md:hidden" {...sortPropsFor('positionsCash')} title="How many individual movements make up the balance">Movements</SortableTh>
+                                  <SortableTh col="lastDate" className="max-md:hidden" numeric={false} {...sortPropsFor('positionsCash')}>Last Activity</SortableTh>
+                                  <SortableTh col="weight" className="max-md:hidden" {...sortPropsFor('positionsCash')} style={{ width: 70 }} title="Share of total cash held">Weight</SortableTh>
                                   {positionsCurrency && <SortableTh col="converted" {...sortPropsFor('positionsCash')}>Balance {posCcyLabel}</SortableTh>}
                                 </tr>
                               </thead>
@@ -19689,12 +19715,12 @@ const PortfolioBacktester = () => {
                                     <td className={`text-right py-2 px-2 font-mono font-medium ${row.balance < 0 ? 'text-red-600' : 'text-gray-800'}`}>
                                       {row.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </td>
-                                    <td className="text-right py-2 px-2 font-mono text-gray-500">{row.totalIn.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                                    <td className="text-right py-2 px-2 font-mono text-gray-500">{row.totalOut.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                                    <td className="text-right py-2 px-2 font-mono text-gray-500">{row.movements.length}</td>
-                                    <td className="text-right py-2 px-2 font-mono text-gray-500" title={`First movement: ${row.firstDate}`}>{row.lastDate}</td>
+                                    <td className="text-right py-2 px-2 font-mono text-gray-500 max-md:hidden">{row.totalIn.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                    <td className="text-right py-2 px-2 font-mono text-gray-500 max-md:hidden">{row.totalOut.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                    <td className="text-right py-2 px-2 font-mono text-gray-500 max-md:hidden">{row.movements.length}</td>
+                                    <td className="text-right py-2 px-2 font-mono text-gray-500 max-md:hidden" title={`First movement: ${row.firstDate}`}>{row.lastDate}</td>
                                     {/* Weight cell with inline bar chart — same treatment as Open Positions */}
-                                    <td className="py-2 px-2 font-mono" style={{ position: 'relative', overflow: 'hidden' }}>
+                                    <td className="py-2 px-2 font-mono max-md:hidden" style={{ position: 'relative', overflow: 'hidden' }}>
                                       <div style={{
                                         position: 'absolute', left: 0, top: 0, bottom: 0,
                                         width: `${(Math.abs(row.converted) / maxConverted) * 100}%`,
@@ -19716,8 +19742,11 @@ const PortfolioBacktester = () => {
                               <tfoot>
                                 <tr className="border-t-2 border-gray-300 font-semibold bg-gray-100">
                                   <td className="py-2 px-2 text-gray-700 font-mono">{rows.length} Balances</td>
-                                  <td colSpan={6}></td>
-                                  <td className="text-right py-2 px-2 font-mono">100.0%</td>
+                                  {/* The gap under the columns between: 6 on desktop, 2 on phones
+                                      (Currency, Balance), so the converted total stays under its column */}
+                                  <td colSpan={6} className="max-md:hidden"></td>
+                                  <td colSpan={2} className="hidden max-md:table-cell"></td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">100.0%</td>
                                   {positionsCurrency && (
                                     <td className="text-right py-2 px-2 font-mono">
                                       {grandTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -19772,19 +19801,28 @@ const PortfolioBacktester = () => {
                             <thead>
                               <tr className="border-b border-gray-200">
                                 <SortableTh col="name" align="left" numeric={false} {...sortPropsFor('positionsOpen')}>Asset Name</SortableTh>
-                                <SortableTh col="timeHeld" {...sortPropsFor('positionsOpen')}>Time Held</SortableTh>
-                                <SortableTh col="avgBuy" {...sortPropsFor('positionsOpen')}>Avg Buy</SortableTh>
-                                <SortableTh col="price" {...sortPropsFor('positionsOpen')}>Price</SortableTh>
-                                <SortableTh col="pnlPct" {...sortPropsFor('positionsOpen')}>PnL %</SortableTh>
-                                <SortableTh col="qty" {...sortPropsFor('positionsOpen')}>Qty</SortableTh>
-                                <SortableTh col="invested" {...sortPropsFor('positionsOpen')}>Total Invested</SortableTh>
-                                <SortableTh col="currentValue" {...sortPropsFor('positionsOpen')}>Current Value</SortableTh>
-                                <SortableTh col="pnl" {...sortPropsFor('positionsOpen')}>Total PnL</SortableTh>
-                                <SortableTh col="xirr" {...sortPropsFor('positionsOpen')} title={XIRR_HINT}>XIRR</SortableTh>
-                                <SortableTh col="weight" {...sortPropsFor('positionsOpen')} style={{ width: 70 }}>Weight</SortableTh>
-                                {positionsCurrency && <SortableTh col="investedConverted" {...sortPropsFor('positionsOpen')}>Invested {posCcyLabel}</SortableTh>}
-                                {positionsCurrency && <SortableTh col="currentConverted" {...sortPropsFor('positionsOpen')}>Current {posCcyLabel}</SortableTh>}
-                                {positionsCurrency && <SortableTh col="pnlConverted" {...sortPropsFor('positionsOpen')}>PnL {posCcyLabel}</SortableTh>}
+                                {/* Phones: just Value, PnL % and Weight after the name (time held goes
+                                    under the name). These three cells exist only there ("hidden
+                                    max-md:table-cell"), in the order a phone wants; every desktop
+                                    column after the name is "max-md:hidden". Value is in the chosen
+                                    currency, or each position's own when none is chosen. Tap a row
+                                    for everything else. */}
+                                <SortableTh col={positionsCurrency ? 'currentConverted' : 'currentValue'} className="hidden max-md:table-cell" {...sortPropsFor('positionsOpen')}>Value{positionsCurrency ? ` ${posCcyLabel}` : ''}</SortableTh>
+                                <SortableTh col="pnlPct" className="hidden max-md:table-cell" {...sortPropsFor('positionsOpen')}>PnL %</SortableTh>
+                                <SortableTh col="weight" className="hidden max-md:table-cell" {...sortPropsFor('positionsOpen')}>Weight</SortableTh>
+                                <SortableTh col="timeHeld" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>Time Held</SortableTh>
+                                <SortableTh col="avgBuy" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>Avg Buy</SortableTh>
+                                <SortableTh col="price" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>Price</SortableTh>
+                                <SortableTh col="pnlPct" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>PnL %</SortableTh>
+                                <SortableTh col="qty" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>Qty</SortableTh>
+                                <SortableTh col="invested" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>Total Invested</SortableTh>
+                                <SortableTh col="currentValue" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>Current Value</SortableTh>
+                                <SortableTh col="pnl" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>Total PnL</SortableTh>
+                                <SortableTh col="xirr" className="max-md:hidden" {...sortPropsFor('positionsOpen')} title={XIRR_HINT}>XIRR</SortableTh>
+                                <SortableTh col="weight" className="max-md:hidden" {...sortPropsFor('positionsOpen')} style={{ width: 70 }}>Weight</SortableTh>
+                                {positionsCurrency && <SortableTh col="investedConverted" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>Invested {posCcyLabel}</SortableTh>}
+                                {positionsCurrency && <SortableTh col="currentConverted" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>Current {posCcyLabel}</SortableTh>}
+                                {positionsCurrency && <SortableTh col="pnlConverted" className="max-md:hidden" {...sortPropsFor('positionsOpen')}>PnL {posCcyLabel}</SortableTh>}
                               </tr>
                             </thead>
                             <tbody>
@@ -19835,24 +19873,35 @@ const PortfolioBacktester = () => {
                                     setOpenShowMinMax(false);
                                   }}
                                 >
-                                  <td className="py-2 px-2 text-gray-700">{row.name}</td>
-                                  <td className="text-right py-2 px-2 font-mono" title={`First Buy: ${row.firstBuyDate}\nLast Valuation: ${row.lastValuation}`}>{row.timeHeldYears.toFixed(1)}y</td>
-                                  <td className="text-right py-2 px-2 font-mono">{formatPrice(row.avgBuyPrice)}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{formatPrice(row.currentPrice)}</td>
-                                  <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  <td className="py-2 px-2 text-gray-700">
+                                    {row.name}
+                                    <div className="hidden max-md:block text-[10px] text-gray-400 font-mono">{row.timeHeldYears.toFixed(1)}y</div>
+                                  </td>
+                                  {/* Phones only: Value, PnL %, Weight (see the header) */}
+                                  <td className="hidden max-md:table-cell text-right py-2 px-2 font-mono">
+                                    {(positionsCurrency ? row.currentValueConverted : row.currentValue).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                  </td>
+                                  <td className={`hidden max-md:table-cell text-right py-2 px-2 font-mono font-medium ${row.totalPnLPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.totalPnLPct >= 0 ? '+' : ''}{row.totalPnLPct.toFixed(1)}%
                                   </td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.totalShares.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.totalInvested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                  <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  <td className="hidden max-md:table-cell text-right py-2 px-2 font-mono">{row._weight.toFixed(1)}%</td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden" title={`First Buy: ${row.firstBuyDate}\nLast Valuation: ${row.lastValuation}`}>{row.timeHeldYears.toFixed(1)}y</td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">{formatPrice(row.avgBuyPrice)}</td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">{formatPrice(row.currentPrice)}</td>
+                                  <td className={`text-right py-2 px-2 font-mono font-medium max-md:hidden ${row.totalPnLPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {row.totalPnLPct >= 0 ? '+' : ''}{row.totalPnLPct.toFixed(1)}%
+                                  </td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.totalShares.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.totalInvested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  <td className={`text-right py-2 px-2 font-mono font-medium max-md:hidden ${row.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.totalPnL >= 0 ? '+' : ''}{row.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                   </td>
-                                  <td className={`text-right py-2 px-2 font-mono font-medium ${(row.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  <td className={`text-right py-2 px-2 font-mono font-medium max-md:hidden ${(row.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.xirr !== null ? `${row.xirr >= 0 ? '+' : ''}${row.xirr.toFixed(1)}%` : 'N/A'}
                                   </td>
                                   {/* Weight cell with inline bar chart */}
-                                  <td className="py-2 px-2 font-mono" style={{ position: 'relative', overflow: 'hidden' }}>
+                                  <td className="py-2 px-2 font-mono max-md:hidden" style={{ position: 'relative', overflow: 'hidden' }}>
                                     <div style={{
                                       position: 'absolute', left: 0, top: 0, bottom: 0,
                                       width: `${(row._weight / maxWeight) * 100}%`,
@@ -19863,9 +19912,9 @@ const PortfolioBacktester = () => {
                                       {row._weight.toFixed(1)}%
                                     </span>
                                   </td>
-                                  {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{row.investedConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
-                                  {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{row.currentValueConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
-                                  {positionsCurrency && <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLConverted >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {positionsCurrency && <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.investedConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
+                                  {positionsCurrency && <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.currentValueConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
+                                  {positionsCurrency && <td className={`text-right py-2 px-2 font-mono font-medium max-md:hidden ${row.totalPnLConverted >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.totalPnLConverted >= 0 ? '+' : ''}{row.totalPnLConverted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                   </td>}
                                 </tr>
@@ -19881,10 +19930,19 @@ const PortfolioBacktester = () => {
                                 return (
                                   <tr className="border-t-2 border-gray-300 font-semibold bg-gray-100">
                                     <td className="py-2 px-2 text-gray-700 font-mono">{filteredOpenData.length} Holdings</td>
-                                    <td colSpan={10}></td>
-                                    {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{totalInvestedCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
-                                    {positionsCurrency && <td className="text-right py-2 px-2 font-mono">{totalCurrentCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
-                                    {positionsCurrency && <td className={`text-right py-2 px-2 font-mono ${totalPnLCcy >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {/* Phones: the total value (in the chosen currency; positions in
+                                        their own currencies can't be added up) and its return */}
+                                    <td className="hidden max-md:table-cell text-right py-2 px-2 font-mono">
+                                      {positionsCurrency ? totalCurrentCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : ''}
+                                    </td>
+                                    <td className={`hidden max-md:table-cell text-right py-2 px-2 font-mono ${totalPnLCcy >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {positionsCurrency && totalInvestedCcy > 0 ? `${totalPnLCcy >= 0 ? '+' : ''}${((totalPnLCcy / totalInvestedCcy) * 100).toFixed(1)}%` : ''}
+                                    </td>
+                                    <td className="hidden max-md:table-cell text-right py-2 px-2 font-mono">100%</td>
+                                    <td colSpan={10} className="max-md:hidden"></td>
+                                    {positionsCurrency && <td className="text-right py-2 px-2 font-mono max-md:hidden">{totalInvestedCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
+                                    {positionsCurrency && <td className="text-right py-2 px-2 font-mono max-md:hidden">{totalCurrentCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>}
+                                    {positionsCurrency && <td className={`text-right py-2 px-2 font-mono max-md:hidden ${totalPnLCcy >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                       {totalPnLCcy >= 0 ? '+' : ''}{totalPnLCcy.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                     </td>}
                                   </tr>
@@ -19905,14 +19963,16 @@ const PortfolioBacktester = () => {
                             <thead>
                               <tr className="border-b border-gray-200">
                                 <SortableTh col="name" align="left" numeric={false} {...sortPropsFor('positionsClosed')}>Asset Name</SortableTh>
-                                <SortableTh col="numTransactions" {...sortPropsFor('positionsClosed')}># Txns</SortableTh>
-                                <SortableTh col="firstBuyDate" numeric={false} {...sortPropsFor('positionsClosed')}>First Buy</SortableTh>
-                                <SortableTh col="lastSaleDate" numeric={false} {...sortPropsFor('positionsClosed')}>Last Sale</SortableTh>
-                                <SortableTh col="timeHeld" {...sortPropsFor('positionsClosed')}>Time Held</SortableTh>
+                                {/* Phones: Invested, PnL (with its % under it) and XIRR after the
+                                    name, time held under the name; the rest is "max-md:hidden" */}
+                                <SortableTh col="numTransactions" className="max-md:hidden" {...sortPropsFor('positionsClosed')}># Txns</SortableTh>
+                                <SortableTh col="firstBuyDate" className="max-md:hidden" numeric={false} {...sortPropsFor('positionsClosed')}>First Buy</SortableTh>
+                                <SortableTh col="lastSaleDate" className="max-md:hidden" numeric={false} {...sortPropsFor('positionsClosed')}>Last Sale</SortableTh>
+                                <SortableTh col="timeHeld" className="max-md:hidden" {...sortPropsFor('positionsClosed')}>Time Held</SortableTh>
                                 <SortableTh col="invested" {...sortPropsFor('positionsClosed')}>Total Invested</SortableTh>
-                                <SortableTh col="finalValue" {...sortPropsFor('positionsClosed')}>Total Final Value</SortableTh>
+                                <SortableTh col="finalValue" className="max-md:hidden" {...sortPropsFor('positionsClosed')}>Total Final Value</SortableTh>
                                 <SortableTh col="pnl" {...sortPropsFor('positionsClosed')}>Total PnL</SortableTh>
-                                <SortableTh col="pnlPct" {...sortPropsFor('positionsClosed')}>PnL %</SortableTh>
+                                <SortableTh col="pnlPct" className="max-md:hidden" {...sortPropsFor('positionsClosed')}>PnL %</SortableTh>
                                 <SortableTh col="xirr" {...sortPropsFor('positionsClosed')} title={XIRR_HINT}>XIRR</SortableTh>
                               </tr>
                             </thead>
@@ -19950,17 +20010,21 @@ const PortfolioBacktester = () => {
                                     setClosedShowMinMax(false);
                                   }}
                                 >
-                                  <td className="py-2 px-2 text-gray-700">{row.name}</td>
-                                  <td className="text-right py-2 px-2">{row.numTransactions}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.firstBuyDate}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.lastSaleDate}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.timeHeldYears.toFixed(1)}y</td>
+                                  <td className="py-2 px-2 text-gray-700">
+                                    {row.name}
+                                    <div className="hidden max-md:block text-[10px] text-gray-400 font-mono">{row.timeHeldYears.toFixed(1)}y</div>
+                                  </td>
+                                  <td className="text-right py-2 px-2 max-md:hidden">{row.numTransactions}</td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.firstBuyDate}</td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.lastSaleDate}</td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.timeHeldYears.toFixed(1)}y</td>
                                   <td className="text-right py-2 px-2 font-mono">{row.totalInvested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                                  <td className="text-right py-2 px-2 font-mono">{row.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                                  <td className="text-right py-2 px-2 font-mono max-md:hidden">{row.totalFinalValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                                   <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.totalPnL >= 0 ? '+' : ''}{row.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    <div className="hidden max-md:block text-[10px] opacity-80">{row.totalPnLPct >= 0 ? '+' : ''}{row.totalPnLPct.toFixed(1)}%</div>
                                   </td>
-                                  <td className={`text-right py-2 px-2 font-mono font-medium ${row.totalPnLPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  <td className={`text-right py-2 px-2 font-mono font-medium max-md:hidden ${row.totalPnLPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {row.totalPnLPct >= 0 ? '+' : ''}{row.totalPnLPct.toFixed(1)}%
                                   </td>
                                   <td className={`text-right py-2 px-2 font-mono font-medium ${(row.xirr ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -20041,14 +20105,15 @@ const PortfolioBacktester = () => {
                     <div className="flex items-center gap-3 mb-4">
                       <button
                         onClick={() => { setCashSelected(''); setCashCategory(''); }}
-                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1"
+                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1 max-md:shrink-0 max-md:pl-2"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                         </svg>
-                        Back to list
+                        {/* Phones: just "Back", so the button stays one line beside the title */}
+                        Back<span className="max-md:hidden"> to list</span>
                       </button>
-                      <h3 className="text-lg font-semibold text-gray-800">
+                      <h3 className="text-lg font-semibold text-gray-800 max-md:text-base max-md:leading-snug">
                         {cashRow.account} — {cashRow.currency} cash
                       </h3>
                     </div>
@@ -20492,14 +20557,15 @@ const PortfolioBacktester = () => {
                     <div className="flex items-center gap-3 mb-4">
                       <button
                         onClick={() => { setOpenSelectedTicker(''); setOpenIncludedTxns(null); }}
-                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1"
+                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1 max-md:shrink-0 max-md:pl-2"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                         </svg>
-                        Back to list
+                        {/* Phones: just "Back", so the button stays one line beside the title */}
+                        Back<span className="max-md:hidden"> to list</span>
                       </button>
-                      <h3 className="text-lg font-semibold text-gray-800">
+                      <h3 className="text-lg font-semibold text-gray-800 max-md:text-base max-md:leading-snug">
                         {openSelectedTicker} — {assetInfo?.name || 'Unknown'}
                       </h3>
                     </div>
@@ -20699,8 +20765,8 @@ const PortfolioBacktester = () => {
                     <div className="bg-white px-2 py-4 rounded-lg shadow mb-4">
                       <h4 className="text-sm font-semibold text-gray-700 mb-3 px-2">Price History</h4>
 
-                      {/* Chart controls */}
-                      <div className="flex flex-wrap items-end gap-4 mb-4 px-2">
+                      {/* Chart controls ("phone-chart-controls": a tidy grid on phones, see globals.css) */}
+                      <div className="flex flex-wrap items-end gap-4 mb-4 px-2 phone-chart-controls">
                         <button
                           onClick={() => setOpenSinceInvested(!openSinceInvested)}
                           className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
@@ -21253,14 +21319,15 @@ const PortfolioBacktester = () => {
                     <div className="flex items-center gap-3 mb-4">
                       <button
                         onClick={() => { setClosedSelectedTicker(''); setClosedIncludedTxns(null); }}
-                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1"
+                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1 max-md:shrink-0 max-md:pl-2"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                         </svg>
-                        Back to list
+                        {/* Phones: just "Back", so the button stays one line beside the title */}
+                        Back<span className="max-md:hidden"> to list</span>
                       </button>
-                      <h3 className="text-lg font-semibold text-gray-800">
+                      <h3 className="text-lg font-semibold text-gray-800 max-md:text-base max-md:leading-snug">
                         {closedSelectedTicker} — {assetInfo?.name || 'Unknown'}
                       </h3>
                     </div>
@@ -21467,8 +21534,9 @@ const PortfolioBacktester = () => {
                     <div className="bg-white px-2 py-4 rounded-lg shadow mb-4">
                       <h4 className="text-sm font-semibold text-gray-700 mb-3 px-2">Price History</h4>
 
-                      {/* Chart controls: toggles and Invested Into / From */}
-                      <div className="flex flex-wrap items-end gap-4 mb-4 px-2">
+                      {/* Chart controls: toggles and Invested Into / From
+                          ("phone-chart-controls": a tidy grid on phones, see globals.css) */}
+                      <div className="flex flex-wrap items-end gap-4 mb-4 px-2 phone-chart-controls">
                         {/* Since Invested toggle */}
                         <button
                           onClick={() => setClosedSinceInvested(!closedSinceInvested)}

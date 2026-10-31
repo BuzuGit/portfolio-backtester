@@ -82,6 +82,36 @@ html {
   }
 }
 
+/* Phones: the chart controls of a position's detail view (Positions tab) on a 6-column grid
+   instead of a loosely wrapping row: the on/off switches three to a row, the dropdowns two to a
+   row at full width, and the thin dividers between the groups dropped. Comes after Tailwind's
+   utilities in this file, so these win over the elements' own flex / padding / width classes. */
+@media (max-width: 767px) {
+  .phone-chart-controls {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 10px 8px;
+    align-items: end;
+  }
+  .phone-chart-controls > button {
+    grid-column: span 2;
+    height: 100%;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+  .phone-chart-controls > div {
+    grid-column: span 3;
+  }
+  .phone-chart-controls > .border-l {
+    display: none;
+  }
+  .phone-chart-controls select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
 /* Custom scrollbar for tables (makes them look cleaner) */
 .overflow-x-auto::-webkit-scrollbar {
   height: 6px;
