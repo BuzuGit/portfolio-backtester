@@ -11399,12 +11399,25 @@ const PortfolioBacktester = () => {
               );
             };
 
+            // Returns / Stats switch (the desktop buttons and the phone box both use it)
+            const switchMarketsView = (v: 'returns' | 'stats') => {
+              if (v === marketsView) return;
+              // Park this view's period, restore the other view's (Stats starts on 5Y).
+              marketsSavedPeriod.current[marketsView] = marketsPeriod;
+              const next = marketsSavedPeriod.current[v];
+              setMarketsView(v);
+              setMarketsPeriod(next);
+              if (next === '1Y' || next === '3Y' || next === '5Y' || next === '10Y' || next === 'Max') setMarketsTrendPeriod(next);
+            };
+
             return (
               <div className="mt-2">
                 {/* Page-level filters: currency for every return figure, period for the bars and tiles. */}
                 {/* "Native" = no conversion. Which category is shown is chosen in the left panel. */}
-                <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
-                  {/* Phones: Currency and Period as two boxes that open slide-up panels */}
+                {/* Phones: not pinned ("max-md:static"), it scrolls away with the page, leaving the */}
+                {/* small screen to the table (same on the Holdings and EDO sections below). */}
+                <div className={`${PINNED_FILTERS} max-md:static mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
+                  {/* Phones: Currency, Period and View as boxes on one row that open slide-up panels */}
                   <div className="hidden max-md:flex w-full gap-2">
                     {marketsIsCountry
                       ? <PhoneChoice
@@ -11429,6 +11442,14 @@ const PortfolioBacktester = () => {
                         if (p === '1Y' || p === '3Y' || p === '5Y' || p === '10Y' || p === 'Max') setMarketsTrendPeriod(p);
                       }}
                     />
+                    {!isMacroTable && (
+                      <PhoneChoice
+                        label="View"
+                        options={[{ value: 'returns', label: 'Returns', hint: 'period returns' }, { value: 'stats', label: 'Stats', hint: 'CAGR, volatility, drawdowns' }]}
+                        selected={marketsView}
+                        onPick={v => switchMarketsView(v as 'returns' | 'stats')}
+                      />
+                    )}
                   </div>
                   <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
@@ -11472,20 +11493,12 @@ const PortfolioBacktester = () => {
                   </div>
                   {/* Returns (default) or Stats for the asset sections; not offered where there are no assets */}
                   {!isMacroTable && (
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 max-md:hidden">
                       <span className="text-xs text-gray-500 mr-1">View:</span>
                       {([['returns', 'Returns'], ['stats', 'Stats']] as const).map(([v, label]) => (
                         <button
                           key={v}
-                          onClick={() => {
-                            if (v === marketsView) return;
-                            // Park this view's period, restore the other view's (Stats starts on 5Y).
-                            marketsSavedPeriod.current[marketsView] = marketsPeriod;
-                            const next = marketsSavedPeriod.current[v];
-                            setMarketsView(v);
-                            setMarketsPeriod(next);
-                            if (next === '1Y' || next === '3Y' || next === '5Y' || next === '10Y' || next === 'Max') setMarketsTrendPeriod(next);
-                          }}
+                          onClick={() => switchMarketsView(v)}
                           className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                             marketsView === v ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                           }`}
@@ -11995,7 +12008,7 @@ const PortfolioBacktester = () => {
                 {edoMissingBanner}
                 {/* Page-level filter: the one currency every money figure is converted into, or */}
                 {/* Native (each row in its own currency; totals, weights and tiles then in USD). */}
-                <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
+                <div className={`${PINNED_FILTERS} max-md:static mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
                   <div className="hidden max-md:flex w-full">
                     <PhoneChoice
                       label="Currency"
@@ -12457,7 +12470,7 @@ const PortfolioBacktester = () => {
             return (
               <div className="mt-2">
                 {/* Page-level filter: which series the table lists */}
-                <div className={`${PINNED_FILTERS} mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
+                <div className={`${PINNED_FILTERS} max-md:static mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Series:</span>
                     {([['all', 'All'], ['running', 'Running'], ['matured', 'Matured']] as const).map(([k, label]) => (
