@@ -194,29 +194,44 @@ export function BottomSheet({ title, subtitle, options, selected, onPick, onClos
  * "max-md:hidden". `display` overrides the text shown in the box (e.g. for a row of actions
  * that has no current value).
  */
-export function PhoneChoice({ label, options, selected, onPick, display, subtitle }: {
+export function PhoneChoice({ label, options, selected, onPick, display, subtitle, variant }: {
   label: string;
   options: SheetOption[];
   selected?: string;
   onPick: (value: string) => void;
   display?: string;
   subtitle?: string;
+  // 'filter' = one line, "Label: value ▾", in the style of the app's filter buttons
+  // ("Assets: All assets ▾"), for sitting beside them
+  variant?: 'filter';
 }) {
   const [open, setOpen] = useState(false);
   const current = display ?? options.find(o => o.value === selected)?.label ?? '–';
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="flex-1 min-w-0 flex flex-col items-start px-3 py-1.5 rounded-xl bg-gray-100 border border-gray-200 text-left"
-      >
-        <span className="text-[11px] leading-tight text-gray-500">{label}</span>
-        <span className="w-full flex items-center justify-between gap-1 text-[15px] leading-snug font-semibold text-gray-900">
-          <span className="truncate">{current}</span>
-          <ChevronDown className="w-4 h-4 shrink-0 text-gray-500" />
-        </span>
-      </button>
+      {variant === 'filter' ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 border-gray-300 bg-white"
+        >
+          <span className="font-medium">{label}:</span>
+          <span className="text-gray-600">{current}</span>
+          <ChevronDown className="w-4 h-4" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="flex-1 min-w-0 flex flex-col items-start px-3 py-1.5 rounded-xl bg-gray-100 border border-gray-200 text-left"
+        >
+          <span className="text-[11px] leading-tight text-gray-500">{label}</span>
+          <span className="w-full flex items-center justify-between gap-1 text-[15px] leading-snug font-semibold text-gray-900">
+            <span className="truncate">{current}</span>
+            <ChevronDown className="w-4 h-4 shrink-0 text-gray-500" />
+          </span>
+        </button>
+      )}
       {open && (
         <BottomSheet
           title={label}
