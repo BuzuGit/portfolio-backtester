@@ -1459,6 +1459,18 @@ const isDarkTheme = (): boolean =>
   typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
 
 /**
+ * Phones only: colour the phone's own bars above and below the page (clock/battery strip, browser
+ * bar, Android's bottom bar) to match the mode, so dark mode isn't framed by white strips. Sets
+ * every copy of each tag, because React adds a second status-bar tag while the page starts up.
+ * The tags are first set by phoneBarColours in app/layout.tsx; desktop skips this entirely.
+ */
+const setPhoneBarColours = (dark: boolean) => {
+  if (!isPhoneScreen()) return;
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', dark ? '#0e1014' : '#f1f2f4'));
+  document.querySelectorAll('meta[name="apple-mobile-web-app-status-bar-style"]').forEach(m => m.setAttribute('content', dark ? 'black' : 'default'));
+};
+
+/**
  * Heatmap cell colour, adjusted for dark mode. The heatmaps run from white (nothing to see) to a
  * strong colour (look here), and their colours are computed in code, so app/dark.css can't reach
  * them. In dark mode this keeps the hue and turns the lightness upside down, like a photo negative
@@ -1760,7 +1772,7 @@ const PortfolioBacktester = () => {
   // Dark mode on/off. Starts as light; the real value is read from <html> once the page is in the
   // browser (app/layout.tsx may already have switched it to dark from the saved choice).
   const [darkMode, setDarkMode] = useState(false);
-  useEffect(() => { setDarkMode(isDarkTheme()); }, []);
+  useEffect(() => { setDarkMode(isDarkTheme()); setPhoneBarColours(isDarkTheme()); }, []);
   // The left-panel button: flip the class on <html> (which switches app/dark.css on or off),
   // remember the choice for next time, and re-render so the computed heatmap colours update too.
   // Reads the current mode from <html> itself, not from the state above, so a click right after
@@ -1769,6 +1781,7 @@ const PortfolioBacktester = () => {
     const next = !isDarkTheme();
     document.documentElement.classList.toggle('dark', next);
     try { localStorage.setItem('theme', next ? 'dark' : 'light'); } catch { /* private window: just don't remember */ }
+    setPhoneBarColours(next);
     setDarkMode(next);
   };
   // Escape closes the drawer, as it would any pop-over. The listener only exists while it's open.
@@ -21697,7 +21710,9 @@ const PortfolioBacktester = () => {
             <div className="flex items-center justify-between mb-2 px-1 shrink-0">
               <span className="text-sm font-semibold text-slate-300">Views</span>
               <div className="flex items-center gap-1">
-              {themeToggle('p-1.5 text-slate-400 hover:bg-white/10 hover:text-white')}
+              {/* On a phone it's a bigger, outlined button with a bigger icon, easy to hit with a thumb
+                  ("[&_svg]" = the icon inside). Wider screens keep the small one. */}
+              {themeToggle('p-1.5 text-slate-400 hover:bg-white/10 hover:text-white max-md:p-2.5 max-md:mr-1 max-md:bg-white/10 max-md:border max-md:border-white/10 max-md:text-slate-200 max-md:[&_svg]:w-6 max-md:[&_svg]:h-6')}
               <button
                 type="button"
                 onClick={() => setNavOpen(false)}
