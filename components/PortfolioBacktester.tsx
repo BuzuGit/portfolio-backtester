@@ -8114,24 +8114,30 @@ const PortfolioBacktester = () => {
       return `${selected} of ${total}`;
     };
 
+    // PHONES: the four filter buttons become two-line boxes on a 2×2 grid, like the other choice
+    // boxes on a phone ("phone-filter-grid" / "phone-filter-box" in globals.css). Their checkbox
+    // lists then open full width under the grid ("max-md:static" moves their anchor from the
+    // button to the grid), so a list from a box on the right can't run off the screen.
+    // On desktop the grid wrapper is "contents": it vanishes and the buttons sit in the row as before.
     return (
       <div ref={filterRef} className="flex flex-wrap gap-2 mb-4">
+        <div className="contents phone-filter-grid">
         {/* Assets Dropdown */}
-        <div className="relative">
+        <div className="relative max-md:static">
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assets' ? null : 'assets')}
-            className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+            className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
               openFilterDropdown === 'assets' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
             }`}
           >
-            <span className="font-medium">Assets:</span>
+            <span className="font-medium">Assets<span className="max-md:hidden">:</span></span>
             <span className="text-gray-600">{getSelectionText(selectedAssetTickers.length, assetLookup.length, 'assets')}</span>
             <svg className={`w-4 h-4 transition-transform ${openFilterDropdown === 'assets' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
           {openFilterDropdown === 'assets' && (
-            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[280px]">
+            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[280px] max-md:right-0 max-md:min-w-0">
               <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                 <span className="text-sm font-medium text-gray-700">Select Assets</span>
                 <button
@@ -8164,21 +8170,21 @@ const PortfolioBacktester = () => {
         </div>
 
         {/* Asset Class Dropdown */}
-        <div className="relative">
+        <div className="relative max-md:static">
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetClass' ? null : 'assetClass')}
-            className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+            className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
               openFilterDropdown === 'assetClass' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
             }`}
           >
-            <span className="font-medium">Class:</span>
+            <span className="font-medium">Class<span className="max-md:hidden">:</span></span>
             <span className="text-gray-600">{getSelectionText(selectedAssetClasses.length, assetClasses.length, 'classes')}</span>
             <svg className={`w-4 h-4 transition-transform ${openFilterDropdown === 'assetClass' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
           {openFilterDropdown === 'assetClass' && (
-            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[200px]">
+            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[200px] max-md:right-0 max-md:min-w-0">
               <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                 <span className="text-sm font-medium text-gray-700">Select Classes</span>
                 <button
@@ -8211,21 +8217,21 @@ const PortfolioBacktester = () => {
         </div>
 
         {/* Currency Dropdown */}
-        <div className="relative">
+        <div className="relative max-md:static">
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'currency' ? null : 'currency')}
-            className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+            className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
               openFilterDropdown === 'currency' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
             }`}
           >
-            <span className="font-medium">Currency:</span>
+            <span className="font-medium">Currency<span className="max-md:hidden">:</span></span>
             <span className="text-gray-600">{getSelectionText(selectedCurrencies.length, currencies.length, 'currencies')}</span>
             <svg className={`w-4 h-4 transition-transform ${openFilterDropdown === 'currency' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
           {openFilterDropdown === 'currency' && (
-            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px]">
+            <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[160px] max-md:right-0 max-md:min-w-0">
               <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                 <span className="text-sm font-medium text-gray-700">Select Currencies</span>
                 <button
@@ -8258,21 +8264,21 @@ const PortfolioBacktester = () => {
         </div>
         {/* Asset Subcategory Dropdown */}
         {assetSubcategories.length > 0 && (
-          <div className="relative">
+          <div className="relative max-md:static">
             <button
               onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetSubcategory' ? null : 'assetSubcategory')}
-              className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+              className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
                 openFilterDropdown === 'assetSubcategory' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
               }`}
             >
-              <span className="font-medium">Subcategory:</span>
+              <span className="font-medium">Subcategory<span className="max-md:hidden">:</span></span>
               <span className="text-gray-600">{getSelectionText(selectedAssetSubcategories.length, assetSubcategories.length, 'subcategories')}</span>
               <svg className={`w-4 h-4 transition-transform ${openFilterDropdown === 'assetSubcategory' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </button>
             {openFilterDropdown === 'assetSubcategory' && (
-              <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[220px]">
+              <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[220px] max-md:right-0 max-md:min-w-0">
                 <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
                   <span className="text-sm font-medium text-gray-700">Select Subcategories</span>
                   <button
@@ -8304,6 +8310,7 @@ const PortfolioBacktester = () => {
             )}
           </div>
         )}
+        </div>
 
         {/* Extra controls passed in as children (e.g., Years filter) — rendered after Subcategory */}
         {children}
@@ -10737,8 +10744,9 @@ const PortfolioBacktester = () => {
                 return (
                   <>
                   {/* Filter controls + Year/Period selectors on one line (pinned while scrolling; */}
-                  {/* in the Return Map this includes its Years / Currency / Colour options) */}
-                  <div className={PINNED_FILTERS}>
+                  {/* in the Return Map this includes its Years / Currency / Colour options). */}
+                  {/* Phones: not pinned ("max-md:static"), the filters scroll away with the page. */}
+                  <div className={`${PINNED_FILTERS} max-md:static`}>
                   <AssetFilterControls>
                     {/* (Ranking vs Return Map is chosen in the left panel, under "Best To Worst".) */}
                     {bestToWorstLayout === 'map' && (
