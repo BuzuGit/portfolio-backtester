@@ -1694,6 +1694,12 @@ const RETURNS_PERIOD_CHOICES = [
   ...STREAK_VIEWS.map(s => ({ value: s.period, label: s.label, group: 'Streaks' })),
 ];
 
+// Phones: chart labels short enough for each to fit over its own bar (11 yearly bars share
+// ~300px there). Percentages drop the "%" (the chart title already says "(%)"), millions keep
+// one decimal instead of two. Desktop gets exactly what it always had.
+const barPct = (v: number) => (isPhoneScreen() ? v.toFixed(1) : `${v.toFixed(1)}%`);
+const barMillions = (v: number) => (isPhoneScreen() ? v.toFixed(1) : v.toFixed(2));
+
 const PortfolioBacktester = () => {
   // ----------------------------------------
   // STATE VARIABLES
@@ -16953,8 +16959,14 @@ const PortfolioBacktester = () => {
                   {(() => {
                     // Pre-compute chart data so the custom label renderer can access it by index
                     const valueChartData = getPortfolioValueChartData();
+                    // Phones: a slice thinner than its label (under ~4.5% of the tallest bar, about
+                    // 12px there) gets no label inside it; the "0.0M"s of the early years otherwise
+                    // pile on top of each other. The total above every bar stays.
+                    const minInnerLabel = isPhoneScreen()
+                      ? 0.045 * Math.max(0, ...valueChartData.map(d => d.contrCumulative + d.profitCumulative))
+                      : 0;
                     return (
-                      <div className="bg-white p-4 rounded-lg shadow mb-4">
+                      <div className="bg-white p-4 rounded-lg shadow mb-4 phone-bar-labels">
                         <h3 className="text-md font-semibold text-gray-700 mb-2">Portfolio Value by Year ({CURRENCY_SYMBOLS[portfolioCurrency]})</h3>
                         <ResponsiveContainer width="100%" height={350}>
                           <BarChart
@@ -16975,7 +16987,7 @@ const PortfolioBacktester = () => {
                               <LabelList
                                 dataKey="contrCumulative"
                                 position="center"
-                                formatter={(value: number) => value > 0 ? `${value.toFixed(2)}M` : ''}
+                                formatter={(value: number) => value > 0 && value >= minInnerLabel ? `${barMillions(value)}M` : ''}
                                 style={{ fontSize: '13px', fill: '#fff', fontWeight: 600 }}
                               />
                             </Bar>
@@ -16985,7 +16997,7 @@ const PortfolioBacktester = () => {
                               <LabelList
                                 dataKey="profitCumulative"
                                 position="center"
-                                formatter={(value: number) => value !== 0 ? `${value.toFixed(2)}M` : ''}
+                                formatter={(value: number) => value !== 0 && Math.abs(value) >= minInnerLabel ? `${barMillions(value)}M` : ''}
                                 style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
                               />
                               {/* Total (contributions + profit) above the bar — uses custom renderer */}
@@ -17005,7 +17017,7 @@ const PortfolioBacktester = () => {
                                       textAnchor="middle"
                                       style={{ fontSize: '13px', fill: '#991b1b', fontWeight: 700 }}
                                     >
-                                      {total.toFixed(2)}M
+                                      {barMillions(total)}M
                                     </text>
                                   );
                                 }}
@@ -17431,12 +17443,17 @@ const PortfolioBacktester = () => {
                                         // the two edges explicitly and hang the label off the data end.
                                         const left = Math.min(x, x + w);
                                         const right = Math.max(x, x + w);
+                                        // Phones: the plot is only ~100px wide there, so a label
+                                        // hung off the left end of a loss bar lands on the asset's
+                                        // name. It goes just right of the zero line instead (the
+                                        // loss bar's right edge), beside its own red bar.
+                                        const outside = positive || !isPhoneScreen();
                                         return (
                                           <text
-                                            x={positive ? right + 4 : left - 4}
+                                            x={outside ? (positive ? right + 4 : left - 4) : right + 4}
                                             y={y + h / 2}
                                             dy={3}
-                                            textAnchor={positive ? 'start' : 'end'}
+                                            textAnchor={outside ? (positive ? 'start' : 'end') : 'start'}
                                             // Muted ink, not the bar's green or red. The coloured bar
                                             // right beside the number already says which way it went;
                                             // colouring the text too doubles the ink for no extra
@@ -17455,7 +17472,47 @@ const PortfolioBacktester = () => {
                           );
                         })()}
 
-                        <div className="overflow-x-auto">
+                        {/* Phones: the bottom line only, in four columns that fit without swiping:
+                            one row per asset (its total), then Other and the year's total. The full
+                            table below (segments, quantities, prices, native profit) is desktop only. */}
+                        <table className="hidden max-md:table w-full text-xs border-collapse">
+                          <thead>
+                            <tr className="text-gray-500 border-b border-gray-200">
+                              <th className="text-left font-medium py-2 pr-2">Asset</th>
+                              <th className="text-right font-medium py-2 px-1">FX ({sym})</th>
+                              <th className="text-right font-medium py-2 px-1">Profit ({sym})</th>
+                              <th className="text-right font-medium py-2 pl-1">Share</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {assets.map(a => (
+                              <tr key={a.ticker} className="border-t border-gray-200">
+                                <td className="py-1.5 pr-2 align-top">
+                                  <div className="font-semibold text-gray-800">{a.name}</div>
+                                  <div className="text-gray-400">{a.ticker} · {a.nativeCurrency}</div>
+                                </td>
+                                {fxCell(a.totalFx)}
+                                {profitCell(a.totalConverted, a.retConverted, false, a.nativeCurrency, true)}
+                                <td className="py-1.5 pl-1 text-right tabular-nums text-gray-600 font-medium">{share(a.totalConverted)}</td>
+                              </tr>
+                            ))}
+                            <tr className="border-t border-gray-200">
+                              <td className="py-1.5 pr-2 italic text-gray-500">Other</td>
+                              <td className="py-1.5 px-2 text-right text-gray-300">—</td>
+                              <td className={`py-1.5 px-2 text-right tabular-nums font-medium ${colorOf(other)}`}>{fmtC(other)}</td>
+                              <td className="py-1.5 pl-1 text-right tabular-nums text-gray-500">{share(other)}</td>
+                            </tr>
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-gray-300">
+                              <td className="py-2 pr-2 font-bold text-gray-800">Total {selectedYear}</td>
+                              {fxCell(fxAll, true)}
+                              <td className={`py-2 px-2 text-right tabular-nums font-bold ${colorOf(total)}`}>{fmtC(total)}</td>
+                              <td className="py-2 pl-1 text-right text-gray-500">100%</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                        <div className="overflow-x-auto max-md:hidden">
                           <table className="w-full text-xs border-collapse">
                             <thead>
                               <tr className="text-gray-500 border-b border-gray-200">
@@ -17717,7 +17774,39 @@ const PortfolioBacktester = () => {
                           Statistics
                           <span className="text-xs font-normal text-gray-400 ml-2">({periodStart} — {periodEnd})</span>
                         </h3>
-                        <table className="w-full text-xs">
+                        {/* Phones: one small card per portfolio with its figures in two columns, in
+                            place of the 11-column table (desktop only), which needed a sideways swipe */}
+                        <div className="hidden max-md:grid gap-2">
+                          {statsRows.map((row: any, idx: number) => {
+                            const sign = (v: string) => (Number(v) >= 0 ? 'text-green-600' : 'text-red-600');
+                            const cells: [string, string, string][] = [
+                              ['Return', `${row.totalReturn}%`, sign(row.totalReturn)],
+                              ['Cum Inflation', `${row.cumInflation}%`, 'text-amber-600'],
+                              ['CAGR', `${row.cagr}%`, sign(row.cagr)],
+                              ['Ann. Inflation', `${row.annInflation}%`, 'text-amber-600'],
+                              ['Real CAGR', `${row.realCagr}%`, sign(row.realCagr)],
+                              ['Vol', `${row.volatility}%`, 'text-gray-700'],
+                              ['Sharpe', row.sharpe, 'text-gray-700'],
+                              ['Max DD', `${row.maxDD}%`, 'text-red-600'],
+                              ['Longest DD', row.longestDD, 'text-purple-700'],
+                              ['Curr DD', `${row.currDD}%`, 'text-orange-600'],
+                            ];
+                            return (
+                              <div key={idx} className="rounded-lg border border-gray-200 px-3 py-2">
+                                <div className="text-sm font-semibold text-gray-700 mb-1">{row.label}</div>
+                                <div className="grid grid-cols-2 gap-x-5 gap-y-0.5 text-xs">
+                                  {cells.map(([label, value, colour]) => (
+                                    <div key={label} className="flex items-baseline justify-between gap-2">
+                                      <span className="text-gray-500">{label}</span>
+                                      <span className={`font-medium tabular-nums ${colour}`}>{value}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <table className="w-full text-xs max-md:hidden">
                           <thead>
                             <tr className="border-b-2 border-gray-200">
                               <th className="text-left py-2 px-2">Portfolio</th>
@@ -17948,12 +18037,16 @@ const PortfolioBacktester = () => {
                     const startYear = new Date(chartData[0].date).getFullYear();
                     const endYear   = new Date(lastRow.date).getFullYear();
                     const yearTicks: string[] = [];
+                    // Each tick is labelled with the year it stands for, not the year of its date: the
+                    // trading day closest to 1 Jan can be 31 Dec, which used to label the 2024 tick
+                    // "2023" (so one year showed twice and another not at all).
+                    const tickYear = new Map<string, number>();
                     for (let y = startYear + 1; y <= endYear; y++) {
                       const target = new Date(`${y}-01-01`).getTime();
                       const closest = chartData.reduce((prev, cur) =>
                         Math.abs(new Date(cur.date).getTime() - target) < Math.abs(new Date(prev.date).getTime() - target) ? cur : prev
                       );
-                      if (!yearTicks.includes(closest.date)) yearTicks.push(closest.date);
+                      if (!yearTicks.includes(closest.date)) { yearTicks.push(closest.date); tickYear.set(closest.date, y); }
                     }
 
                     // ---- 6. Y-axis ticks: dynamic range based on actual data, step of 5 ----
@@ -17986,10 +18079,38 @@ const PortfolioBacktester = () => {
                     }
                     const DailyNavBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, navBubbleDefs);
 
+                    // ---- 7b. The stats, shared by the box over the chart (desktop) and the grid
+                    // under it (phones). 4th/5th entries = the benchmark's value and colour (null =
+                    // no benchmark figure).
+                    const navStatRows = [
+                      ['CAGR',        `${nominalCAGR.toFixed(1)}%`,  nominalCAGR  >= 0 ? '#16a34a' : '#dc2626',
+                        benchStats && `${benchStats.cagr.toFixed(1)}%`, benchStats && (benchStats.cagr >= 0 ? '#16a34a' : '#dc2626')],
+                      ['Ann. Infl.',  `${annInflation.toFixed(1)}%`, '#6b7280',
+                        benchStats && `${annInflation.toFixed(1)}%`, '#6b7280'],
+                      ['Real CAGR',   `${realCAGR.toFixed(1)}%`,     realCAGR     >= 0 ? '#16a34a' : '#dc2626',
+                        benchStats && `${benchStats.real.toFixed(1)}%`, benchStats && (benchStats.real >= 0 ? '#16a34a' : '#dc2626')],
+                      ['Ann. Vol.',   `${annVol.toFixed(1)}%`,       '#374151',
+                        benchStats && `${benchStats.vol.toFixed(1)}%`, '#374151'],
+                      ['Sharpe',      sharpe.toFixed(2),             '#374151',
+                        benchStats && benchStats.sharpe.toFixed(2), '#374151'],
+                      ['Max DD',      `${maxDD.toFixed(1)}%`,        '#dc2626',
+                        benchStats && `${benchStats.maxDD.toFixed(1)}%`, '#dc2626'],
+                      ['Curr DD',     `${currDD.toFixed(1)}%`,       currDD < -0.01 ? '#dc2626' : '#16a34a',
+                        benchStats && `${benchStats.currDD.toFixed(1)}%`, benchStats && (benchStats.currDD < -0.01 ? '#dc2626' : '#16a34a')],
+                      ['Longest DD',  `${longestDD}d`,               '#374151',
+                        benchStats && '—', '#9ca3af'],
+                    ] as [string, string, string, string | null, string | null][];
+                    // Phones: the same colours as classes, so app/dark.css can lighten them in dark
+                    // mode (an inline colour can't be reached from there)
+                    const statColourClass = (c: string | null) =>
+                      c === '#16a34a' ? 'text-green-600' : c === '#dc2626' ? 'text-red-600'
+                        : c === '#6b7280' ? 'text-gray-500' : c === '#9ca3af' ? 'text-gray-400' : 'text-gray-700';
+
                     // ---- 8. Render ----
                     return (
                       <div className="mt-6">
-                        <div className="flex items-center justify-between mb-2">
+                        {/* Phones: the note goes under the title instead of squeezing it onto two lines */}
+                        <div className="flex items-center justify-between mb-2 max-md:flex-col max-md:items-start max-md:gap-0.5">
                           <h3 className="text-md font-semibold text-gray-700">Daily NAV</h3>
                           <span className="text-xs text-gray-400">Both series indexed to 100 at period start · inflation from monthly CPI, held flat within the month</span>
                         </div>
@@ -18048,8 +18169,10 @@ const PortfolioBacktester = () => {
                           {/* Wrapper gives the stats overlay something to position against */}
                           <div style={{ position: 'relative' }}>
 
-                            {/* Stats overlay — top-left corner inside the plot area (past the Y axis) */}
-                            <div style={{
+                            {/* Stats overlay — top-left corner inside the plot area (past the Y axis).
+                                Not on phones: there it would cover a third of the chart, so the
+                                same figures go in a grid under it instead. */}
+                            <div className="max-md:hidden" style={{
                               position: 'absolute', top: 24, left: 48, zIndex: 10,
                               background: 'rgba(255,255,255,0.92)', border: '1px solid #e5e7eb',
                               borderRadius: 5, padding: '5px 10px', fontSize: 11, pointerEvents: 'none', lineHeight: 1.75,
@@ -18067,25 +18190,7 @@ const PortfolioBacktester = () => {
                                   </thead>
                                 )}
                                 <tbody>
-                                  {/* 4th/5th entries = the benchmark's value and colour (null = no benchmark figure) */}
-                                  {([
-                                    ['CAGR',        `${nominalCAGR.toFixed(1)}%`,  nominalCAGR  >= 0 ? '#16a34a' : '#dc2626',
-                                      benchStats && `${benchStats.cagr.toFixed(1)}%`, benchStats && (benchStats.cagr >= 0 ? '#16a34a' : '#dc2626')],
-                                    ['Ann. Infl.',  `${annInflation.toFixed(1)}%`, '#6b7280',
-                                      benchStats && `${annInflation.toFixed(1)}%`, '#6b7280'],
-                                    ['Real CAGR',   `${realCAGR.toFixed(1)}%`,     realCAGR     >= 0 ? '#16a34a' : '#dc2626',
-                                      benchStats && `${benchStats.real.toFixed(1)}%`, benchStats && (benchStats.real >= 0 ? '#16a34a' : '#dc2626')],
-                                    ['Ann. Vol.',   `${annVol.toFixed(1)}%`,       '#374151',
-                                      benchStats && `${benchStats.vol.toFixed(1)}%`, '#374151'],
-                                    ['Sharpe',      sharpe.toFixed(2),             '#374151',
-                                      benchStats && benchStats.sharpe.toFixed(2), '#374151'],
-                                    ['Max DD',      `${maxDD.toFixed(1)}%`,        '#dc2626',
-                                      benchStats && `${benchStats.maxDD.toFixed(1)}%`, '#dc2626'],
-                                    ['Curr DD',     `${currDD.toFixed(1)}%`,       currDD < -0.01 ? '#dc2626' : '#16a34a',
-                                      benchStats && `${benchStats.currDD.toFixed(1)}%`, benchStats && (benchStats.currDD < -0.01 ? '#dc2626' : '#16a34a')],
-                                    ['Longest DD',  `${longestDD}d`,               '#374151',
-                                      benchStats && '—', '#9ca3af'],
-                                  ] as [string, string, string, string | null, string | null][]).map(([label, val, color, bVal, bColor]) => (
+                                  {navStatRows.map(([label, val, color, bVal, bColor]) => (
                                     <tr key={label as string}>
                                       <td style={{ color: '#6b7280', paddingRight: 10 }}>{label}</td>
                                       <td style={{ fontWeight: 600, color: color as string, ...(benchStats ? { paddingRight: 10 } : {}) }}>{val}</td>
@@ -18102,7 +18207,7 @@ const PortfolioBacktester = () => {
                                 <XAxis
                                   dataKey="date"
                                   ticks={yearTicks}
-                                  tickFormatter={(d: string) => d.substring(0, 4)}
+                                  tickFormatter={(d: string) => String(tickYear.get(d) ?? d.substring(0, 4))}
                                   tick={{ fontSize: 11, fill: '#6b7280' }}
                                   height={30}
                                 />
@@ -18167,6 +18272,28 @@ const PortfolioBacktester = () => {
                                 )}
                               </LineChart>
                             </ResponsiveContainer>
+                          </div>
+                          {/* Phones: the stats as a two-column grid under the chart. With a benchmark,
+                              each figure is followed by the benchmark's in its own colour. */}
+                          <div className="hidden max-md:block mt-1">
+                            {benchStats && benchDef && (
+                              <div className="text-[11px] mb-1.5">
+                                <span className="font-semibold" style={{ color: '#1e40af' }}>Portfolio</span>
+                                <span className="text-gray-400"> · </span>
+                                <span className="font-semibold" style={{ color: BENCH_COLOR }}>{benchDef.id}*</span>
+                              </div>
+                            )}
+                            <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-xs">
+                              {navStatRows.map(([label, val, color, bVal, bColor]) => (
+                                <div key={label} className="flex items-baseline justify-between gap-2">
+                                  <span className="text-gray-500">{label}</span>
+                                  <span className="font-semibold whitespace-nowrap">
+                                    <span className={statColourClass(color)}>{val}</span>
+                                    {benchStats && <span className={`ml-1.5 ${statColourClass(bColor)}`}>{bVal}</span>}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                           {/* What the selected benchmark is, and how its line was built */}
                           {benchStats && benchDef && (
@@ -18234,6 +18361,26 @@ const PortfolioBacktester = () => {
 
                     // X-axis tick interval — fewer ticks avoids crowding on small periods
                     const tickInterval = Math.max(1, Math.floor(ddChartData.length / 8));
+                    // Phones: full dates ("2021-03-15") run into each other on a narrow chart, so
+                    // the axis marks the first trading day of each year ("2021") instead, or of every
+                    // third month ("Apr 26") when the period is too short for yearly marks.
+                    const ddPhone = isPhoneScreen();
+                    const ddPhoneTicks: string[] = [];
+                    const ddPhoneLabel = new Map<string, string>();
+                    if (ddPhone && ddChartData.length > 0) {
+                      const spanYears = (new Date(ddChartData[ddChartData.length - 1].date).getTime() - new Date(ddChartData[0].date).getTime()) / (365.25 * 864e5);
+                      const yearly = spanYears >= 3;
+                      let prevKey = ddChartData[0].date.slice(0, yearly ? 4 : 7);
+                      for (const d of ddChartData) {
+                        const key = d.date.slice(0, yearly ? 4 : 7);
+                        const month = Number(d.date.slice(5, 7));
+                        if (key !== prevKey && (yearly || (month - 1) % 3 === 0)) {
+                          ddPhoneTicks.push(d.date);
+                          ddPhoneLabel.set(d.date, yearly ? key : `${MONTH_ABBR[month - 1]} ${d.date.slice(2, 4)}`);
+                        }
+                        prevKey = key;
+                      }
+                    }
 
                     if (dailyData.length === 0) return null;
 
@@ -18243,12 +18390,14 @@ const PortfolioBacktester = () => {
                           <h3 className="text-md font-semibold text-gray-700">Daily NAV Drawdowns</h3>
                         </div>
 
-                        {/* Currency toggles (multi-select) + Period buttons + Max DD info */}
-                        <div className="flex items-center gap-5 mb-4 flex-wrap">
+                        {/* Currency toggles (multi-select) + Period buttons + Max DD info.
+                            Phones: the toggles and the Period box share one row (the "Currency:"
+                            label is dropped there to make room; the coloured buttons explain themselves). */}
+                        <div className="flex items-center gap-5 mb-4 flex-wrap max-md:gap-x-3 max-md:gap-y-2">
 
                           {/* Currency mini-buttons — clicking toggles a currency on/off */}
                           <div className="flex items-center gap-1">
-                            <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                            <span className="text-xs text-gray-500 mr-1 max-md:hidden">Currency:</span>
                             {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => {
                               const active = ddSelectedCurrencies.includes(c);
                               return (
@@ -18270,7 +18419,7 @@ const PortfolioBacktester = () => {
                           </div>
 
                           {/* Period buttons — same style as Daily NAV (phones: one box) */}
-                          <div className="hidden max-md:flex w-1/2">
+                          <div className="hidden max-md:flex flex-1 min-w-0">
                             <PhoneChoice
                               label="Period"
                               options={periodOptions(['1Y', '3Y', '5Y', 'Max'])}
@@ -18321,7 +18470,9 @@ const PortfolioBacktester = () => {
                               <XAxis
                                 dataKey="date"
                                 tick={{ fontSize: 10, fill: '#9ca3af' }}
-                                interval={tickInterval}
+                                interval={ddPhone ? 0 : tickInterval}
+                                ticks={ddPhone ? ddPhoneTicks : undefined}
+                                tickFormatter={ddPhone ? (d: string) => ddPhoneLabel.get(d) ?? d : undefined}
                                 tickLine={false}
                               />
                               <YAxis
@@ -18384,7 +18535,8 @@ const PortfolioBacktester = () => {
 
                   {/* Chart 3: Returns by Year — grouped bar chart */}
                   {/* Bars shown/hidden based on selectedReturnCurrencies */}
-                  <div className="bg-white p-4 rounded-lg shadow mb-4">
+                  {/* ("phone-bar-labels": smaller bar labels on phones, see globals.css) */}
+                  <div className="bg-white p-4 rounded-lg shadow mb-4 phone-bar-labels">
                     {/* Compute CAGR from annual returns for each selected currency.
                         CAGR = geometric mean = (Π(1 + r_i/100))^(1/N) − 1.
                         Only rows with a valid (finite) return value are included. */}
@@ -18433,13 +18585,13 @@ const PortfolioBacktester = () => {
                             <LabelList
                               dataKey="Return PLN"
                               position="top"
-                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value >= 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Return PLN"
                               position="bottom"
-                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
@@ -18449,13 +18601,13 @@ const PortfolioBacktester = () => {
                             <LabelList
                               dataKey="Return USD"
                               position="top"
-                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value >= 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Return USD"
                               position="bottom"
-                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
@@ -18465,13 +18617,13 @@ const PortfolioBacktester = () => {
                             <LabelList
                               dataKey="Return SGD"
                               position="top"
-                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value >= 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Return SGD"
                               position="bottom"
-                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
@@ -18482,7 +18634,7 @@ const PortfolioBacktester = () => {
 
                   {/* Chart 4: Growth by Year — grouped bar chart */}
                   {/* Bars shown/hidden based on selectedReturnCurrencies */}
-                  <div className="bg-white p-4 rounded-lg shadow mb-4">
+                  <div className="bg-white p-4 rounded-lg shadow mb-4 phone-bar-labels">
                     <h3 className="text-md font-semibold text-gray-700 mb-2">Growth by Year (%)</h3>
                     <ResponsiveContainer width="100%" height={350}>
                       <BarChart
@@ -18501,13 +18653,13 @@ const PortfolioBacktester = () => {
                             <LabelList
                               dataKey="Growth PLN"
                               position="top"
-                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value >= 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Growth PLN"
                               position="bottom"
-                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
@@ -18517,13 +18669,13 @@ const PortfolioBacktester = () => {
                             <LabelList
                               dataKey="Growth USD"
                               position="top"
-                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value >= 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Growth USD"
                               position="bottom"
-                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>
@@ -18533,13 +18685,13 @@ const PortfolioBacktester = () => {
                             <LabelList
                               dataKey="Growth SGD"
                               position="top"
-                              formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value >= 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#666' }}
                             />
                             <LabelList
                               dataKey="Growth SGD"
                               position="bottom"
-                              formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
+                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
                               style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
                             />
                           </Bar>

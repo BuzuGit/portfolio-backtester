@@ -73,6 +73,15 @@ html {
   }
 }
 
+/* Phones: the numbers over/inside the bars of the yearly bar charts (Portfolio tab) at 10px, so
+   each fits over its own bar when 11 years share a phone's width. Their size is set inline on
+   each label, which only !important can override. Charts opt in with class "phone-bar-labels". */
+@media (max-width: 767px) {
+  .phone-bar-labels .recharts-label-list text {
+    font-size: 10px !important;
+  }
+}
+
 /* Custom scrollbar for tables (makes them look cleaner) */
 .overflow-x-auto::-webkit-scrollbar {
   height: 6px;
