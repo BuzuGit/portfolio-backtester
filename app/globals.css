@@ -112,6 +112,64 @@ html {
   }
 }
 
+/* Phones: the shared asset filters (Assets / Class / Currency / Subcategory, on Ranking, Graphs,
+   Monthly, Annual, Correlations...) as two-line boxes on a 2x2 grid, the same look as the other
+   choice boxes on a phone (components/PhoneSheet.tsx): small grey label on top, the value in bold
+   under it, the arrow on the right. The grid is also where their checkbox lists hang from, full
+   width. Written as CSS rather than Tailwind classes so the dark-mode colours can be given here
+   too: dark.css only translates the plain colour classes, not phone-only ones. "button." and
+   "html.dark button." add the weight needed to beat the buttons' own classes and dark.css. */
+@media (max-width: 767px) {
+  .phone-filter-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+    position: relative;
+  }
+  button.phone-filter-box {
+    position: relative;
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    padding: 6px 32px 6px 12px;
+    border-radius: 12px;
+    background-color: #f3f4f6;
+    border-color: #e5e7eb;
+    text-align: left;
+  }
+  button.phone-filter-box > span:first-child {
+    font-size: 11px;
+    line-height: 1.25;
+    font-weight: 400;
+    color: #6b7280;
+  }
+  button.phone-filter-box > span:nth-child(2) {
+    font-size: 15px;
+    line-height: 1.375;
+    font-weight: 600;
+    color: #111827;
+  }
+  button.phone-filter-box > svg {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #6b7280;
+  }
+  html.dark button.phone-filter-box {
+    background-color: var(--d-100);
+    border-color: var(--d-line);
+  }
+  html.dark button.phone-filter-box > span:first-child {
+    color: var(--d-text-500);
+  }
+  html.dark button.phone-filter-box > span:nth-child(2) {
+    color: var(--d-text-900);
+  }
+}
+
 /* Custom scrollbar for tables (makes them look cleaner) */
 .overflow-x-auto::-webkit-scrollbar {
   height: 6px;
