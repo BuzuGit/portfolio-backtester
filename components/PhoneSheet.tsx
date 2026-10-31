@@ -7,10 +7,12 @@
   of the screen with one big row per choice, the way phone apps do it, instead of a row of tiny
   buttons running off the edge or the browser's own dropdown list. Desktop never sees any of this.
 
-  Three pieces:
+  The pieces:
     BottomSheet       the panel itself: dimmed page behind, a grab handle, a title, the list of
                       choices with a tick on the current one. Closes by tapping a choice, tapping
                       the dimmed page, or swiping the panel down.
+    PhoneCheckSheet   the same panel for lists where several can be ticked (assets, years...):
+                      tick boxes, "Select all", and a Done button, as it stays open while ticking.
     PhoneChoice       a box showing a setting and its current value ("Currency  USD ▾"); tapping it
                       opens the panel. Used in place of a row of option buttons, which is hidden on
                       phones (the row stays exactly as it was on desktop).
@@ -53,16 +55,20 @@ export const periodOptions = (periods: readonly string[], labels?: (p: string) =
 // Same width as Tailwind's "max-md:" classes, which every phone-only style in the app uses
 const isPhone = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
 
-export function BottomSheet({ title, subtitle, options, selected, onPick, onClose, headerExtra, footer }: {
+export function BottomSheet({ title, subtitle, options, selected, checked, onPick, onClose, headerExtra, footer }: {
   title: string;
   subtitle?: string;
   options: SheetOption[];
   selected?: string;
+  // Tick-box mode (pick several): the values ticked. Tapping a row then ticks/unticks it and the
+  // panel stays open; a "Done" button under the list closes it.
+  checked?: string[];
   onPick: (value: string) => void;
   onClose: () => void;
   headerExtra?: React.ReactNode; // shown at the right of the title (e.g. the dark-mode button)
   footer?: React.ReactNode;      // a line kept under the list, which doesn't scroll with it
 }) {
+  const multi = checked !== undefined;
   const sheetRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // false while sliding in or out, true once in place (drives the slide and the dimming)
@@ -77,8 +83,9 @@ export function BottomSheet({ title, subtitle, options, selected, onPick, onClos
   useEffect(() => {
     // Slide in: drawn first below the screen, then moved up on the next frame so it animates
     const frame = requestAnimationFrame(() => setShown(true));
-    // Open with the current choice in view (a list of 200 months would otherwise open at the top)
-    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'center' });
+    // Open with the current choice in view (a list of 200 months would otherwise open at the top).
+    // A tick-box list opens at its top instead: several rows are ticked, none is "the" choice.
+    if (!multi) listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'center' });
     // The page behind stays still while the panel is open, and pull-to-refresh is off
     // (it checks this flag), so a drag inside the panel can't scroll or refresh the page
     const body = document.body;
@@ -143,9 +150,9 @@ export function BottomSheet({ title, subtitle, options, selected, onPick, onClos
         </div>
         {/* The choices; the list scrolls on its own when there are many (overscroll-contain stops
             the scroll from passing on to the page when it reaches the end) */}
-        <div ref={listRef} className={`overflow-y-auto overscroll-contain ${footer ? '' : 'pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}`}>
+        <div ref={listRef} className={`overflow-y-auto overscroll-contain ${footer || multi ? '' : 'pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}`}>
           {options.map(o => {
-            const isSel = o.value === selected;
+            const isSel = checked ? checked.includes(o.value) : o.value === selected;
             const heading = o.group && o.group !== lastGroup ? o.group : null;
             lastGroup = o.group;
             const Icon = o.icon;
@@ -159,7 +166,7 @@ export function BottomSheet({ title, subtitle, options, selected, onPick, onClos
                   role="option"
                   aria-selected={isSel}
                   disabled={o.disabled}
-                  onClick={() => { onPick(o.value); close(); }}
+                  onClick={() => { onPick(o.value); if (!multi) close(); }}
                   className={`w-full flex items-center justify-between gap-3 pr-5 text-left text-gray-900 disabled:opacity-40 ${
                     o.indent ? 'min-h-[44px] pl-[52px] text-[15px]' : 'min-h-[52px] pl-5 text-base border-t border-gray-200'
                   } ${isSel ? 'font-semibold' : ''}`}
@@ -169,7 +176,14 @@ export function BottomSheet({ title, subtitle, options, selected, onPick, onClos
                     {o.label}
                     {o.hint && <span className="ml-2.5 text-[13px] font-normal text-gray-500">{o.hint}</span>}
                   </span>
-                  {isSel && (
+                  {multi ? (
+                    // A tick box: filled with a tick when ticked, an empty square when not
+                    <span className={`shrink-0 w-[22px] h-[22px] rounded-md flex items-center justify-center ${
+                      isSel ? 'bg-slate-800 text-white' : 'border-2 border-gray-300'
+                    }`}>
+                      {isSel && <Check className="w-3.5 h-3.5" strokeWidth={3} />}
+                    </span>
+                  ) : isSel && (
                     <span className="shrink-0 w-[22px] h-[22px] rounded-full bg-slate-800 text-white flex items-center justify-center">
                       <Check className="w-3.5 h-3.5" strokeWidth={3} />
                     </span>
@@ -181,6 +195,13 @@ export function BottomSheet({ title, subtitle, options, selected, onPick, onClos
         </div>
         {footer && (
           <div className="shrink-0 border-t border-gray-200 px-5 pt-2.5 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">{footer}</div>
+        )}
+        {multi && (
+          <div className="shrink-0 border-t border-gray-200 px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+            <button type="button" onClick={close} className="w-full h-11 rounded-xl bg-slate-800 text-white text-base font-semibold">
+              Done
+            </button>
+          </div>
         )}
       </div>
     </div>,
@@ -243,6 +264,36 @@ export function PhoneChoice({ label, options, selected, onPick, display, subtitl
         />
       )}
     </>
+  );
+}
+
+/**
+ * A tick-box list (pick several: assets, classes, years...) as a slide-up panel, the phone
+ * version of the app's "Select All / Deselect All" checkbox lists. "Select all" / "Clear all" sits
+ * at the right of the title. Each tick takes effect at once, like on desktop.
+ */
+export function PhoneCheckSheet({ title, options, checked, onToggle, onSetAll, onClose }: {
+  title: string;
+  options: SheetOption[];
+  checked: string[];
+  onToggle: (value: string) => void;
+  onSetAll: (all: boolean) => void; // true = tick every row, false = untick every row
+  onClose: () => void;
+}) {
+  const all = options.length > 0 && options.every(o => checked.includes(o.value));
+  return (
+    <BottomSheet
+      title={title}
+      options={options}
+      checked={checked}
+      onPick={onToggle}
+      onClose={onClose}
+      headerExtra={
+        <button type="button" onClick={() => onSetAll(!all)} className="shrink-0 text-[15px] font-medium text-blue-600">
+          {all ? 'Clear all' : 'Select all'}
+        </button>
+      }
+    />
   );
 }
 
