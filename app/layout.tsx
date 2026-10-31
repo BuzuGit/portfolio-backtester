@@ -20,9 +20,22 @@ export const metadata: Metadata = {
   // (The icons are plain PNG files, drawn once by a small script: a dark slate-to-black square with
   // a white rising line. There is deliberately no app/icon file, which Next.js would also turn
   // into the desktop browser-tab icon.)
+  // (statusBarStyle 'default' is the light top strip; on a phone in dark mode it is switched to
+  // 'black', by the phoneBarColours script below and again by the component once it starts.)
   appleWebApp: { capable: true, title: 'Backtester', statusBarStyle: 'default' },
   icons: { apple: '/icons/apple-touch-icon.png' },
 }
+
+// Phones: the colour of the phone's own bars above and below the page (the clock/battery strip,
+// the browser bar, Android's bottom bar). Without this they stay white, which looks wrong around
+// the dark page. Only on a phone-width screen, so desktop is untouched:
+//   theme-color (added here): Android and Safari paint their bars this colour (the page's own
+//     background colour)
+//   apple-mobile-web-app-status-bar-style (already in the page from the metadata above): the iPhone
+//     home-screen app's top strip, switched to "black" in dark mode
+// The component sets both again once it starts (React adds a second copy of the status-bar tag
+// while starting up, after this script has run) and whenever the dark-mode button is pressed.
+const phoneBarColours = `try{if(matchMedia('(max-width: 767px)').matches){var d=document.documentElement.classList.contains('dark');var t=document.createElement('meta');t.name='theme-color';t.content=d?'#0e1014':'#f1f2f4';document.head.appendChild(t);var s=document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');if(s&&d)s.content='black'}}catch(e){}`
 
 // Android: the app-info file (public/manifest.webmanifest) that lets Chrome offer "Install app" and
 // open it full screen with its own icon. Linked only on a phone-width screen, so desktop Chrome never
@@ -47,6 +60,8 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: applySavedTheme }} />
         <script dangerouslySetInnerHTML={{ __html: linkPhoneManifest }} />
+        {/* After applySavedTheme, so it already knows whether the page is dark */}
+        <script dangerouslySetInnerHTML={{ __html: phoneBarColours }} />
       </head>
       {/*
         The body tag wraps all content.
