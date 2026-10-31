@@ -31,6 +31,19 @@ html {
   background-color: theme('colors.page');
 }
 
+/* iPhone / iPad Safari zooms the whole page in whenever you tap a text box or dropdown whose text
+   is smaller than 16px, and leaves it zoomed in afterwards. Most of the app's controls are 12-14px,
+   so on a phone every dropdown tap did that. Giving them 16px text there stops it.
+   Applies only to Apple's browser engine (the @supports test is something only it passes) on a
+   phone-width screen, so desktop and Android look exactly as before. */
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 767px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+  }
+}
+
 /* Custom scrollbar for tables (makes them look cleaner) */
 .overflow-x-auto::-webkit-scrollbar {
   height: 6px;
