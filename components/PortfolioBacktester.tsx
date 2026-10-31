@@ -17068,20 +17068,27 @@ const PortfolioBacktester = () => {
                     // The FX row under the x-axis: which pair, and its move in each year.
                     const fxPair = FX_TICKER_MAP[FX_ROW_BASE[portfolioCurrency] || 'USD'] || '';
                     const fxMovesByYear = getFxYearlyMoves();
+                    // PHONES: the chart fits the screen (no sideways swiping), so each year's bar is
+                    // only ~25px wide. To fit: the numbers on the bars at 10px ("phone-bar-labels"
+                    // in globals.css), the total above each bar without the currency (the title has
+                    // it), every year label shown at 10px, and a slice thinner than its label (under
+                    // ~4.5% of the tallest bar) gets no number inside it, as in the chart above.
+                    const phone = isPhoneScreen();
+                    const minInnerLabel = phone
+                      ? 0.045 * Math.max(0, ...cpChartData.map(d => Math.abs(d.growthTotal)))
+                      : 0;
                     return (
-                  <div className="bg-white p-4 rounded-lg shadow mb-4">
+                  <div className="bg-white p-4 rounded-lg shadow mb-4 phone-bar-labels">
                     <h3 className="text-md font-semibold text-gray-700 mb-2">Contributions and Profit by Year ({CURRENCY_SYMBOLS[portfolioCurrency]})</h3>
-                    {/* On a phone one bar per year is too thin for its labels, and the FX row below
-                        ran off the screen: there the chart keeps a 560px width and you swipe it
-                        sideways. (These two wrappers do nothing on wider screens.) */}
-                    <div className="max-md:overflow-x-auto">
-                    <div className="max-md:min-w-[560px]">
                     <ResponsiveContainer width="100%" height={350}>
                       <ComposedChart
                         data={cpChartData}
                         margin={{ top: 30, right: 5, left: 5, bottom: 5 }}
+                        // Phones: bars only 2px apart (1px each side, instead of 10% of a year's
+                        // width), so the numbers inside them ("414k") stay within their bar
+                        barCategoryGap={phone ? 1 : undefined}
                       >
-                        <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                        <XAxis dataKey="year" tick={{ fontSize: phone ? 10 : 11 }} interval={phone ? 0 : undefined} />
                         <YAxis hide />
                         <Tooltip
                           content={({ active, payload, label }) => {
@@ -17109,7 +17116,7 @@ const PortfolioBacktester = () => {
                             dataKey="profitNegative"
                             position="center"
                             formatter={(value: number) => {
-                              if (!value || value >= 0) return '';
+                              if (!value || value >= 0 || -value < minInnerLabel) return '';
                               const a = Math.abs(value);
                               return a >= 1000 ? `(${(a / 1000).toFixed(0)}k)` : `(${Math.round(a).toLocaleString()})`;
                             }}
@@ -17126,7 +17133,7 @@ const PortfolioBacktester = () => {
                             dataKey="contributions"
                             position="center"
                             formatter={(value: number) => {
-                              if (value === 0) return '';
+                              if (value === 0 || Math.abs(value) < minInnerLabel) return '';
                               if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(0)}k`;
                               return Math.round(value).toLocaleString();
                             }}
@@ -17143,7 +17150,7 @@ const PortfolioBacktester = () => {
                             dataKey="profitPositive"
                             position="center"
                             formatter={(value: number) => {
-                              if (value === 0) return '';
+                              if (value === 0 || value < minInnerLabel) return '';
                               if (value >= 1000) return `${(value / 1000).toFixed(0)}k`;
                               return Math.round(value).toLocaleString();
                             }}
@@ -17159,7 +17166,8 @@ const PortfolioBacktester = () => {
                               if (!entry || typeof x !== 'number' || typeof y !== 'number' || typeof width !== 'number') return null;
                               const sym = CURRENCY_SYMBOLS[portfolioCurrency];
                               const v = entry.growthTotal;
-                              const label = Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k ${sym}` : `${Math.round(v).toLocaleString()} ${sym}`;
+                              const unit = phone ? '' : ` ${sym}`;
+                              const label = Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k${unit}` : `${Math.round(v).toLocaleString()}${unit}`;
                               return (
                                 <text x={x + width / 2} y={y - 10} textAnchor="middle" style={{ fontSize: '13px', fill: '#991b1b', fontWeight: 700 }}>
                                   {label}
@@ -17178,7 +17186,7 @@ const PortfolioBacktester = () => {
                         exact same x as the bar and its year label above it. */}
                     {cpChartData.length > 0 && (
                     <div className="mt-0.5">
-                      <div className="text-[10px] leading-none text-gray-400 mb-1 pl-1">{fxPair}</div>
+                      <div className="text-[10px] leading-none text-gray-400 mb-1 pl-1">{fxPair}{phone ? ' %' : ''}</div>
                       <div className="flex" style={{ paddingLeft: 5, paddingRight: 5 }}>
                         {cpChartData.map(d => {
                           const pct = fxMovesByYear[d.year];
@@ -17187,18 +17195,18 @@ const PortfolioBacktester = () => {
                           return (
                             <div
                               key={d.year}
-                              className={`flex-1 text-center text-[11px] font-semibold tabular-nums ${cls}`}
+                              className={`flex-1 min-w-0 text-center text-[11px] max-md:text-[10px] font-semibold tabular-nums ${cls}`}
                               title={pct == null ? `${fxPair} rate not available for ${d.year}` : `${fxPair} ${pct >= 0 ? 'rose' : 'fell'} ${Math.abs(pct).toFixed(1)}% during ${d.year} (year-end vs previous year-end)`}
                             >
-                              {pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`}
+                              {/* Phones: whole percents without the sign ("−16", the "%" is in the row's
+                                  label), as "−16.1%" is wider than a year's column */}
+                              {pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(phone ? 0 : 1)}${phone ? '' : '%'}`}
                             </div>
                           );
                         })}
                       </div>
                     </div>
                     )}
-                    </div>
-                    </div>
                   </div>
                     );
                   })()}
