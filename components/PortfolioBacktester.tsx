@@ -1136,6 +1136,67 @@ const STREAK_VIEWS: { period: ReturnsChartPeriod; label: string; noun: string; h
         + 'any month that finishes flat or down.',
   },
 ];
+/** One unbroken run of months: how long, and the labels of its first and last month. */
+type MonthRun = { length: number; from: string; to: string; ongoing: boolean };
+
+/**
+ * The longest run of up months, and the longest run WITHOUT one, read straight off the
+ * Up Months chart's bars (so the summary and the chart can never disagree). Each bar is the
+ * running count: above zero = that month finished up, zero = flat or down. The first bar has
+ * no month before it, so it is neither and is skipped. On a tie the more recent run wins.
+ */
+function longestMonthRuns(bars: { label: string; count: number }[]): { up: MonthRun | null; down: MonthRun | null } {
+  let up: MonthRun | null = null;
+  let down: MonthRun | null = null;
+  let start = 1;   // index where the current run began
+  for (let i = 1; i < bars.length; i++) {
+    const isUp = bars[i].count > 0;
+    const runEnds = i === bars.length - 1 || (bars[i + 1].count > 0) !== isUp;
+    if (!runEnds) continue;
+    const run = { length: i - start + 1, from: bars[start].label, to: bars[i].label, ongoing: i === bars.length - 1 };
+    if (isUp && run.length >= (up?.length ?? 0)) up = run;
+    if (!isUp && run.length >= (down?.length ?? 0)) down = run;
+    start = i + 1;
+  }
+  return { up, down };
+}
+
+/**
+ * The line above the Up Months chart: longest up streak and longest down streak (the longest
+ * wait for the next up month). One row per series — the Monthly tab has one, the Backtest tab
+ * one per portfolio, each with its colour dot when there is more than one.
+ */
+function UpMonthsSummary({ series }: { series: { name: string; color: string; bars: { label: string; count: number }[] }[] }) {
+  const months = (n: number) => `${n} month${n === 1 ? '' : 's'}`;
+  const when = (r: MonthRun) => (r.ongoing ? `since ${r.from}, still running` : r.from === r.to ? r.from : `${r.from} – ${r.to}`);
+  return (
+    <div className="px-2 mb-2 space-y-0.5">
+      {series.map(s => {
+        const { up, down } = longestMonthRuns(s.bars);
+        return (
+          <div key={s.name} className="flex flex-wrap items-baseline gap-x-6 gap-y-0.5 text-xs text-gray-600">
+            {series.length > 1 && (
+              // Minimum widths (desktop only) keep the portfolios' rows lined up in columns
+              <span className="flex items-center gap-1.5 font-medium text-gray-800 md:min-w-[8rem]">
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+                {s.name}
+              </span>
+            )}
+            <span className="md:min-w-[18rem]" title="The most months in a row that each finished higher than the month before.">
+              Longest up streak: <span className="font-semibold text-gray-900">{up ? months(up.length) : '–'}</span>
+              {up && <span className="text-gray-400 ml-1.5">{when(up)}</span>}
+            </span>
+            <span title="The most months in a row that finished flat or down: the longest wait for the next up month.">
+              Longest down streak: <span className="font-semibold text-red-600">{down ? months(down.length) : '–'}</span>
+              {down && <span className="text-gray-400 ml-1.5">{when(down)}</span>}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Look-back lengths offered for the Head to Head rolling-correlation line, in MONTHS.
 // 12 is short enough to show a regime change (a crisis, a rate shock); 36 is smooth
 // enough to show a structural one. Named once so the buttons and the maths agree.
@@ -9483,6 +9544,17 @@ const PortfolioBacktester = () => {
                             : 'No periods to show for this backtest.'}
                         </p>
                       ) : (
+                      <>
+                      {/* Up Months: longest up and down streak per portfolio, above the bars.
+                          A portfolio's months are only the rows that carry its name. */}
+                      {backtestReturnsPeriod === 'upStreak' && (
+                        <UpMonthsSummary series={backtestResults.map(r => ({
+                          name: r.portfolio.name,
+                          color: r.portfolio.color,
+                          bars: rows.filter(row => typeof row[r.portfolio.name] === 'number')
+                            .map(row => ({ label: row.label, count: Number(row[r.portfolio.name]) })),
+                        }))} />
+                      )}
                       <ResponsiveContainer width="100%" height={300}>
                         {/* No CartesianGrid, matching the Monthly tab's returns chart */}
                         <BarChart data={rows} margin={{ top: 20, right: 5, left: 5, bottom: 5 }}>
@@ -9576,6 +9648,7 @@ const PortfolioBacktester = () => {
                           ))}
                         </BarChart>
                       </ResponsiveContainer>
+                      </>
                       )}
                       {/* The Δ table further down always shows CALENDAR YEARS, whatever this
                           chart is showing, so say so rather than let the two look like they
@@ -15089,7 +15162,15 @@ const PortfolioBacktester = () => {
                                   Pick a longer period above (or Max), or a shorter rolling window.
                                 </p>
                               ) : (
-                              /* height 300 = 50% taller than the original 200 for easier reading */
+                              <>
+                              {/* Up Months: longest up and down streak, above the bars */}
+                              {returnsChartPeriod === 'upStreak' && (
+                                <UpMonthsSummary series={[{
+                                  name: 'asset', color: '#000000',
+                                  bars: returnsData.map(b => ({ label: b.label, count: b.return })),
+                                }]} />
+                              )}
+                              {/* height 300 = 50% taller than the original 200 for easier reading */}
                               <ResponsiveContainer width="100%" height={300}>
                                 {/* No CartesianGrid, matching the price and drawdown charts above:
                                     the bars themselves carry the shape, and the dashed zero line
@@ -15185,6 +15266,7 @@ const PortfolioBacktester = () => {
                                   </Bar>
                                 </BarChart>
                               </ResponsiveContainer>
+                              </>
                               )}
                             </div>
                           )}
