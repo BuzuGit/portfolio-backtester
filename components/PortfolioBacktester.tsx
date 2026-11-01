@@ -32,8 +32,8 @@
   - User interactions
 */
 
-import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
-import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useSyncExternalStore } from 'react';
+import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer as RechartsResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
 // Switches off chart animation app-wide: every chart draws instantly (see the file for why/how)
 import '@/lib/noChartAnimation';
 import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun, ChevronDown } from 'lucide-react';
@@ -1776,6 +1776,34 @@ const RETURNS_PERIOD_CHOICES = [
 // one decimal instead of two. Desktop gets exactly what it always had.
 const barPct = (v: number) => (isPhoneScreen() ? v.toFixed(1) : `${v.toFixed(1)}%`);
 const barMillions = (v: number) => (isPhoneScreen() ? v.toFixed(1) : v.toFixed(2));
+// PHONE TURNED SIDEWAYS: every chart grows to the height of the screen, so the one you are looking
+// at fills it (the page then scrolls from chart to chart; the effect "PHONE TURNED SIDEWAYS" in the
+// component scrolls back to the chart you were reading after the turn).
+// How: every chart in this file sits in Recharts' ResponsiveContainer, so this stand-in of the same
+// name hands each one the screen's height instead of its own fixed height while a phone is held
+// sideways, and passes everything through untouched otherwise (desktop, tablets, phones upright).
+// The height has to reach the chart itself: resizing only the chart's box from CSS (the first try)
+// made charts shorter than the screen leave a blank strip under them, and squeezed taller ones
+// narrower to fit.
+// Left alone: charts sized by their box ("100%", the small donuts) and charts marked
+// keepHeightSideways (the Graphs page's grid of small charts).
+const PHONE_SIDEWAYS = '(orientation: landscape) and (max-height: 500px) and (pointer: coarse)';
+const subscribeSideways = (onChange: () => void) => {
+  const mq = window.matchMedia(PHONE_SIDEWAYS);
+  mq.addEventListener('change', onChange);
+  window.addEventListener('resize', onChange); // the browser's bars coming and going change the height
+  return () => { mq.removeEventListener('change', onChange); window.removeEventListener('resize', onChange); };
+};
+// The height to give charts: the screen less a little room, or 0 when not a phone held sideways
+const sidewaysChartHeight = () =>
+  (window.matchMedia(PHONE_SIDEWAYS).matches ? Math.max(240, window.innerHeight - 32) : 0);
+function ResponsiveContainer({ keepHeightSideways, height, ...rest }:
+  React.ComponentProps<typeof RechartsResponsiveContainer> & { keepHeightSideways?: boolean }) {
+  const sideways = useSyncExternalStore(subscribeSideways, sidewaysChartHeight, () => 0);
+  const fill = sideways > 0 && !keepHeightSideways && typeof height === 'number';
+  return <RechartsResponsiveContainer {...rest} height={fill ? sideways : height} />;
+}
+
 // Phones: money on a chart's side axis as "3.5M" / "700k" instead of "3500000", which was wider
 // than the axis and got cut off. Desktop: undefined, so the axis prints numbers as it always has.
 // (Rounded before the unit is chosen, so 999,800 reads "1M", not "1000k".)
@@ -2595,7 +2623,8 @@ const PortfolioBacktester = () => {
   const pullRefreshRef = useRef<() => void>(() => {});
   pullRefreshRef.current = () => { if (!isLoading) loadDataFromSheet(); };
 
-  // PHONE TURNED SIDEWAYS: every chart grows to the screen's height (globals.css), which moves
+  // PHONE TURNED SIDEWAYS: every chart grows to the screen's height (the ResponsiveContainer
+  // stand-in at the top of this file), which moves
   // everything on the page, so turning the phone would lose the chart you were reading. So: each
   // time the page comes to rest after scrolling, note the chart nearest the middle of the screen
   // (only then, not on every scrolled frame: measuring every chart, 32 of them on Graphs, while the
@@ -16309,7 +16338,7 @@ const PortfolioBacktester = () => {
                       {/* Small line chart — black price line, no legend, minimal chrome */}
                       {/* Phones: no empty strip under the date labels (bottom margin 0 and a */}
                       {/* 20px-high date axis instead of 15 + 30) */}
-                      <ResponsiveContainer width="100%" height={180}>
+                      <ResponsiveContainer width="100%" height={180} keepHeightSideways>
                         <LineChart data={priceData} margin={{ top: 5, right: 5, left: -15, bottom: phoneGraphs ? 0 : 15 }}>
                           {/* Force gridlines to draw exactly at our computed tick positions */}
                           <CartesianGrid
