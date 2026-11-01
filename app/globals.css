@@ -230,19 +230,6 @@ html {
   }
 }
 
-/* Phone turned sideways: each chart grows to the height of the screen, so the one you are looking
-   at fills it (the page then scrolls from chart to chart). The app also scrolls back to that chart
-   after turning (see the effect "PHONE TURNED SIDEWAYS" in PortfolioBacktester.tsx).
-   Only a phone held sideways matches (a touch screen under 500px tall), never a desktop or tablet.
-   Left as they are: the small donut charts (sized by their box, "height: 100%") and the Graphs
-   page's grid of small charts. */
-@media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
-  .recharts-responsive-container:not([style*="height: 100%"]):not(.grid .recharts-responsive-container) {
-    height: calc(100dvh - 32px) !important;
-    min-height: 240px;
-  }
-}
-
 /* Custom scrollbar for tables (makes them look cleaner) */
 .overflow-x-auto::-webkit-scrollbar {
   height: 6px;
