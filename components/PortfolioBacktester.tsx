@@ -16015,13 +16015,16 @@ const PortfolioBacktester = () => {
           {isConnected && assetData && activeView === 'graphs' && (
             <div className="mt-2">
               {/* Controls row: filters + SMA toggle on left, period buttons on right (pinned while scrolling) */}
-              {/* On a phone the filters and the period row stack instead of sitting side by side */}
-              <div className={`${PINNED_FILTERS} flex justify-between items-start mb-4 max-md:flex-col max-md:gap-2`}>
+              {/* On a phone the filters and the period row stack instead of sitting side by side, and */}
+              {/* the whole bar scrolls away with the page ("max-md:static"), as on Ranking: pinned, it */}
+              {/* covered a quarter of the screen */}
+              <div className={`${PINNED_FILTERS} flex justify-between items-start mb-4 max-md:static max-md:flex-col max-md:items-stretch max-md:gap-2`}>
                 <AssetFilterControls>
                   {/* SMA toggle — rendered inside the filter flex container for perfect alignment */}
+                  {/* (Phones: a box in the row below instead) */}
                   <button
                     onClick={() => setGraphsShowSMA(!graphsShowSMA)}
-                    className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors whitespace-nowrap ${
+                    className={`max-md:hidden px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors whitespace-nowrap ${
                       graphsShowSMA
                         ? 'bg-red-500 text-white border-red-500'
                         : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
@@ -16030,42 +16033,55 @@ const PortfolioBacktester = () => {
                     10m SMA
                   </button>
                 </AssetFilterControls>
-                <div className={`flex items-center gap-3 ${PHONE_SCROLL_ROW}`}>
+                {(() => {
+                  // Months the charts can end at (last date per YYYY-MM), most recent first, as
+                  // "Oct26"; "" = Latest. Shared by the desktop dropdown and the phone box.
+                  const monthMap = new Map<string, string>();
+                  for (const row of assetData!) {
+                    const d = new Date(row.date);
+                    if (isNaN(d.getTime())) continue;
+                    const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+                    monthMap.set(ym, row.date); // last date wins (data is chronological)
+                  }
+                  const endChoices = [{ value: '', label: 'Latest' }, ...Array.from(monthMap.entries())
+                    .sort((a, b) => b[0].localeCompare(a[0]))
+                    .map(([, date]) => {
+                      const d = new Date(date);
+                      return { value: date, label: `${MONTH_ABBR[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}` };
+                    })];
+                  return (
+                <div className={`flex items-center gap-3 ${PHONE_SCROLL_ROW} max-md:w-full`}>
                   {/* End Date selector — pick which month the charts end at */}
                   <select
                     aria-label="End month"
                     value={graphsEndDate}
                     onChange={(e) => setGraphsEndDate(e.target.value)}
-                    className="px-2 py-1 text-xs border border-gray-300 rounded bg-white"
+                    className="px-2 py-1 text-xs border border-gray-300 rounded bg-white max-md:hidden"
                   >
-                    {(() => {
-                      // Build list of unique months (last date per YYYY-MM), most recent first
-                      const monthMap = new Map<string, string>();
-                      for (const row of assetData!) {
-                        const d = new Date(row.date);
-                        if (isNaN(d.getTime())) continue;
-                        const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-                        monthMap.set(ym, row.date); // last date wins (data is chronological)
-                      }
-                      const months = Array.from(monthMap.entries()).sort((a, b) => b[0].localeCompare(a[0]));
-                      return [
-                        <option key="" value="">Latest</option>,
-                        ...months.map(([ym, date]) => {
-                          const d = new Date(date);
-                          const label = `${MONTH_ABBR[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}`;
-                          return <option key={ym} value={date}>{label}</option>;
-                        })
-                      ];
-                    })()}
+                    {endChoices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
 
-                  {/* Period buttons (phones: one box that opens a slide-up panel) */}
-                  <div className="hidden max-md:flex flex-1 min-w-0">
+                  {/* Phones: End month, Period and the 10m SMA line as three boxes on one row that
+                      open slide-up panels, like the other pages (the dropdown, the period buttons and
+                      the SMA button are desktop only) */}
+                  <div className="hidden max-md:flex w-full gap-2">
+                    <PhoneChoice
+                      label="End month"
+                      options={endChoices}
+                      selected={graphsEndDate}
+                      onPick={setGraphsEndDate}
+                    />
                     <PhoneChoice
                       label="Period"
                       options={periodOptions(['1Y', '2Y', '3Y', '4Y', '5Y', '10Y', '15Y', 'Max']).map(o => ({ ...o, value: o.value === 'Max' ? 'max' : o.value }))}
                       selected={graphsPeriod}
                       onPick={v => setGraphsPeriod(v as typeof graphsPeriod)}
+                    />
+                    <PhoneChoice
+                      label="10m SMA"
+                      options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On', hint: 'red line, 10-month average' }]}
+                      selected={graphsShowSMA ? 'on' : 'off'}
+                      onPick={v => setGraphsShowSMA(v === 'on')}
                     />
                   </div>
                   <div className="flex gap-1 max-md:hidden">
@@ -16087,9 +16103,12 @@ const PortfolioBacktester = () => {
                     })}
                   </div>
                 </div>
+                  );
+                })()}
               </div>
 
               {/* Responsive grid of mini charts: 3 columns on desktop, 2 on tablet, 1 on mobile */}
+              {(() => { const phoneGraphs = isPhoneScreen(); return (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {getFilteredAssetLookup().map(asset => {
                   // Reuse getMonthlyChartData — pass endDate so charts end at the selected month
@@ -16182,8 +16201,10 @@ const PortfolioBacktester = () => {
                       </h3>
 
                       {/* Small line chart — black price line, no legend, minimal chrome */}
+                      {/* Phones: no empty strip under the date labels (bottom margin 0 and a */}
+                      {/* 20px-high date axis instead of 15 + 30) */}
                       <ResponsiveContainer width="100%" height={180}>
-                        <LineChart data={priceData} margin={{ top: 5, right: 5, left: -15, bottom: 15 }}>
+                        <LineChart data={priceData} margin={{ top: 5, right: 5, left: -15, bottom: phoneGraphs ? 0 : 15 }}>
                           {/* Force gridlines to draw exactly at our computed tick positions */}
                           <CartesianGrid
                             strokeDasharray="3 3"
@@ -16204,6 +16225,7 @@ const PortfolioBacktester = () => {
                               return isNaN(dt.getTime()) ? d : `${MONTH_ABBR[dt.getUTCMonth()]}${String(dt.getUTCFullYear()).slice(-2)}`;
                             }}
                             tick={{ fontSize: 9 }}
+                            height={phoneGraphs ? 20 : 30}
                           />
                           <YAxis
                             type="number"
@@ -16239,6 +16261,7 @@ const PortfolioBacktester = () => {
                   );
                 })}
               </div>
+              ); })()}
             </div>
           )}
 
