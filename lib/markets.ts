@@ -828,7 +828,6 @@ export const snapshotCategories = (lookup: AssetLookup[]): string[] => {
 export interface MatrixSummary {
   leader: { name: string; value: number } | null;
   laggard: { name: string; value: number } | null;
-  dispersion: number | null; // best minus worst, in percentage points
   positive: number;          // how many assets are above zero
   total: number;             // how many assets have a figure for this period
   // Trend tile: how many rows are on a 10-month-SMA BUY signal, out of the rows that have a
@@ -846,13 +845,12 @@ export const summariseMatrix = (matrix: ReturnMatrix, period: MarketsPeriod): Ma
   const vals = rows
     .filter(r => r.returns[period] !== null)
     .map(r => ({ name: r.name, value: r.returns[period] as number }));
-  if (!vals.length) return { leader: null, laggard: null, dispersion: null, positive: 0, total: 0, buy, signalTotal };
+  if (!vals.length) return { leader: null, laggard: null, positive: 0, total: 0, buy, signalTotal };
   const sorted = [...vals].sort((a, b) => b.value - a.value);
   const leader = sorted[0];
   const laggard = sorted[sorted.length - 1];
   return {
     leader, laggard,
-    dispersion: leader.value - laggard.value,
     positive: vals.filter(v => v.value > 0).length,
     total: vals.length,
     buy, signalTotal,
