@@ -1144,10 +1144,14 @@ type MonthRun = { length: number; from: string; to: string; ongoing: boolean };
  * Up Months chart's bars (so the summary and the chart can never disagree). Each bar is the
  * running count: above zero = that month finished up, zero = flat or down. The first bar has
  * no month before it, so it is neither and is skipped. On a tie the more recent run wins.
+ * `current` is the run the latest month belongs to, up or down.
  */
-function longestMonthRuns(bars: { label: string; count: number }[]): { up: MonthRun | null; down: MonthRun | null } {
+function longestMonthRuns(bars: { label: string; count: number }[]): {
+  up: MonthRun | null; down: MonthRun | null; current: (MonthRun & { isUp: boolean }) | null;
+} {
   let up: MonthRun | null = null;
   let down: MonthRun | null = null;
+  let current: (MonthRun & { isUp: boolean }) | null = null;
   let start = 1;   // index where the current run began
   for (let i = 1; i < bars.length; i++) {
     const isUp = bars[i].count > 0;
@@ -1156,9 +1160,10 @@ function longestMonthRuns(bars: { label: string; count: number }[]): { up: Month
     const run = { length: i - start + 1, from: bars[start].label, to: bars[i].label, ongoing: i === bars.length - 1 };
     if (isUp && run.length >= (up?.length ?? 0)) up = run;
     if (!isUp && run.length >= (down?.length ?? 0)) down = run;
+    if (run.ongoing) current = { ...run, isUp };
     start = i + 1;
   }
-  return { up, down };
+  return { up, down, current };
 }
 
 /**
@@ -1172,7 +1177,7 @@ function UpMonthsSummary({ series }: { series: { name: string; color: string; ba
   return (
     <div className="px-2 mb-2 space-y-0.5">
       {series.map(s => {
-        const { up, down } = longestMonthRuns(s.bars);
+        const { up, down, current } = longestMonthRuns(s.bars);
         return (
           <div key={s.name} className="flex flex-wrap items-baseline gap-x-6 gap-y-0.5 text-xs text-gray-600">
             {series.length > 1 && (
@@ -1186,9 +1191,17 @@ function UpMonthsSummary({ series }: { series: { name: string; color: string; ba
               Longest up streak: <span className="font-semibold text-gray-900">{up ? months(up.length) : '–'}</span>
               {up && <span className="text-gray-400 ml-1.5">{when(up)}</span>}
             </span>
-            <span title="The most months in a row that finished flat or down: the longest wait for the next up month.">
+            <span className="md:min-w-[18rem]" title="The most months in a row that finished flat or down: the longest wait for the next up month.">
               Longest down streak: <span className="font-semibold text-red-600">{down ? months(down.length) : '–'}</span>
               {down && <span className="text-gray-400 ml-1.5">{when(down)}</span>}
+            </span>
+            {/* The run the latest month belongs to: up (black) or down (red), like the two above */}
+            <span title="The run the latest month belongs to: how many months in a row it has been going up, or going without an up month.">
+              Current streak:{' '}
+              <span className={`font-semibold ${current?.isUp ? 'text-gray-900' : 'text-red-600'}`}>
+                {current ? `${months(current.length)} ${current.isUp ? 'up' : 'down'}` : '–'}
+              </span>
+              {current && <span className="text-gray-400 ml-1.5">since {current.from}</span>}
             </span>
           </div>
         );
