@@ -11133,14 +11133,10 @@ const PortfolioBacktester = () => {
             const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
             const monthLabel = (d: string) => `${MONTHS[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`;
             const isMtd = !!m && m.endDate.slice(0, 7) === new Date().toISOString().slice(0, 7);
-            // KPI tiles. On the Country page Leader/Laggard/Positive/Trend look at the ASSETS only
-            // (an FX cross or a rate isn't an investment to rank), and the Currency tile replaces
-            // Dispersion: the country's currency against an equal-weighted basket of the others.
-            const summary = m
-              ? summariseMatrix(marketsIsCountry
-                  ? { ...m, sections: m.sections.map(s => ({ ...s, rows: s.rows.filter(r => r.kind === 'asset') })) }
-                  : m, marketsPeriod)
-              : null;
+            // KPI tiles, four at most. Category pages: Leader / Laggard / Positive / Trend. The Country
+            // page has macro tiles instead (currency vs basket, inflation, policy rate, ...), so the
+            // Leader/Laggard summary is only worked out for the category pages.
+            const summary = m && !marketsIsCountry ? summariseMatrix(m, marketsPeriod) : null;
             const basket = m && marketsIsCountry ? currencyBasketMove(m, marketsPeriod) : null;
             // One KPI tile. `name` set = Leader/Laggard layout (figure on the label line, name as the
             // headline); otherwise figure + `sub` text. Passing the list through kpiTiles() gives
@@ -11155,10 +11151,19 @@ const PortfolioBacktester = () => {
             const inflRow = marketsIsCountry ? allRows.find(r => r.kind === 'cpiyoy') : undefined;
             const inflWk = inflRow?.working[marketsPeriod] ?? null;
             const inflDiff = inflWk ? inflWk.end.result - inflWk.start.result : null;
+            // Country page, Unemployment tile: the unemployment rate now vs at the start of the selected
+            // period, in pp (the row is stored like a rate: a level in %, its "returns" a change in bp).
+            const unempRow = marketsIsCountry
+              ? allRows.find(r => r.kind === 'rate' && /unemploy/i.test(`${r.ticker} ${r.name}`))
+              : undefined;
+            const unempWk = unempRow?.working[marketsPeriod] ?? null;
+            const unempDiff = unempWk ? unempWk.end.result - unempWk.start.result : null;
             // Country page, Policy rate tile: the LAST decision of the reference rate (a RATE_ row; the
-            // 10Y yield is a market rate, not policy) — whatever the period buttons say.
+            // 10Y yield is a market rate, not policy, and unemployment isn't a rate at all — without
+            // that exclusion Singapore, which has no RATE_ row, showed its unemployment here).
             const policyRow = marketsIsCountry
-              ? (allRows.find(r => r.kind === 'rate' && /^RATE/i.test(r.ticker)) ?? allRows.find(r => r.kind === 'rate' && !/^10Y/i.test(r.ticker)))
+              ? (allRows.find(r => r.kind === 'rate' && /^RATE/i.test(r.ticker))
+                ?? allRows.find(r => r.kind === 'rate' && !/^10Y/i.test(r.ticker) && r !== unempRow))
               : undefined;
             const policyMove = policyRow?.lastMove ?? null;
             const policyBp = policyMove ? Math.round((policyMove.to - policyMove.from) * 100) : null;
@@ -11614,13 +11619,16 @@ const PortfolioBacktester = () => {
                       {/* those tiles. Trend is today's 10-month-SMA signal, so it has no period in its label. */}
                       {/* Leader and Laggard get wider tiles (1.3 shares each vs 1) because they hold */}
                       {/* the only long text — an asset name — and that name must fit on one line. */}
-                      {!isMacroTable && <div className="grid grid-cols-2 md:grid-cols-[1.3fr_1.3fr_1fr_1fr_1fr] gap-2 mb-4">
+                      {/* The Country page has no Leader/Laggard, so its four tiles share the row equally. */}
+                      {!isMacroTable && <div className={`grid grid-cols-2 gap-2 mb-4 ${marketsIsCountry ? 'md:grid-cols-4' : 'md:grid-cols-[1.3fr_1.3fr_1fr_1fr]'}`}>
                         {kpiTiles([
-                          { label: `Leader · ${marketsPeriod}`, value: summary?.leader ? fmtRet(summary.leader.value) : '–', name: summary?.leader?.name ?? '', sub: '', cls: 'text-green-700' },
-                          { label: `Laggard · ${marketsPeriod}`, value: summary?.laggard ? fmtRet(summary.laggard.value) : '–', name: summary?.laggard?.name ?? '', sub: '', cls: 'text-red-700' },
-                          marketsIsCountry
+                          ...(marketsIsCountry ? [] : [
+                            { label: `Leader · ${marketsPeriod}`, value: summary?.leader ? fmtRet(summary.leader.value) : '–', name: summary?.leader?.name ?? '', sub: '', cls: 'text-green-700' },
+                            { label: `Laggard · ${marketsPeriod}`, value: summary?.laggard ? fmtRet(summary.laggard.value) : '–', name: summary?.laggard?.name ?? '', sub: '', cls: 'text-red-700' },
+                          ]),
+                          ...(marketsIsCountry ? [
                             // Country page: the currency against an equal-weighted basket of the others.
-                            ? {
+                            {
                                 label: `${marketsCountry} vs basket · ${marketsPeriod}`,
                                 value: basket ? `${fmtRet(basket.value)}%` : '–',
                                 // Shown like Leader/Laggard: the verdict is the headline, in its colour.
@@ -11633,8 +11641,8 @@ const PortfolioBacktester = () => {
                                     + basket.parts.map(p => `  ${p.name}  ${fmtRet(p.value)}%`).join('\n')
                                     + `\nBasket = geometric average of these moves; + = ${marketsCountry} appreciated.`
                                   : '',
-                              }
-                            : { label: `Dispersion · ${marketsPeriod}`, value: summary?.dispersion != null ? `${summary.dispersion.toFixed(1)} pp` : '–', name: '', sub: 'best − worst', cls: 'text-gray-800' },
+                              },
+                          ] : []),
                           ...(marketsIsCountry ? [
                             // Inflation: Accelerating (red) / Easing (green) vs the selected period, in pp.
                             (() => {
@@ -11672,6 +11680,23 @@ const PortfolioBacktester = () => {
                                     + `${policyMove.from.toFixed(2)}% → ${policyMove.to.toFixed(2)}% (${up ? '+' : '−'}${Math.abs(policyBp ?? 0)} bp)\n`
                                     + `Now ${policyRow.price !== null ? fmtPct(policyRow.price) : "–"}. (Month-end data: a decision shows in the month it took effect.)`
                                   : 'No reference rate tagged for this country',
+                              };
+                            })(),
+                            // Unemployment: Rising (red) / Falling (green) vs the selected period, in pp —
+                            // laid out like the Inflation tile, with the same 0.05 pp "unchanged" band.
+                            (() => {
+                              const flat = unempDiff !== null && Math.abs(unempDiff) < 0.05;
+                              const up = unempDiff !== null && !flat && unempDiff > 0;
+                              const cls = unempDiff === null || flat ? 'text-gray-900' : up ? 'text-red-700' : 'text-green-700';
+                              return {
+                                label: `Unemployment · ${marketsPeriod}`,
+                                value: unempDiff === null ? '–' : flat ? '0.0 pp' : `${up ? '+' : '−'}${Math.abs(unempDiff).toFixed(1)} pp`,
+                                name: unempDiff === null ? 'No data' : flat ? 'Unchanged' : up ? 'Rising' : 'Falling',
+                                nameCls: cls, sub: '', cls,
+                                title: unempWk && unempRow
+                                  ? `${unempRow.name}: unemployment now ${unempWk.end.result.toFixed(2)}% (${monthLabel(unempWk.endDate)})\n`
+                                    + `vs ${unempWk.start.result.toFixed(2)}% (${monthLabel(unempWk.startDate)}) at the start of the ${marketsPeriod} period`
+                                  : 'No unemployment row tagged for this country',
                               };
                             })(),
                           ] : [
@@ -11950,7 +11975,7 @@ const PortfolioBacktester = () => {
                       {marketsIsCountry && (
                       <p className="text-[11px] text-gray-500 mt-3">
                         Country page: every Lookup row whose SnapshotCountry is {marketsCountry}, seen by a local investor, in {marketsCountry} ·
-                        Leader / Laggard / Positive / Trend count the assets only · {marketsCountry} vs basket = geometric average of its moves
+                        {marketsCountry} vs basket = geometric average of its moves
                         against the {basket?.parts.length ?? 'other'} currencies in the FX section (equal weights; + = {marketsCountry} appreciated)
                       </p>
                       )}
