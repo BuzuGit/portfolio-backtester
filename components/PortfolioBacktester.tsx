@@ -2130,6 +2130,8 @@ const PortfolioBacktester = () => {
   }, []);
 
   const phoneMemoryFirstSave = useRef(true);
+  // The page an app-icon shortcut asked for ("/?view=positions"), read once when the app opens
+  const shortcutView = useRef(typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('view'));
   useEffect(() => {
     if (!isPhoneScreen()) return;
     try {
@@ -2154,6 +2156,16 @@ const PortfolioBacktester = () => {
         if (saved.graphsPeriod) setGraphsPeriod(saved.graphsPeriod);
       }
     } catch { /* nothing saved, or storage blocked: open on the defaults */ }
+    // Opened from a shortcut on the app icon (press and hold the icon: Portfolio, Positions...,
+    // listed in public/manifest.webmanifest as "/?view=portfolio" etc.): that page wins over the
+    // remembered one. The "?view=..." is then taken off the address, so it doesn't stick around
+    // (it was read once, into shortcutView, so running this again still finds it).
+    const fromShortcut = shortcutView.current;
+    if (fromShortcut && NAV_VIEWS.some(v => v.view === fromShortcut)) {
+      setActiveView(fromShortcut as typeof activeView);
+      if (fromShortcut === 'bestToWorst') setBestToWorstLayout('ranking');
+      window.history.replaceState(null, '', '/');
+    }
   }, []);
   useEffect(() => {
     // Skip the very first run: it happens before the restore above has taken effect, so it would
@@ -2431,13 +2443,25 @@ const PortfolioBacktester = () => {
       if (phone) saveSheet(parsed); // in the background; nothing waits for it
     } catch (error) {
       console.error('Failed to load data:', error);
+      // Phones: no signal at all is not an error in the app, so it gets a calm grey "Offline"
+      // line instead of a red error (the status line turns red only when it says "Error"), and
+      // the data comes back by itself once the phone is online again (see the effect below).
+      // "No signal" = the phone says it's offline, or the sheet never answered at all (fetchSheet in
+      // lib/fetchData.ts gives up with "... unreachable after 3 attempts", e.g. Wi-Fi connected but no
+      // internet); anything else, e.g. the sheet answering with a fault, is an error.
+      const offline = phone && (!navigator.onLine || error instanceof TypeError
+        || (error instanceof Error && error.message.includes('unreachable')));
       if (savedShown) {
         // Keep the saved copy on screen rather than an empty page, and say plainly it is old
-        setLoadingMessage(`Error updating, showing the copy saved ${fmtStamp(savedShown.savedAt)}`);
+        setLoadingMessage(offline
+          ? `Offline · saved copy from ${fmtStamp(savedShown.savedAt)}`
+          : `Error updating, showing the copy saved ${fmtStamp(savedShown.savedAt)}`);
       } else if (phone && assetData && lastFetchedAt) {
         // Phone, pulled down to refresh with no signal: keep what's on screen (desktop still
         // clears the page on a failed refresh, as it always has)
-        setLoadingMessage(`Error updating, showing data from ${fmtStamp(lastFetchedAt)}`);
+        setLoadingMessage(offline
+          ? `Offline · data from ${fmtStamp(lastFetchedAt)}`
+          : `Error updating, showing data from ${fmtStamp(lastFetchedAt)}`);
       } else {
         setLoadingMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
         setIsConnected(false);
@@ -2459,6 +2483,63 @@ const PortfolioBacktester = () => {
   // keep seeing the values from the very first render)
   const pullRefreshRef = useRef<() => void>(() => {});
   pullRefreshRef.current = () => { if (!isLoading) loadDataFromSheet(); };
+
+  // PHONE TURNED SIDEWAYS: every chart grows to the screen's height (globals.css), which moves
+  // everything on the page, so turning the phone would lose the chart you were reading. So: while
+  // you scroll, note the chart nearest the middle of the screen; when the phone turns, bring that
+  // chart back to the middle once the page has settled into its new shape. Turning back upright
+  // does the same. Phones only (a touch screen whose short side is a phone's).
+  useEffect(() => {
+    if (!window.matchMedia('(pointer: coarse)').matches || Math.min(window.screen.width, window.screen.height) >= 768) return;
+    let focus: Element | null = null;
+    let frozenUntil = 0; // after a turn, the page jumps about for a moment: don't re-pick then
+    let wasLandscape = window.innerWidth > window.innerHeight;
+    const pick = () => {
+      if (Date.now() < frozenUntil) return;
+      const mid = window.innerHeight / 2;
+      let best: Element | null = null, bestDist = Infinity;
+      document.querySelectorAll('.recharts-responsive-container').forEach(el => {
+        const r = el.getBoundingClientRect();
+        if (r.height === 0 || r.bottom < 0 || r.top > window.innerHeight) return;
+        const dist = Math.abs((r.top + r.bottom) / 2 - mid);
+        if (dist < bestDist) { bestDist = dist; best = el; }
+      });
+      focus = best;
+    };
+    let queued = false;
+    const onScroll = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => { queued = false; pick(); });
+    };
+    // "resize" comes before the scrolling the turn causes, so `focus` is still the chart from before
+    const onResize = () => {
+      const landscape = window.innerWidth > window.innerHeight;
+      if (landscape === wasLandscape) return;
+      wasLandscape = landscape;
+      const el = focus;
+      frozenUntil = Date.now() + 700;
+      if (el) setTimeout(() => { if (el.isConnected) el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }); }, 350);
+    };
+    pick();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onResize);
+    };
+  }, []);
+
+  // PHONES: BACK ONLINE = FRESH DATA. While the status line says "Offline", the moment the phone
+  // gets a signal again the data is fetched by itself, without having to pull the page down.
+  const offlineRef = useRef(false);
+  offlineRef.current = loadingMessage.startsWith('Offline');
+  useEffect(() => {
+    if (!isPhoneScreen()) return;
+    const onOnline = () => { if (offlineRef.current) pullRefreshRef.current(); };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, []);
   const pullBlockedRef = useRef(false);
   pullBlockedRef.current = navOpen || !isConnected;
   useEffect(() => {
