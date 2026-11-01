@@ -36,7 +36,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 're
 import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
 // Switches off chart animation app-wide: every chart draws instantly (see the file for why/how)
 import '@/lib/noChartAnimation';
-import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun } from 'lucide-react';
+import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun, ChevronDown } from 'lucide-react';
 import { fetchSheetData, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData } from '@/lib/fetchData';
 import { isPhoneScreen, readSavedSheet, saveSheet } from '@/lib/savedSheet';
 import { BottomSheet, PhoneCheckSheet, PhoneChoice, PhoneSelectSheets, periodOptions } from '@/components/PhoneSheet';
@@ -1789,6 +1789,9 @@ const PortfolioBacktester = () => {
   const [activeView, setActiveView] = useState<'backtest' | 'markets' | 'annualReturns' | 'bestToWorst' | 'monthlyPrices' | 'graphs' | 'trendFollowing' | 'correlationMatrix' | 'portfolio' | 'positions'>('backtest');
   // Narrow screens only: is the slide-in navigation drawer open? (Wide screens show the sidebar.)
   const [navOpen, setNavOpen] = useState(false);
+  // Phones only: is the slide-up list of the open page's sections open? (Tapping the page's name
+  // at the top, "Markets · Equities ▾", opens it.)
+  const [sectionSheetOpen, setSectionSheetOpen] = useState(false);
   // Dark mode on/off. Starts as light; the real value is read from <html> once the page is in the
   // browser (app/layout.tsx may already have switched it to dark from the saved choice).
   const [darkMode, setDarkMode] = useState(false);
@@ -8567,17 +8570,41 @@ const PortfolioBacktester = () => {
               is refreshed by pulling the page down, as in other apps. */}
           <div className="hidden max-md:flex items-center justify-between gap-3 mb-3">
             <div className="min-w-0">
-              <div className="text-base font-semibold text-gray-900 truncate">
-                {isConnected && assetData
-                  ? (() => {
-                      // Page name, plus the open section where the page has some ("Markets · Equities")
-                      const label = NAV_VIEWS.find(v => v.view === activeView)?.label;
-                      const sections = navSections(activeView);
-                      const section = sections?.items.find(s => s.key === sections.active)?.label;
-                      return section ? `${label} · ${section}` : label;
-                    })()
-                  : 'Portfolio Backtester'}
-              </div>
+              {isConnected && assetData
+                ? (() => {
+                    // Page name, plus the open section where the page has some ("Markets · Equities").
+                    // A page with several sections: the name is a button (with ▾) that opens a
+                    // slide-up list of them, so you can switch section without going through More.
+                    const label = NAV_VIEWS.find(v => v.view === activeView)?.label;
+                    const sections = navSections(activeView);
+                    const section = sections?.items.find(s => s.key === sections.active)?.label;
+                    const text = section ? `${label} · ${section}` : label;
+                    if (!sections || sections.items.length < 2) {
+                      return <div className="text-base font-semibold text-gray-900 truncate">{text}</div>;
+                    }
+                    return (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setSectionSheetOpen(true)}
+                          className="max-w-full flex items-center gap-1 text-base font-semibold text-gray-900 text-left"
+                        >
+                          <span className="truncate">{text}</span>
+                          <ChevronDown className="w-4 h-4 shrink-0 text-gray-500" />
+                        </button>
+                        {sectionSheetOpen && (
+                          <BottomSheet
+                            title={label ?? ''}
+                            options={sections.items.map(s => ({ value: s.key, label: s.label }))}
+                            selected={sections.active}
+                            onPick={key => sections.select(key)}
+                            onClose={() => setSectionSheetOpen(false)}
+                          />
+                        )}
+                      </>
+                    );
+                  })()
+                : <div className="text-base font-semibold text-gray-900 truncate">Portfolio Backtester</div>}
               <div className={`text-[11px] leading-snug ${loadingMessage.includes('Error') ? 'text-red-600' : 'text-gray-500'}`}>
                 {loadingMessage || 'Ready'}
               </div>
@@ -11271,7 +11298,8 @@ const PortfolioBacktester = () => {
               <>
                 <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
                   <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name}</th>
-                  <th className="text-left font-medium px-3 py-2">
+                  {/* Phones: no drawdown bar (Max DD is also a column), so more figures show at once */}
+                  <th className="text-left font-medium px-3 py-2 max-md:hidden">
                     <div className="w-[200px]"><span className="text-gray-800 font-semibold">{marketsPeriod === 'Max' ? 'Max drawdown · all history' : `Max drawdown · ${marketsPeriod}`}</span></div>
                   </th>
                   {['CAGR', '2x time', 'Vol', 'Sharpe', 'Max DD', 'Longest DD', 'Curr DD'].map(h => (
@@ -11292,7 +11320,7 @@ const PortfolioBacktester = () => {
                           title={`${r.ticker} — open full details in the Monthly tab`}>{r.name}</button>
                       </td>
                       {/* Max drawdown bar: hangs left from zero at the right edge */}
-                      <td className="px-3 py-1" title={st ? `Worst peak-to-trough fall, ${span}` : ''}>
+                      <td className="px-3 py-1 max-md:hidden" title={st ? `Worst peak-to-trough fall, ${span}` : ''}>
                         {!st ? <span className="text-gray-300 text-xs">–</span> : (
                           <div className="relative h-4 mx-10">
                             <div className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: '100%' }} />
@@ -11660,11 +11688,13 @@ const PortfolioBacktester = () => {
                               <>
                                 {/* Figure sits up on the label line so the name gets a whole line to */}
                                 {/* itself, on ONE line. truncate is only a last resort on a phone. */}
+                                {/* Phones: a label or name too long for the half-width tile wraps onto a */}
+                                {/* second line instead of being cut off with "…" ("max-md:whitespace-normal"). */}
                                 <div className="flex items-baseline justify-between gap-2">
-                                  <span className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</span>
-                                  <span className={`text-sm font-bold tabular-nums ${t.cls}`}>{t.value}</span>
+                                  <span className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate max-md:whitespace-normal">{t.label}</span>
+                                  <span className={`text-sm font-bold tabular-nums max-md:whitespace-nowrap ${t.cls}`}>{t.value}</span>
                                 </div>
-                                <div className={`text-sm leading-5 font-semibold whitespace-nowrap truncate ${t.nameCls ?? 'text-gray-900'}`} title={t.name}>
+                                <div className={`text-sm leading-5 font-semibold whitespace-nowrap truncate max-md:whitespace-normal ${t.nameCls ?? 'text-gray-900'}`} title={t.name}>
                                   {t.name}
                                   {/* optional small print after the name, e.g. the policy decision month */}
                                   {t.nameSuffix && (
@@ -11674,10 +11704,11 @@ const PortfolioBacktester = () => {
                               </>
                             ) : (
                               <>
-                              <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
+                              <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate max-md:whitespace-normal">{t.label}</div>
+                              {/* Phones: the small note on its own line under the figure ("best − worst") */}
                               <div className="text-sm">
                                 <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
-                                <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
+                                <span className="text-xs text-gray-500 ml-2 max-md:block max-md:ml-0">{t.sub}</span>
                               </div>
                               </>
                             )}
@@ -11693,7 +11724,9 @@ const PortfolioBacktester = () => {
                       {(['stats', 'price', 'macro'] as const)
                         .map(kind => m.sections.filter(s => (isStatsSection(s) ? 'stats' : isMacroSection(s.rows) ? 'macro' : 'price') === kind))
                         .filter(g => g.length > 0).map((group, gi) => (
-                      <div key={gi} className={`overflow-x-auto ${gi > 0 ? 'mt-4' : ''}`}>
+                      // Phones: the Stats table is still wider than the screen, so its names stay put on
+                      // the left while the figures swipe ("phone-pin-first" in globals.css)
+                      <div key={gi} className={`overflow-x-auto ${gi > 0 ? 'mt-4' : ''} ${isStatsSection(group[0]) ? 'phone-pin-first' : ''}`}>
                         <table className="w-full text-sm border-collapse">
                           <tbody>
                             {group.map((s, si) => (
@@ -11709,7 +11742,10 @@ const PortfolioBacktester = () => {
                                   {!isMacroSection(s.rows) && <th className="text-right font-medium px-2 py-2">Price</th>}
                                   {/* The fixed-width div is what holds this column open: a table ignores min-width */}
                                   {/* on cells, and the bars inside are absolutely positioned so they claim no width. */}
-                                  <th className="text-left font-medium px-3 py-2">
+                                  {/* PHONES: the table keeps only the name, the price and the selected period's */}
+                                  {/* cell (the Period box picks which), so it fits the screen: the bar, the other */}
+                                  {/* periods, the trend line and the last columns are "max-md:hidden". */}
+                                  <th className="text-left font-medium px-3 py-2 max-md:hidden">
                                     <div className="w-[200px]"><span className="text-gray-800 font-semibold">{
                                       s.rows.every(r => r.kind === 'cpiyoy')
                                         ? (marketsPeriod === 'YTD' ? 'Now vs Dec' : marketsPeriod === 'Max' ? 'Now vs start' : `Now vs ${marketsPeriod} ago`)
@@ -11719,24 +11755,24 @@ const PortfolioBacktester = () => {
                                   {m.columns.map(p => (
                                     <th
                                       key={p}
-                                      className={`text-center px-0.5 py-2 w-14 ${p === marketsPeriod ? 'text-gray-900 font-bold' : 'font-medium'}`}
+                                      className={`text-center px-0.5 py-2 w-14 ${p === marketsPeriod ? 'text-gray-900 font-bold' : 'font-medium max-md:hidden'}`}
                                     >
                                       <span className={p === marketsPeriod ? 'border-b-2 border-slate-800 pb-0.5' : ''}>
                                         {p}{['3Y', '5Y', '10Y', 'Max'].includes(p) && <sup className="text-[8px] ml-px">c</sup>}
                                       </span>
                                     </th>
                                   ))}
-                                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap">{marketsTrendPeriod === 'Max' ? 'Full' : marketsTrendPeriod} trend</th>
+                                  <th className="text-left font-medium px-2 py-2 whitespace-nowrap max-md:hidden">{marketsTrendPeriod === 'Max' ? 'Full' : marketsTrendPeriod} trend</th>
                                   {isMacroSection(s.rows) ? (
                                     <>
                                       <th className="text-right font-medium px-2 py-2 cursor-help" title="Latest rate, or latest year-on-year inflation">Value</th>
-                                      <th className="text-right font-medium px-2 py-2 cursor-help" title="Highest value ever recorded (rate, or YoY inflation)">ATH</th>
-                                      <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help" title="ATH − current value, in percentage points">vs peak</th>
+                                      <th className="text-right font-medium px-2 py-2 cursor-help max-md:hidden" title="Highest value ever recorded (rate, or YoY inflation)">ATH</th>
+                                      <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help max-md:hidden" title="ATH − current value, in percentage points">vs peak</th>
                                     </>
                                   ) : (
                                     <>
-                                      <th className="text-right font-medium px-2 py-2 whitespace-nowrap" title="Current drawdown: how far the latest price is below its all-time high (asset's own currency)">Curr DD</th>
-                                      <th className="text-center font-medium px-2 py-2 cursor-help" title={SIGNAL_RULE}>Signal</th>
+                                      <th className="text-right font-medium px-2 py-2 whitespace-nowrap max-md:hidden" title="Current drawdown: how far the latest price is below its all-time high (asset's own currency)">Curr DD</th>
+                                      <th className="text-center font-medium px-2 py-2 cursor-help max-md:hidden" title={SIGNAL_RULE}>Signal</th>
                                     </>
                                   )}
                                 </tr>
@@ -11750,7 +11786,8 @@ const PortfolioBacktester = () => {
                                   const stale = !!r.priceDate && r.priceDate.slice(0, 7) !== m.endDate.slice(0, 7);
                                   return (
                                     <tr key={r.ticker} className="border-b border-gray-100 hover:bg-gray-50">
-                                      <td className="px-3 py-1 whitespace-nowrap">
+                                      {/* Phones: a long name ("10Y Yield US - 5.29%") may wrap rather than widen the table */}
+                                      <td className="px-3 py-1 whitespace-nowrap max-md:whitespace-normal">
                                         <button
                                           type="button"
                                           onClick={() => openInMonthly(r)}
@@ -11783,7 +11820,7 @@ const PortfolioBacktester = () => {
                                       {/* Horizontal bar for the focused period; label sits just past the bar's end. */}
                                       {/* Inflation 1Y rate rows show a verdict instead: today's rate vs the rate at the */}
                                       {/* selected period — "Accelerating +0.2 pp" (red) or "Easing −0.5 pp" (green). */}
-                                      <td className="px-3 py-1">
+                                      <td className="px-3 py-1 max-md:hidden">
                                         {r.kind === 'cpiyoy' ? (() => {
                                           const wk = r.working[marketsPeriod];
                                           if (!wk) return <span className="text-gray-300 text-xs">–</span>;
@@ -11817,13 +11854,15 @@ const PortfolioBacktester = () => {
                                       {/* One heat-coloured cell per period; each column has its own colour scale */}
                                       {m.columns.map(p => {
                                         const v = r.returns[p];
-                                        if (v === null) return <td key={p} className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
+                                        // Phones: only the selected period's cell (see the header row)
+                                        const phoneHide = p === marketsPeriod ? '' : 'max-md:hidden';
+                                        if (v === null) return <td key={p} className={`px-0.5 py-0.5 text-center text-xs text-gray-300 ${phoneHide}`}>–</td>;
                                         // Rate rows use the bp scale; Macro rows flip the colour (up = red).
                                         const cap = r.kind === 'cpiyoy' ? yoyCap
                                           : r.kind === 'rate' ? m.colourCapsBp[p] : r.kind === 'cpi' ? m.colourCapsCpi[p] : m.colourCaps[p];
                                         const bg = returnHeatColor(Math.max(-1, Math.min(1, v / cap)) * 40 * (macro ? -1 : 1));
                                         return (
-                                          <td key={p} className="px-px py-0.5" title={returnTooltip(r, p, v)}>
+                                          <td key={p} className={`px-px py-0.5 ${phoneHide}`} title={returnTooltip(r, p, v)}>
                                             <div className="rounded px-1 py-1 cursor-help text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
                                               {fmtCell(r, v)}
                                             </div>
@@ -11831,7 +11870,7 @@ const PortfolioBacktester = () => {
                                         );
                                       })}
 
-                                      <td className="px-2 py-1">{sparkline(r.spark.slice(-trendPoints), macro)}</td>
+                                      <td className="px-2 py-1 max-md:hidden">{sparkline(r.spark.slice(-trendPoints), macro)}</td>
 
                                       {isMacroSection(s.rows) ? (
                                         <>
@@ -11849,14 +11888,14 @@ const PortfolioBacktester = () => {
                                           </td>
                                           {/* ATH: highest value ever recorded */}
                                           <td
-                                            className={`px-2 py-1 text-right text-xs tabular-nums cursor-help ${r.isAtAth ? 'font-semibold text-red-700' : 'text-gray-700'}`}
+                                            className={`px-2 py-1 text-right text-xs tabular-nums cursor-help max-md:hidden ${r.isAtAth ? 'font-semibold text-red-700' : 'text-gray-700'}`}
                                             title={r.athPrice === null ? '' : `Highest ${r.kind === 'cpi' ? 'YoY inflation' : 'value'} recorded: ${fmtPct(r.athPrice)} (${monthLabel(r.athDate)})${r.isAtAth ? ' — at that peak now' : ''}`}
                                           >
                                             {r.athPrice === null ? '–' : `${fmtPct(r.athPrice)}`}
                                           </td>
                                           {/* vs peak: ATH − current, in percentage points */}
                                           <td
-                                            className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap text-gray-700 cursor-help"
+                                            className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap text-gray-700 cursor-help max-md:hidden"
                                             title={r.athPrice === null || r.price === null ? '' : `Peak ${fmtPct(r.athPrice)} (${monthLabel(r.athDate)}) − current ${fmtPct(r.price)} = ${(r.athPrice - r.price).toFixed(2)} pp`}
                                           >
                                             {r.athPrice === null || r.price === null ? '–' : <>{(r.athPrice - r.price).toFixed(2)}<span className="text-[9px] text-gray-400 ml-0.5">pp</span></>}
@@ -11866,14 +11905,14 @@ const PortfolioBacktester = () => {
                                       {/* (Price sits second, right after the name — see above.) */}
                                       {/* Current drawdown from the all-time high — same look as the Annual tab's "Curr DD" */}
                                       {r.drawdown === null ? (
-                                        <td className="px-2 py-1 text-right text-xs text-gray-300">–</td>
+                                        <td className="px-2 py-1 text-right text-xs text-gray-300 max-md:hidden">–</td>
                                       ) : r.isAtAth ? (
-                                        <td className="px-2 py-1 text-right text-xs font-semibold bg-green-100 text-green-700 cursor-help" title={`At all-time high: ${fmtLevel(r.isFx, r.price ?? 0)} ${r.priceCurrency}`}>
+                                        <td className="px-2 py-1 text-right text-xs font-semibold bg-green-100 text-green-700 cursor-help max-md:hidden" title={`At all-time high: ${fmtLevel(r.isFx, r.price ?? 0)} ${r.priceCurrency}`}>
                                           ATH
                                         </td>
                                       ) : (
                                         <td
-                                          className="px-2 py-1 text-right text-xs tabular-nums bg-orange-50 text-orange-700 cursor-help"
+                                          className="px-2 py-1 text-right text-xs tabular-nums bg-orange-50 text-orange-700 cursor-help max-md:hidden"
                                           title={`ATH ${fmtLevel(r.isFx, r.athPrice ?? 0)} ${r.priceCurrency} (${monthLabel(r.athDate)})`}
                                         >
                                           {r.drawdown.toFixed(1)}%
@@ -11882,7 +11921,7 @@ const PortfolioBacktester = () => {
 
                                       {/* 10-month SMA signal — same rule and colours as the Monthly tab */}
                                       <td
-                                        className={`px-2 py-1 text-center text-xs font-medium cursor-help ${
+                                        className={`px-2 py-1 text-center text-xs font-medium cursor-help max-md:hidden ${
                                           r.signal === 'BUY' ? 'bg-green-100 text-green-700'
                                             : r.signal === 'SELL' ? 'bg-red-100 text-red-700'
                                             : 'text-gray-300'
@@ -12126,15 +12165,17 @@ const PortfolioBacktester = () => {
                           <div key={t.label} title={t.title || undefined}
                             className={`rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0 ${t.title ? 'cursor-help' : ''} ${t.label === 'Asset mix' ? 'col-span-2 lg:col-span-1' : ''}`}>
                             <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
-                            <div className="text-sm whitespace-nowrap truncate">
+                            {/* Phones: wraps instead of "…" (the Asset mix), and the small note goes on its own line */}
+                            <div className="text-sm whitespace-nowrap truncate max-md:whitespace-normal">
                               <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
-                              <span className="text-xs text-gray-500 ml-2">{t.sub}</span>
+                              <span className="text-xs text-gray-500 ml-2 max-md:block max-md:ml-0">{t.sub}</span>
                             </div>
                           </div>
                         ))}
                       </div>
 
-                      <div className="overflow-x-auto">
+                      {/* Phones: names stay put on the left while the figures swipe ("phone-pin-first") */}
+                      <div className="overflow-x-auto phone-pin-first">
                         <table className="w-full text-sm border-collapse">
                           <tbody>
                             {h.sections.map((s, si) => (
@@ -12514,7 +12555,20 @@ const PortfolioBacktester = () => {
               <div className="mt-2">
                 {/* Page-level filter: which series the table lists */}
                 <div className={`${PINNED_FILTERS} max-md:static mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
-                  <div className="flex items-center gap-1">
+                  {/* Phones: one box that opens a slide-up panel, like the other Markets pages */}
+                  <div className="hidden max-md:flex w-full">
+                    <PhoneChoice
+                      label="Series"
+                      options={[
+                        { value: 'all', label: 'All' },
+                        { value: 'running', label: 'Running', hint: 'not yet matured' },
+                        { value: 'matured', label: 'Matured', hint: 'completed 10 years' },
+                      ]}
+                      selected={edoStatusFilter}
+                      onPick={k => setEdoStatusFilter(k as typeof edoStatusFilter)}
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 max-md:hidden">
                     <span className="text-xs text-gray-500 mr-1">Series:</span>
                     {([['all', 'All'], ['running', 'Running'], ['matured', 'Matured']] as const).map(([k, label]) => (
                       <button
@@ -12560,9 +12614,10 @@ const PortfolioBacktester = () => {
                     ].map(t => (
                       <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0">
                         <div className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
-                        <div className="text-base whitespace-nowrap truncate">
+                        {/* Phones: wraps instead of "…", and the small note goes on its own line */}
+                        <div className="text-base whitespace-nowrap truncate max-md:whitespace-normal">
                           <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
-                          <span className="text-sm text-gray-500 ml-2">{t.sub}</span>
+                          <span className="text-sm text-gray-500 ml-2 max-md:block max-md:ml-0">{t.sub}</span>
                         </div>
                       </div>
                     ))}
@@ -12663,18 +12718,19 @@ const PortfolioBacktester = () => {
                           <button key={t.label} onClick={() => setEdoSelected(t.p.s.series)} title={`Open ${t.p.s.series} below`}
                             className="text-left rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 px-3 py-2 min-w-0">
                             <div className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label} · {t.p.s.series}</div>
-                            <div className="text-base whitespace-nowrap truncate">
+                            {/* Phones: wraps instead of "…", and the small note goes on its own line */}
+                            <div className="text-base whitespace-nowrap truncate max-md:whitespace-normal">
                               <span className={`font-semibold tabular-nums ${t.cls}`}>{fmtPctSigned(t.p.final)}</span>
-                              <span className="text-sm text-gray-500 ml-2">{fmtPctSigned(t.p.perYear)} a year</span>
+                              <span className="text-sm text-gray-500 ml-2 max-md:block max-md:ml-0">{fmtPctSigned(t.p.perYear)} a year</span>
                             </div>
                           </button>
                         ))}
                         <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0"
                           title={`Series whose ${edoMaturedTax ? 'after-tax' : 'pre-tax'} payout at maturity bought more than 100 zl did at purchase`}>
                           <div className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">Beat inflation</div>
-                          <div className="text-base whitespace-nowrap truncate">
+                          <div className="text-base whitespace-nowrap truncate max-md:whitespace-normal">
                             <span className="font-semibold tabular-nums text-gray-800">{beatInflation} of {beatOf}</span>
-                            <span className="text-sm text-gray-500 ml-2">{edoMaturedTax ? 'after tax' : 'pre-tax'}</span>
+                            <span className="text-sm text-gray-500 ml-2 max-md:block max-md:ml-0">{edoMaturedTax ? 'after tax' : 'pre-tax'}</span>
                           </div>
                         </div>
                       </div>
@@ -12815,7 +12871,8 @@ const PortfolioBacktester = () => {
                     {/* The same series month by month, from purchase to maturity (all 120 months). */}
                     {/* Grey rows are already fixed by the sheet but lie in the future; "–" = not known yet. */}
                     <div className="mt-4 text-[11px] uppercase tracking-wide text-gray-500 font-semibold mb-1">{selected.series} month by month</div>
-                    <div className="overflow-x-auto max-h-[420px] overflow-y-auto border border-gray-100 rounded">
+                    {/* Phones: the Month column stays put on the left while the figures swipe ("phone-pin-first") */}
+                    <div className="overflow-x-auto max-h-[420px] overflow-y-auto border border-gray-100 rounded phone-pin-first">
                       <table className="w-full text-sm border-collapse">
                         <thead className="sticky top-0">
                           <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
@@ -12897,8 +12954,8 @@ const PortfolioBacktester = () => {
                     </div>
                   </div>
 
-                  {/* The full series list. Click a row to chart it. */}
-                  <div className="overflow-x-auto max-h-[480px] overflow-y-auto border border-gray-100 rounded">
+                  {/* The full series list. Click a row to chart it. Phones: the Series column stays put. */}
+                  <div className="overflow-x-auto max-h-[480px] overflow-y-auto border border-gray-100 rounded phone-pin-first">
                     <table className="w-full text-sm border-collapse">
                       <thead className="sticky top-0">
                         <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">

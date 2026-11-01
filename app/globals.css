@@ -169,6 +169,38 @@ html {
   }
 }
 
+/* Phones: a table wider than the screen keeps its first column (the names) in place while the
+   rest swipes sideways, so you can always tell which row is which. Put "phone-pin-first" on the
+   table's scrolling box. The pinned cell needs a solid background or the swiped figures would show
+   through it: white, or the row's own colour when the row has one (header, total and selected rows,
+   whose class starts with or contains " bg-"; "hover:bg-..." doesn't count, it isn't a colour yet).
+   A thin line on its right edge marks where the swiping part starts. */
+@media (max-width: 767px) {
+  .phone-pin-first tr > :first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background-color: #fff;
+    box-shadow: inset -1px 0 0 #e5e7eb;
+  }
+  .phone-pin-first tr[class^="bg-"] > :first-child,
+  .phone-pin-first tr[class*=" bg-"] > :first-child {
+    background-color: inherit;
+  }
+  /* A pinned header row (the EDO tables) stays above the pinned names scrolling under it */
+  .phone-pin-first thead {
+    z-index: 2;
+  }
+  html.dark .phone-pin-first tr > :first-child {
+    background-color: var(--d-card);
+    box-shadow: inset -1px 0 0 var(--d-line);
+  }
+  html.dark .phone-pin-first tr[class^="bg-"] > :first-child,
+  html.dark .phone-pin-first tr[class*=" bg-"] > :first-child {
+    background-color: inherit;
+  }
+}
+
 /* Custom scrollbar for tables (makes them look cleaner) */
 .overflow-x-auto::-webkit-scrollbar {
   height: 6px;
