@@ -1702,6 +1702,11 @@ const RETURNS_PERIOD_CHOICES = [
 // one decimal instead of two. Desktop gets exactly what it always had.
 const barPct = (v: number) => (isPhoneScreen() ? v.toFixed(1) : `${v.toFixed(1)}%`);
 const barMillions = (v: number) => (isPhoneScreen() ? v.toFixed(1) : v.toFixed(2));
+// Phones: money on a chart's side axis as "3.5M" / "700k" instead of "3500000", which was wider
+// than the axis and got cut off. Desktop: undefined, so the axis prints numbers as it always has.
+const phoneAxisMoney = (): ((v: number) => string) | undefined => (isPhoneScreen()
+  ? (v: number) => (Math.abs(v) >= 1e6 ? `${+(v / 1e6).toFixed(1)}M` : Math.abs(v) >= 1e3 ? `${Math.round(v / 1e3)}k` : String(Math.round(v)))
+  : undefined);
 
 const PortfolioBacktester = () => {
   // ----------------------------------------
@@ -8817,7 +8822,9 @@ const PortfolioBacktester = () => {
                     ))}
                   </div>
                 </div>
-                <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+                {/* Phones: two to a row (three cut the dates off: "2009-12-…"), and the boxes a
+                    little taller and rounder so they are easier to tap ("max-md:" classes) */}
+                <div className="grid grid-cols-3 md:grid-cols-6 gap-3 max-md:grid-cols-2">
                   {/* Start Date — filtered to only dates >= limiting asset's first available date */}
                   {(() => {
                     const limiting = getLimitingAsset();
@@ -8828,7 +8835,7 @@ const PortfolioBacktester = () => {
                         <select
                           value={selectedDateRange.start}
                           onChange={(e) => setSelectedStartDate(e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
                         >
                           {assetData.filter(row => !minDate || row.date >= minDate).map(row => (
                             <option key={row.date} value={row.date}>{row.date}</option>
@@ -8849,7 +8856,7 @@ const PortfolioBacktester = () => {
                     <select
                       value={selectedDateRange.end}
                       onChange={(e) => setSelectedEndDate(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
                     >
                       {assetData.slice().reverse().filter(row => row.date >= selectedDateRange.start).map(row => (
                         <option key={row.date} value={row.date}>{row.date}</option>
@@ -8864,7 +8871,7 @@ const PortfolioBacktester = () => {
                       type="number"
                       value={startingCapital}
                       onChange={(e) => setStartingCapital(parseFloat(e.target.value))}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
                     />
                   </div>
 
@@ -8874,7 +8881,7 @@ const PortfolioBacktester = () => {
                     <select
                       value={rebalanceFreq}
                       onChange={(e) => setRebalanceFreq(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
                     >
                       <option value="monthly">Monthly</option>
                       <option value="quarterly">Quarterly</option>
@@ -8892,7 +8899,7 @@ const PortfolioBacktester = () => {
                     <select
                       value={withdrawalRate}
                       onChange={(e) => setWithdrawalRate(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
                     >
                       <option value="2">2.0%</option>
                       <option value="2.5">2.5%</option>
@@ -8910,7 +8917,7 @@ const PortfolioBacktester = () => {
                     <select
                       value={inflationRate}
                       onChange={(e) => setInflationRate(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
                     >
                       <option value="0">0%</option>
                       <option value="1">1%</option>
@@ -8981,7 +8988,7 @@ const PortfolioBacktester = () => {
                                 <select
                                   value={current?.name ?? ''}
                                   onChange={(e) => applyPreset(portfolio.id, e.target.value)}
-                                  className="flex-1 min-w-0 px-1 py-0.5 text-xs border border-gray-300 rounded"
+                                  className="flex-1 min-w-0 px-1 py-0.5 text-xs border border-gray-300 rounded max-md:py-1.5"
                                   title="Load a ready-made portfolio from the Portfolios sheet. Replaces this card's assets and weights; currency and inflation stay as set."
                                 >
                                   <option value="">Custom</option>
@@ -9007,7 +9014,7 @@ const PortfolioBacktester = () => {
                               <span className="flex-1 min-w-0">Asset</span>
                               <span className="w-14 shrink-0 text-center" title="Weight %. Negative = short (e.g. -100 finances a 200% long).">Wgt %</span>
                               <span className="w-14 shrink-0 text-center" title="Annual carry on this leg's notional. Negative = a cost you pay (e.g. -0.5 = 50bps borrow spread on a short, or an ETF expense ratio on a long). Positive = income.">Cost %</span>
-                              <span className="w-3 shrink-0" />
+                              <span className="w-3 shrink-0 max-md:w-8" />
                             </div>
                           )}
                           {portfolio.assets.map((asset, idx) => {
@@ -9022,7 +9029,7 @@ const PortfolioBacktester = () => {
                                 aria-label="Asset"
                                 value={asset.asset}
                                 onChange={(e) => updateAsset(portfolio.id, idx, 'asset', e.target.value)}
-                                className="flex-1 min-w-0 px-1 py-1 text-xs border border-gray-300 rounded"
+                                className="flex-1 min-w-0 px-1 py-1 text-xs border border-gray-300 rounded max-md:py-1.5"
                               >
                                 <option value="">Select...</option>
                                 {availableAssetsFiltered.map(a => (
@@ -9040,7 +9047,7 @@ const PortfolioBacktester = () => {
                                 onBlur={() => clearNumDraft(portfolio.id, idx, 'weight')}
                                 placeholder="%"
                                 title="Weight %. Negative = short this asset (e.g. 200 CSPX / -100 IB01)."
-                                className={`w-14 px-1 py-1 text-xs border rounded shrink-0 text-right ${isShort ? 'border-red-300 text-red-600 font-semibold' : 'border-gray-300'}`}
+                                className={`w-14 px-1 py-1 text-xs border rounded shrink-0 text-right max-md:py-1.5 ${isShort ? 'border-red-300 text-red-600 font-semibold' : 'border-gray-300'}`}
                               />
                               {/* Cost Input — optional annual carry on this leg */}
                               <input
@@ -9051,14 +9058,16 @@ const PortfolioBacktester = () => {
                                 onBlur={() => clearNumDraft(portfolio.id, idx, 'costPct')}
                                 placeholder="—"
                                 title="Annual carry on this leg, as % of its notional. Negative = you pay (e.g. -0.5 for a 50bps borrow spread). Leave empty for none."
-                                className={`w-14 px-1 py-1 text-xs border rounded shrink-0 text-right ${asset.costPct ? 'border-amber-300 text-amber-700' : 'border-gray-200 text-gray-500'}`}
+                                className={`w-14 px-1 py-1 text-xs border rounded shrink-0 text-right max-md:py-1.5 ${asset.costPct ? 'border-amber-300 text-amber-700' : 'border-gray-200 text-gray-500'}`}
                               />
-                              {/* Remove Asset */}
+                              {/* Remove Asset. Phones: a 32px button around a bigger bin, so a finger can
+                                  hit it (the bare 12px icon was too small) */}
                               <button
                                 onClick={() => removeAsset(portfolio.id, idx)}
-                                className="text-red-500 hover:text-red-700 shrink-0"
+                                aria-label="Remove asset"
+                                className="text-red-500 hover:text-red-700 shrink-0 max-md:w-8 max-md:h-8 max-md:flex max-md:items-center max-md:justify-center"
                               >
-                                <Trash2 className="w-3 h-3" />
+                                <Trash2 className="w-3 h-3 max-md:w-4 max-md:h-4" />
                               </button>
                             </div>
                             );
@@ -9068,13 +9077,15 @@ const PortfolioBacktester = () => {
                         {/* Add Asset Button */}
                         <button
                           onClick={() => addAssetToPortfolio(portfolio.id)}
-                          className="w-full py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                          className="w-full py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded max-md:py-2"
                         >
                           + Add Asset
                         </button>
 
-                        {/* Weight Validation + Currency + Inflation Adjustment */}
-                        <div className="mt-2 flex items-center justify-between">
+                        {/* Weight Validation + Currency + Inflation Adjustment. Phones: the total on its
+                            own line, then Ccy and Infl sharing the next one at full width (squeezed
+                            onto one line, "Infl" got a 44px box) */}
+                        <div className="mt-2 flex items-center justify-between max-md:flex-col max-md:items-stretch max-md:gap-2">
                           <div className={`text-xs font-medium ${isValid ? 'text-green-600' : 'text-red-600'}`}>
                             Total: {totalWeight.toFixed(0)}% {isValid ? '✓' : '(need 100%)'}
                             {isLevered && (
@@ -9086,9 +9097,9 @@ const PortfolioBacktester = () => {
                               </div>
                             )}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 max-md:w-full">
                             {/* Base Currency selector — converts all assets to the chosen currency */}
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1 max-md:flex-1">
                               <span className="text-xs text-gray-500" title={describeFxConversion(portfolio.assets, portfolio.baseCurrency, getAssetCurrency)}>Ccy:</span>
                               <select
                                 aria-label="Currency"
@@ -9103,7 +9114,7 @@ const PortfolioBacktester = () => {
                                     return p;
                                   }));
                                 }}
-                                className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                                className="px-1 py-0.5 text-xs border border-gray-300 rounded max-md:flex-1 max-md:min-w-0 max-md:py-1.5"
                                 title={describeFxConversion(portfolio.assets, portfolio.baseCurrency, getAssetCurrency)}
                               >
                                 {PORTFOLIO_CURRENCY_OPTIONS.map(opt => (
@@ -9112,7 +9123,7 @@ const PortfolioBacktester = () => {
                               </select>
                             </div>
                             {/* CPI Inflation Adjustment selector */}
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1 max-md:flex-1">
                               <span className="text-xs text-gray-500" title="Adjust portfolio values for inflation using CPI data">Infl:</span>
                               <select
                                 aria-label="Inflation adjustment"
@@ -9127,7 +9138,7 @@ const PortfolioBacktester = () => {
                                     return p;
                                   }));
                                 }}
-                                className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                                className="px-1 py-0.5 text-xs border border-gray-300 rounded max-md:flex-1 max-md:min-w-0 max-md:py-1.5"
                                 title="Inflation adjustment: divides portfolio values by CPI to show real purchasing power"
                               >
                                 {CPI_OPTIONS.map(opt => (
@@ -9170,13 +9181,15 @@ const PortfolioBacktester = () => {
               )}
 
               {/* Statistics Table */}
-              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
+              {/* Phones: the table is wider than the screen and swipes; the heading stays put while it */}
+              {/* does ("max-md:sticky max-md:left-0"), and so do the portfolio names ("phone-pin-first") */}
+              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4 phone-pin-first">
                 {/* Same heading treatment as the Monthly tab's statistics: what window these
                     numbers cover, and on what basis, rather than a bare "Statistics". The window
                     is read from the results themselves rather than from the date pickers above,
                     so it always describes the months the statistics were actually computed over —
                     which is the requested range trimmed to the rows the data really has. */}
-                <h3 className="text-md font-semibold text-gray-900 mb-2">
+                <h3 className="text-md font-semibold text-gray-900 mb-2 max-md:sticky max-md:left-0">
                   Statistics
                   {(() => {
                     const pts = backtestResults[0]?.returns;
@@ -9267,7 +9280,7 @@ const PortfolioBacktester = () => {
                   <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 15 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} ticks={backtestXAxisConfig.ticks} tick={BacktestDateTick} />
-                    <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} />
+                    <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} tickFormatter={phoneAxisMoney()} />
                     <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
                     <Legend />
                     {backtestResults.map((result, idx) => (
@@ -9322,7 +9335,7 @@ const PortfolioBacktester = () => {
                   <LineChart margin={{ top: 5, right: 5, left: -15, bottom: 15 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} ticks={backtestXAxisConfig.ticks} tick={BacktestDateTick} />
-                    <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} />
+                    <YAxis tick={{ fontSize: 9 }} width={55} domain={['auto', 'auto']} tickFormatter={phoneAxisMoney()} />
                     <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
                     <Legend />
                     {backtestResults.map((result, idx) => {
@@ -10023,7 +10036,8 @@ const PortfolioBacktester = () => {
 
                 return (
                   <div key={idx} className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
-                    <h3 className="text-md font-semibold mb-2" style={{ color: result.portfolio.color }}>
+                    {/* Phones: the heading stays put while the table swipes */}
+                    <h3 className="text-md font-semibold mb-2 max-md:sticky max-md:left-0" style={{ color: result.portfolio.color }}>
                       Returns - {result.portfolio.name}
                     </h3>
                     <table className="w-full text-xs">
@@ -10079,8 +10093,9 @@ const PortfolioBacktester = () => {
 
               {/* Withdrawal Detail Table */}
               {/* Year-by-year breakdown of the withdrawal simulation so you can verify every number */}
-              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
-                <div className="flex items-center justify-between mb-2">
+              {/* Phones: the heading row stays put while the table swipes, and so does the Year column */}
+              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4 phone-pin-first">
+                <div className="flex items-center justify-between mb-2 max-md:sticky max-md:left-0">
                   <h3 className="text-md font-semibold text-gray-700">Withdrawal Detail</h3>
                   {/* Dropdown to pick which portfolio's detail to show */}
                   <select
@@ -15597,7 +15612,7 @@ const PortfolioBacktester = () => {
 
                             return (
                             <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
-                              <h3 className="text-md font-semibold mb-2 text-gray-700">
+                              <h3 className="text-md font-semibold mb-2 text-gray-700 max-md:sticky max-md:left-0">
                                 Returns — {monthlySelectedTicker}
                               </h3>
                               <table className="w-full text-xs">
@@ -15780,7 +15795,7 @@ const PortfolioBacktester = () => {
 
                             return (
                               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
-                                <h3 className="text-md font-semibold mb-2 text-gray-700">
+                                <h3 className="text-md font-semibold mb-2 text-gray-700 max-md:sticky max-md:left-0">
                                   Prices — {monthlySelectedTicker}
                                 </h3>
                                 <table className="w-full text-xs">
@@ -15941,7 +15956,7 @@ const PortfolioBacktester = () => {
 
                             return (
                               <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mt-4">
-                                <h3 className="text-md font-semibold mb-2 text-gray-700">
+                                <h3 className="text-md font-semibold mb-2 text-gray-700 max-md:sticky max-md:left-0">
                                   Drawdowns — {monthlySelectedTicker}
                                 </h3>
                                 <table className="w-full text-xs">
