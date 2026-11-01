@@ -171,46 +171,54 @@ html {
 
 /* Phones: a table wider than the screen keeps its first column (the names) in place while the
    rest swipes sideways, so you can always tell which row is which. Put "phone-pin-first" on the
-   table's scrolling box. The pinned cell needs a solid background or the swiped figures would show
-   through it: white, or the row's own colour when the row has one (header, total and selected rows,
-   whose class starts with or contains " bg-"; "hover:bg-..." doesn't count, it isn't a colour yet).
-   A thin line on its right edge marks where the swiping part starts. */
+   table's scrolling box. A thin line on the pinned cell's right edge marks where the swiping part
+   starts.
+   - A first cell that spans several columns (a "Total" label, an empty spacer row) is NOT pinned:
+     pinned, it would slide along over the very figures it spans towards.
+   - The pinned cell takes its row's colour ("inherit"), so header, total and selected rows keep
+     theirs. Rows without a colour of their own are given the card's colour first; ":where()" adds
+     no weight, so any colour class on a row still wins over it.
+   - It needs a solid colour, or the swiped figures would show through it. The one see-through row
+     colour inside these tables ("bg-gray-50/60", the reference rows of Monthly's statistics) is
+     made solid here, with the shade it already showed over the white card. */
 @media (max-width: 767px) {
-  .phone-pin-first tr > :first-child {
+  :where(.phone-pin-first tr) {
+    background-color: #fff;
+  }
+  :where(html.dark .phone-pin-first tr) {
+    background-color: var(--d-card);
+  }
+  .phone-pin-first tr.bg-gray-50\/60 {
+    background-color: #fbfcfd;
+  }
+  html.dark .phone-pin-first tr.bg-gray-50\/60 {
+    background-color: #1a1d23;
+  }
+  .phone-pin-first tr > :first-child:not([colspan]) {
     position: sticky;
     left: 0;
     z-index: 1;
-    background-color: #fff;
+    background-color: inherit;
     box-shadow: inset -1px 0 0 #e5e7eb;
   }
-  /* (Not for a see-through row colour such as "bg-gray-50/60": the swiped figures would show
-     through the name cell, so that one keeps the white.) */
-  .phone-pin-first tr[class^="bg-"]:not([class*="/"]) > :first-child,
-  .phone-pin-first tr[class*=" bg-"]:not([class*="/"]) > :first-child {
-    background-color: inherit;
+  html.dark .phone-pin-first tr > :first-child:not([colspan]) {
+    box-shadow: inset -1px 0 0 var(--d-line);
   }
   /* A pinned header row (the EDO tables) stays above the pinned names scrolling under it */
   .phone-pin-first thead {
     z-index: 2;
-  }
-  html.dark .phone-pin-first tr > :first-child {
-    background-color: var(--d-card);
-    box-shadow: inset -1px 0 0 var(--d-line);
-  }
-  html.dark .phone-pin-first tr[class^="bg-"]:not([class*="/"]) > :first-child,
-  html.dark .phone-pin-first tr[class*=" bg-"]:not([class*="/"]) > :first-child {
-    background-color: inherit;
   }
 }
 
 /* Phones: charts read with a finger. Drag sideways along a chart and the values for that date show
    in the chart's top-left corner, where the finger isn't, instead of next to the finger (where it
    hid them). An up-or-down drag still scrolls the page ("pan-y"); only a sideways one is the
-   chart's. The box wraps instead of running off a narrow chart. (Recharts places the box with an
+   chart's, and a two-finger pinch still zooms. The box wraps instead of running off a narrow chart. (Recharts places the box with an
    inline "transform", which only !important can override.) */
 @media (max-width: 767px) {
   .recharts-wrapper {
-    touch-action: pan-y;
+    /* ("pinch-zoom" keeps a two-finger zoom of the page working when it starts on a chart) */
+    touch-action: pan-y pinch-zoom;
   }
   .recharts-tooltip-wrapper {
     transform: translate(4px, 0) !important;

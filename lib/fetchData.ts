@@ -438,8 +438,22 @@ const SHEET_ATTEMPTS = 3;
  * @returns the successful Response
  * @throws Error if every attempt times out or fails
  */
+/**
+ * Thrown when a sheet tab could not be fetched after every attempt. `noAnswer` is true when not one
+ * attempt got any reply (network failure or timeout every time), i.e. most likely no internet
+ * connection; false when Google did answer, just with a server error. The app shows the first as a
+ * calm "Offline" line and the second as an error (PortfolioBacktester.tsx, loadDataFromSheet).
+ */
+export class SheetUnreachableError extends Error {
+  constructor(message: string, readonly noAnswer: boolean) {
+    super(message);
+    this.name = 'SheetUnreachableError';
+  }
+}
+
 async function fetchSheet(url: string, label: string): Promise<Response> {
   let lastProblem = 'unknown error';
+  let gotReply = false; // did any attempt get an answer (even an error page) from Google?
 
   for (let attempt = 1; attempt <= SHEET_ATTEMPTS; attempt++) {
     const controller = new AbortController();
@@ -451,6 +465,7 @@ async function fetchSheet(url: string, label: string): Promise<Response> {
       // A reply arrived in time — success, or a server-side problem worth retrying.
       if (response.ok) return response;
 
+      gotReply = true;
       lastProblem = `HTTP ${response.status} ${response.statusText}`;
 
       // 4xx means the request itself is wrong (deleted tab, unpublished sheet).
@@ -476,7 +491,7 @@ async function fetchSheet(url: string, label: string): Promise<Response> {
     }
   }
 
-  throw new Error(`${label} sheet unreachable after ${SHEET_ATTEMPTS} attempts (${lastProblem})`);
+  throw new SheetUnreachableError(`${label} sheet unreachable after ${SHEET_ATTEMPTS} attempts (${lastProblem})`, !gotReply);
 }
 
 /**

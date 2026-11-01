@@ -37,7 +37,7 @@ import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, Cartesia
 // Switches off chart animation app-wide: every chart draws instantly (see the file for why/how)
 import '@/lib/noChartAnimation';
 import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun, ChevronDown } from 'lucide-react';
-import { fetchSheetData, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData } from '@/lib/fetchData';
+import { fetchSheetData, SheetUnreachableError, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData } from '@/lib/fetchData';
 import { isPhoneScreen, readSavedSheet, saveSheet } from '@/lib/savedSheet';
 import { BottomSheet, PhoneCheckSheet, PhoneChoice, PhoneSelectSheets, periodOptions } from '@/components/PhoneSheet';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
@@ -1704,8 +1704,14 @@ const barPct = (v: number) => (isPhoneScreen() ? v.toFixed(1) : `${v.toFixed(1)}
 const barMillions = (v: number) => (isPhoneScreen() ? v.toFixed(1) : v.toFixed(2));
 // Phones: money on a chart's side axis as "3.5M" / "700k" instead of "3500000", which was wider
 // than the axis and got cut off. Desktop: undefined, so the axis prints numbers as it always has.
+// (Rounded before the unit is chosen, so 999,800 reads "1M", not "1000k".)
 const phoneAxisMoney = (): ((v: number) => string) | undefined => (isPhoneScreen()
-  ? (v: number) => (Math.abs(v) >= 1e6 ? `${+(v / 1e6).toFixed(1)}M` : Math.abs(v) >= 1e3 ? `${Math.round(v / 1e3)}k` : String(Math.round(v)))
+  ? (v: number) => {
+      const whole = Math.round(v);
+      if (Math.abs(whole) < 1000) return String(whole);
+      const thousands = Math.round(v / 1e3);
+      return Math.abs(thousands) < 1000 ? `${thousands}k` : `${+(v / 1e6).toFixed(1)}M`;
+    }
   : undefined);
 
 const PortfolioBacktester = () => {
@@ -1754,6 +1760,24 @@ const PortfolioBacktester = () => {
   // Cross-check the sheet's FX columns against each other. Recomputed only when the
   // data actually reloads, not on every re-render (it walks every row).
   const fxDataIssues = useMemo(() => findFxDataIssues(assetData), [assetData]);
+  // The months a table or chart can end at ("End month" on the Monthly and Graphs tabs): the last
+  // date of each month in the data, newest first, labelled "Oct26"; "" = Latest. Shared by the
+  // desktop dropdowns and the phone boxes, and worked out once per data load.
+  const endMonthChoices = useMemo(() => {
+    const monthMap = new Map<string, string>();
+    for (const row of assetData ?? []) {
+      const d = new Date(row.date);
+      if (isNaN(d.getTime())) continue;
+      const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      monthMap.set(ym, row.date); // last date wins (data is chronological)
+    }
+    return [{ value: '', label: 'Latest' }, ...Array.from(monthMap.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([, date]) => {
+        const d = new Date(date);
+        return { value: date, label: `${MONTH_ABBR[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}` };
+      })];
+  }, [assetData]);
   const [fxWarningDismissed, setFxWarningDismissed] = useState(false);  // hide the banner for this session
 
   // Portfolio configurations - start with one empty portfolio
@@ -2138,8 +2162,9 @@ const PortfolioBacktester = () => {
   // The page an app-icon shortcut asked for ("/?view=positions"), read once when the app opens
   const shortcutView = useRef(typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('view'));
   useEffect(() => {
-    if (!isPhoneScreen()) return;
-    try {
+    // The remembered choices are a phone thing; the shortcut below works at any width (a phone held
+    // sideways is wider than a "phone", and a desktop install shows the shortcuts too)
+    if (isPhoneScreen()) try {
       const saved = JSON.parse(localStorage.getItem('phoneState') ?? 'null');
       if (saved && typeof saved === 'object') {
         if (saved.view) setActiveView(saved.view);
@@ -2166,9 +2191,11 @@ const PortfolioBacktester = () => {
     // remembered one. The "?view=..." is then taken off the address, so it doesn't stick around
     // (it was read once, into shortcutView, so running this again still finds it).
     const fromShortcut = shortcutView.current;
-    if (fromShortcut && NAV_VIEWS.some(v => v.view === fromShortcut)) {
-      setActiveView(fromShortcut as typeof activeView);
-      if (fromShortcut === 'bestToWorst') setBestToWorstLayout('ranking');
+    if (fromShortcut) {
+      if (NAV_VIEWS.some(v => v.view === fromShortcut)) {
+        setActiveView(fromShortcut as typeof activeView);
+        if (fromShortcut === 'bestToWorst') setBestToWorstLayout('ranking');
+      }
       window.history.replaceState(null, '', '/');
     }
   }, []);
@@ -2451,11 +2478,11 @@ const PortfolioBacktester = () => {
       // Phones: no signal at all is not an error in the app, so it gets a calm grey "Offline"
       // line instead of a red error (the status line turns red only when it says "Error"), and
       // the data comes back by itself once the phone is online again (see the effect below).
-      // "No signal" = the phone says it's offline, or the sheet never answered at all (fetchSheet in
-      // lib/fetchData.ts gives up with "... unreachable after 3 attempts", e.g. Wi-Fi connected but no
-      // internet); anything else, e.g. the sheet answering with a fault, is an error.
+      // "No signal" = the phone says it's offline, or the sheet never answered at all (lib/fetchData.ts
+      // gives up with a SheetUnreachableError whose noAnswer is true, e.g. Wi-Fi connected but no
+      // internet); anything else, e.g. Google answering with a server fault, is an error.
       const offline = phone && (!navigator.onLine || error instanceof TypeError
-        || (error instanceof Error && error.message.includes('unreachable')));
+        || (error instanceof SheetUnreachableError && error.noAnswer));
       if (savedShown) {
         // Keep the saved copy on screen rather than an empty page, and say plainly it is old
         setLoadingMessage(offline
@@ -2468,7 +2495,12 @@ const PortfolioBacktester = () => {
           ? `Offline · data from ${fmtStamp(lastFetchedAt)}`
           : `Error updating, showing data from ${fmtStamp(lastFetchedAt)}`);
       } else {
-        setLoadingMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        // (Phone with no signal and nothing to show yet, e.g. the very first opening: "Offline"
+        // too, so the data still arrives by itself once there is a signal. Pulling down can't be
+        // used then, as there is no page to pull.)
+        setLoadingMessage(offline
+          ? 'Offline · the data will load when there is a signal'
+          : `Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
         setIsConnected(false);
       }
     }
@@ -2490,10 +2522,12 @@ const PortfolioBacktester = () => {
   pullRefreshRef.current = () => { if (!isLoading) loadDataFromSheet(); };
 
   // PHONE TURNED SIDEWAYS: every chart grows to the screen's height (globals.css), which moves
-  // everything on the page, so turning the phone would lose the chart you were reading. So: while
-  // you scroll, note the chart nearest the middle of the screen; when the phone turns, bring that
-  // chart back to the middle once the page has settled into its new shape. Turning back upright
-  // does the same. Phones only (a touch screen whose short side is a phone's).
+  // everything on the page, so turning the phone would lose the chart you were reading. So: each
+  // time the page comes to rest after scrolling, note the chart nearest the middle of the screen
+  // (only then, not on every scrolled frame: measuring every chart, 32 of them on Graphs, while the
+  // page moves is wasted work); when the phone turns, bring that chart back to the middle once the
+  // page has settled into its new shape. Turning back upright does the same. Phones only (a touch
+  // screen whose short side is a phone's).
   useEffect(() => {
     if (!window.matchMedia('(pointer: coarse)').matches || Math.min(window.screen.width, window.screen.height) >= 768) return;
     let focus: Element | null = null;
@@ -2511,11 +2545,11 @@ const PortfolioBacktester = () => {
       });
       focus = best;
     };
-    let queued = false;
+    // Pick once the scrolling has paused for 150 ms
+    let restTimer: ReturnType<typeof setTimeout> | undefined;
     const onScroll = () => {
-      if (queued) return;
-      queued = true;
-      requestAnimationFrame(() => { queued = false; pick(); });
+      clearTimeout(restTimer);
+      restTimer = setTimeout(pick, 150);
     };
     // "resize" comes before the scrolling the turn causes, so `focus` is still the chart from before
     const onResize = () => {
@@ -2530,6 +2564,7 @@ const PortfolioBacktester = () => {
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onResize);
     return () => {
+      clearTimeout(restTimer);
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onResize);
     };
@@ -13131,22 +13166,6 @@ const PortfolioBacktester = () => {
 
               {/* Filter controls: Assets, Class, Currency + Prices/Returns toggle + End Date */}
               <AssetFilterControls>
-                {/* Months the table can end at, most recent first: [YYYY-MM, that month's last date] */}
-                {(() => {
-                  const monthMap = new Map<string, string>();
-                  for (const row of assetData!) {
-                    const d = new Date(row.date);
-                    if (isNaN(d.getTime())) continue;
-                    const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-                    monthMap.set(ym, row.date); // last date wins (data is chronological)
-                  }
-                  const endMonths = Array.from(monthMap.entries()).sort((a, b) => b[0].localeCompare(a[0]));
-                  const endLabel = (date: string) => {
-                    const d = new Date(date);
-                    return `${MONTH_ABBR[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}`;
-                  };
-                  return (
-                <>
                 {/* PHONES: View, End month and Seasonality as three boxes on one row that open
                     slide-up panels, like the other pages; the buttons and dropdowns below are
                     desktop only ("contents" makes their wrapper vanish there, so they sit in the
@@ -13160,7 +13179,7 @@ const PortfolioBacktester = () => {
                   />
                   <PhoneChoice
                     label="End month"
-                    options={[{ value: '', label: 'Latest' }, ...endMonths.map(([, date]) => ({ value: date, label: endLabel(date) }))]}
+                    options={endMonthChoices}
                     selected={monthlyEndDate}
                     onPick={setMonthlyEndDate}
                   />
@@ -13204,8 +13223,7 @@ const PortfolioBacktester = () => {
                   onChange={(e) => setMonthlyEndDate(e.target.value)}
                   className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
                 >
-                  <option key="" value="">Latest</option>
-                  {endMonths.map(([ym, date]) => <option key={ym} value={date}>{endLabel(date)}</option>)}
+                  {endMonthChoices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
 
                 {/* Seasonality screen selector — pick a calendar month to rank assets
@@ -13223,9 +13241,6 @@ const PortfolioBacktester = () => {
                   ))}
                 </select>
                 </div>
-                </>
-                  );
-                })()}
               </AssetFilterControls>
 
               {/* ================================================
@@ -16048,32 +16063,15 @@ const PortfolioBacktester = () => {
                     10m SMA
                   </button>
                 </AssetFilterControls>
-                {(() => {
-                  // Months the charts can end at (last date per YYYY-MM), most recent first, as
-                  // "Oct26"; "" = Latest. Shared by the desktop dropdown and the phone box.
-                  const monthMap = new Map<string, string>();
-                  for (const row of assetData!) {
-                    const d = new Date(row.date);
-                    if (isNaN(d.getTime())) continue;
-                    const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-                    monthMap.set(ym, row.date); // last date wins (data is chronological)
-                  }
-                  const endChoices = [{ value: '', label: 'Latest' }, ...Array.from(monthMap.entries())
-                    .sort((a, b) => b[0].localeCompare(a[0]))
-                    .map(([, date]) => {
-                      const d = new Date(date);
-                      return { value: date, label: `${MONTH_ABBR[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}` };
-                    })];
-                  return (
                 <div className={`flex items-center gap-3 ${PHONE_SCROLL_ROW} max-md:w-full`}>
-                  {/* End Date selector — pick which month the charts end at */}
+                  {/* End Date selector — pick which month the charts end at (endMonthChoices) */}
                   <select
                     aria-label="End month"
                     value={graphsEndDate}
                     onChange={(e) => setGraphsEndDate(e.target.value)}
                     className="px-2 py-1 text-xs border border-gray-300 rounded bg-white max-md:hidden"
                   >
-                    {endChoices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    {endMonthChoices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
 
                   {/* Phones: End month, Period and the 10m SMA line as three boxes on one row that
@@ -16082,7 +16080,7 @@ const PortfolioBacktester = () => {
                   <div className="hidden max-md:flex w-full gap-2">
                     <PhoneChoice
                       label="End month"
-                      options={endChoices}
+                      options={endMonthChoices}
                       selected={graphsEndDate}
                       onPick={setGraphsEndDate}
                     />
@@ -16118,8 +16116,6 @@ const PortfolioBacktester = () => {
                     })}
                   </div>
                 </div>
-                  );
-                })()}
               </div>
 
               {/* Responsive grid of mini charts: 3 columns on desktop, 2 on tablet, 1 on mobile */}
