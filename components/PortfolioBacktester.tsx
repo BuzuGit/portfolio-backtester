@@ -13035,6 +13035,48 @@ const PortfolioBacktester = () => {
 
               {/* Filter controls: Assets, Class, Currency + Prices/Returns toggle + End Date */}
               <AssetFilterControls>
+                {/* Months the table can end at, most recent first: [YYYY-MM, that month's last date] */}
+                {(() => {
+                  const monthMap = new Map<string, string>();
+                  for (const row of assetData!) {
+                    const d = new Date(row.date);
+                    if (isNaN(d.getTime())) continue;
+                    const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+                    monthMap.set(ym, row.date); // last date wins (data is chronological)
+                  }
+                  const endMonths = Array.from(monthMap.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+                  const endLabel = (date: string) => {
+                    const d = new Date(date);
+                    return `${MONTH_ABBR[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}`;
+                  };
+                  return (
+                <>
+                {/* PHONES: View, End month and Seasonality as three boxes on one row that open
+                    slide-up panels, like the other pages; the buttons and dropdowns below are
+                    desktop only ("contents" makes their wrapper vanish there, so they sit in the
+                    filter row exactly as before). */}
+                <div className="hidden max-md:flex w-full gap-2">
+                  <PhoneChoice
+                    label="View"
+                    options={[{ value: 'prices', label: 'Prices' }, { value: 'returns', label: 'Returns' }]}
+                    selected={monthlyViewMode}
+                    onPick={v => setMonthlyViewMode(v as 'prices' | 'returns')}
+                  />
+                  <PhoneChoice
+                    label="End month"
+                    options={[{ value: '', label: 'Latest' }, ...endMonths.map(([, date]) => ({ value: date, label: endLabel(date) }))]}
+                    selected={monthlyEndDate}
+                    onPick={setMonthlyEndDate}
+                  />
+                  <PhoneChoice
+                    label="Seasonality"
+                    subtitle="rank by loss rate in a month"
+                    options={[{ value: '', label: 'Off' }, ...MONTH_FULL.map((name, i) => ({ value: String(i), label: name }))]}
+                    selected={seasonMonth === null ? '' : String(seasonMonth)}
+                    onPick={v => setSeasonMonth(v === '' ? null : parseInt(v))}
+                  />
+                </div>
+                <div className="contents max-md:hidden">
                 {/* Toggle buttons to switch between price view and return (%) view */}
                 <div className="flex gap-0">
                   <button
@@ -13066,25 +13108,8 @@ const PortfolioBacktester = () => {
                   onChange={(e) => setMonthlyEndDate(e.target.value)}
                   className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
                 >
-                  {(() => {
-                    // Build list of unique months from data, most recent first
-                    const monthMap = new Map<string, string>();
-                    for (const row of assetData!) {
-                      const d = new Date(row.date);
-                      if (isNaN(d.getTime())) continue;
-                      const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-                      monthMap.set(ym, row.date); // last date wins (data is chronological)
-                    }
-                    const endMonths = Array.from(monthMap.entries()).sort((a, b) => b[0].localeCompare(a[0]));
-                    return [
-                      <option key="" value="">Latest</option>,
-                      ...endMonths.map(([ym, date]) => {
-                        const d = new Date(date);
-                        const label = `${MONTH_ABBR[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}`;
-                        return <option key={ym} value={date}>{label}</option>;
-                      })
-                    ];
-                  })()}
+                  <option key="" value="">Latest</option>
+                  {endMonths.map(([ym, date]) => <option key={ym} value={date}>{endLabel(date)}</option>)}
                 </select>
 
                 {/* Seasonality screen selector — pick a calendar month to rank assets
@@ -13101,6 +13126,10 @@ const PortfolioBacktester = () => {
                     <option key={i} value={i}>{name}</option>
                   ))}
                 </select>
+                </div>
+                </>
+                  );
+                })()}
               </AssetFilterControls>
 
               {/* ================================================
@@ -13133,7 +13162,8 @@ const PortfolioBacktester = () => {
                             <tr className="border-b-2 border-gray-200 text-gray-600">
                               <th className="text-right py-2 px-2 bg-gray-50">#</th>
                               <th className="text-left py-2 px-2 bg-gray-50">Asset</th>
-                              <th className="text-left py-2 px-2 bg-gray-50">Ticker</th>
+                              {/* Phones: no Ticker column (the name says which asset), so the table fits */}
+                              <th className="text-left py-2 px-2 bg-gray-50 max-md:hidden">Ticker</th>
                               <th className="text-right py-2 px-2 bg-gray-100 font-semibold">Loss rate</th>
                               <th className="text-right py-2 px-2 bg-gray-50">Avg {monthName.slice(0, 3)}</th>
                               <th className="text-right py-2 px-2 bg-gray-50">Years</th>
@@ -13164,7 +13194,7 @@ const PortfolioBacktester = () => {
                                 >
                                   <td className="text-right py-1.5 px-2 text-gray-400">{i + 1}</td>
                                   <td className="text-left py-1.5 px-2 font-medium">{r.name}</td>
-                                  <td className="text-left py-1.5 px-2 text-gray-500">{r.ticker}</td>
+                                  <td className="text-left py-1.5 px-2 text-gray-500 max-md:hidden">{r.ticker}</td>
                                   <td className={`text-right py-1.5 px-2 font-semibold ${lossColor}`}>
                                     {r.losses}/{r.years} ({lossPct}%)
                                   </td>
@@ -13250,9 +13280,10 @@ const PortfolioBacktester = () => {
                       <table className="w-full text-xs border-collapse">
                         <thead>
                           <tr className="border-b border-gray-200">
-                            {/* Asset Name - sticky left column, sortable */}
+                            {/* Asset Name - sticky left column, sortable. Phones: 104px instead of 160px
+                                (a long name goes onto two lines), so about four months fit beside it. */}
                             <th
-                              className={`sticky left-0 z-10 text-left py-1 px-1 min-w-[160px] border-r border-gray-200 cursor-pointer select-none ${monthlyHeadBg('name')}`}
+                              className={`sticky left-0 z-10 text-left py-1 px-1 min-w-[160px] max-md:min-w-[104px] max-md:w-[104px] border-r border-gray-200 cursor-pointer select-none ${monthlyHeadBg('name')}`}
                               onClick={() => setMonthlySortColumn(monthlySortColumn === 'name' ? null : 'name')}
                             >
                               Asset
@@ -13898,8 +13929,9 @@ const PortfolioBacktester = () => {
                       // The id lets the Markets tab scroll straight here after opening an asset.
                       return (
                         <div id="monthly-asset-detail" className="mt-6 border-t border-gray-200 pt-4 scroll-mt-4">
-                          {/* Title + Period buttons */}
-                          <div className="flex items-center justify-between mb-3 px-2">
+                          {/* Title + Period buttons. Phones: the title on its own line, the two boxes
+                              under it at full width (side by side they squeezed the title into a strip) */}
+                          <div className="flex items-center justify-between mb-3 px-2 max-md:flex-col max-md:items-stretch max-md:gap-2">
                             <h3 className="text-sm font-semibold text-gray-700">
                               {monthlySelectedTicker} — {assetName}
               {/* Total return for the visible period, colored green/red. Null on a macro
@@ -14268,7 +14300,10 @@ const PortfolioBacktester = () => {
                               + `Note: switching to another asset resets this to that asset's own currency, so pick one currency deliberately before comparing correlations across assets.`;
 
                             return (
-                              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4">
+                              // Phones: only the table swipes ("max-md:overflow-x-visible" on the card, the
+                              // wrapper below scrolls instead), so the heading and the note under the table
+                              // stay readable, and the row names stay put while you swipe ("phone-pin-first")
+                              <div className="bg-white p-4 rounded-lg shadow overflow-x-auto mb-4 max-md:overflow-x-visible">
                                 {/* The window used to be a column repeated on every row. It is the same
                                     fact for the whole table, so it belongs in the heading — the key part
                                     dark, the exact dates and the basis as quieter supporting detail. */}
@@ -14278,6 +14313,7 @@ const PortfolioBacktester = () => {
                                     {' '}({windowStart.slice(0, 7)} / {windowEnd.slice(0, 7)}) based on month end prices
                                   </span>
                                 </h3>
+                                <div className="max-md:overflow-x-auto phone-pin-first">
                                 <table className="w-full text-xs">
                                   <thead>
                                     <tr className="border-b-2 border-gray-200">
@@ -14416,6 +14452,7 @@ const PortfolioBacktester = () => {
                                     })}
                                   </tbody>
                                 </table>
+                                </div>
                                 {/* How to reproduce the 50/50 row in the Backtest tab. Without the exact
                                     window you would have to guess which months the period covers. */}
                                 {/* Hidden along with the row it explains when the table is collapsed. */}
