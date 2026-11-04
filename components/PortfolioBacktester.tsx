@@ -8733,14 +8733,15 @@ const PortfolioBacktester = () => {
 
   // Page background: flat, neutral light grey so the white cards stand out cleanly.
   //
-  // LAYOUT: the content column is 1,268px on every page (it was 1,152px; made 10% wider so wide
-  // tables fit without scrolling sideways). From 1,520px of window width there is room for a 192px
-  // sidebar + 8px gap beside it (1,268 + 8 + 192 + the page's 2×16px padding = 1,500, plus ~17px
-  // for the strip always kept free for the vertical scrollbar, see globals.css = 1,517), so the
-  // sidebar sits to its left and the pair is centred as one block —
-  // the content keeps its full width and the sidebar uses what used to be empty grey margin.
-  // Below 1,520px the sidebar disappears and a "Menu" button opens the drawer instead, so the
-  // content never gives up width to navigation.
+  // LAYOUT (desktop): the same width rule as Cash Flow Tracker, so both apps fill a laptop screen
+  // the same way. The page stretches with the window (20px of grey at each side) up to a block
+  // 1,656px wide; only on wider screens than that does grey margin appear around it, centred.
+  // (It used to be a fixed 1,268px content column, which left ~95px of empty grey each side on a
+  // 1,707px-wide laptop window.)
+  // From 1,520px of window width the 192px sidebar + 8px gap sits to the left of the content and
+  // the content takes all the remaining width (at 1,520px that is still ~1,263px, so wide tables
+  // keep the room they were sized for). Below 1,520px the sidebar disappears and a "Menu" button
+  // opens the drawer instead, so the content never gives up width to navigation.
   // (The sidebar was 168px; it grew to 192px so the dark-mode icon fits beside Refresh Data.)
   //
   // The sidebar is a dark panel exactly one window tall (minus the 16px margin top and bottom),
@@ -8752,8 +8753,8 @@ const PortfolioBacktester = () => {
   // screen, so both are thinner there; the extra bottom padding keeps the last rows clear of the
   // tab bar along the bottom (56px, plus the iPhone home bar's strip when there is one).
   return (
-    <div className="min-h-screen bg-page p-4 max-md:p-2 max-md:pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
-      <div className="mx-auto max-w-[1268px] min-[1520px]:max-w-[1468px] min-[1520px]:flex min-[1520px]:items-start min-[1520px]:gap-2">
+    <div className="min-h-screen bg-page p-4 md:px-5 max-md:p-2 max-md:pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
+      <div className="mx-auto max-w-[1656px] min-[1520px]:flex min-[1520px]:items-start min-[1520px]:gap-2">
       <nav aria-label="Pages" className="hidden min-[1520px]:block w-[192px] shrink-0 sticky top-4 h-[calc(100vh-2rem)] rounded-xl bg-gradient-to-b from-slate-900 to-black shadow-sm">
         <div className="h-full flex flex-col p-2">
           {/* Data controls: Refresh button with the dark-mode icon beside it, then the load status in small print */}
@@ -8783,7 +8784,7 @@ const PortfolioBacktester = () => {
           {navFooter}
         </div>
       </nav>
-      <div className="min-w-0 min-[1520px]:w-[1268px] min-[1520px]:shrink-0">
+      <div className="min-w-0 min-[1520px]:flex-1">
         {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy).
             On wide screens no bottom margin, so it ends level with the dark sidebar beside it. */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1520px]:mb-0 max-md:p-3">
