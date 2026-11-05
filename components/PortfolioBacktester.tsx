@@ -1239,7 +1239,7 @@ type PeriodicReturnsRow = {
 // The colour world equities are drawn in wherever they appear as a reference. It matches the
 // amber dot already used for the market row in the Monthly statistics table, so "the market"
 // looks the same everywhere on the page.
-const MARKET_LINE_COLOR = '#F5A623';
+const MARKET_LINE_COLOR = '#c8952a'; // CHART_PALETTE.gold (defined further down)
 
 // And the 50/50 blend of the asset with the market. Matches the grey dot on that row of the
 // Monthly statistics table, for the same reason.
@@ -1487,6 +1487,43 @@ const CHART_PALETTE = {
 } as const;
 
 // ----------------------------------------
+// THE APP'S COLOUR THEME ("Calm", chosen on 2026-11-05)
+// ----------------------------------------
+// Five rules, so every page uses colour the same way:
+//  1. GAIN and LOSS are the one green and the one red, for gains and losses only. The green-* and
+//     red-* Tailwind classes are the same two colours (tailwind.config.js). Nothing else (a line,
+//     a currency, a portfolio) is ever green or red, so a red bar always means a loss.
+//  2. heatColor() (below) is the one heat scale for every heat-coloured cell.
+//  3. CURRENCY_COLORS and ASSET_CLASS_COLORS give each currency and asset class one colour, on
+//     every page.
+//  4. SERIES_COLORS is the order portfolios and other lines take their colours in (dark slate
+//     first, the app's main colour). MARKET_LINE_COLOR (gold) is world equities wherever it is the
+//     yardstick; the 10-month SMA, inflation and the Trend Following strategy have fixed colours.
+//  5. Amber = warning, a blue tint = a highlighted row, grey = neutral.
+// Dark mode: app/dark.css swaps GAIN and LOSS for lighter versions that read on a dark card.
+const GAIN = '#2f7a4f';
+const LOSS = '#b8423a';
+const SERIES_COLORS = ['#1e293b', CHART_PALETTE.blue, CHART_PALETTE.teal, CHART_PALETTE.violet, CHART_PALETTE.rose, CHART_PALETTE.wine];
+const SMA_COLOR = CHART_PALETTE.blue;           // the 10-month moving average line, on every chart
+const INFLATION_COLOR = CHART_PALETTE.terracotta; // inflation / CPI lines (as EDO and Monthly already had)
+const TREND_COLOR = CHART_PALETTE.teal;         // the Trend Following strategy, beside Buy & Hold in blue
+
+// The one heat scale: 7 colours from deep red (worst) through neutral grey (about zero) to deep
+// green (best). `t` runs from -1 to +1. Tables whose numbers are written in the page's normal
+// dark text pass maxStrength 0.67, which stops at the middle shades so the text stays readable;
+// tables that pick white or dark text per cell (readableTextOn) use the full range.
+const HEAT_STOPS = ['#b8423a', '#dc8a82', '#f3d0cc', '#f1f2f4', '#cfe6d6', '#86bf98', '#2f7a4f'];
+const heatColorLight = (t: number, maxStrength = 1): string => {
+  const c = Math.max(-1, Math.min(1, t)) * maxStrength;
+  const pos = (c + 1) * 3;                 // 0 … 6 along the stops
+  const i = Math.min(5, Math.floor(pos));
+  const f = pos - i;                       // how far between stop i and stop i+1
+  const rgb = (h: string) => [1, 3, 5].map(k => parseInt(h.slice(k, k + 2), 16));
+  const [a, b] = [rgb(HEAT_STOPS[i]), rgb(HEAT_STOPS[i + 1])];
+  return '#' + a.map((v, k) => Math.round(v + (b[k] - v) * f).toString(16).padStart(2, '0')).join('');
+};
+
+// ----------------------------------------
 // ONE LOOK FOR EVERY BUTTON AND FILTER
 // ----------------------------------------
 // Chosen on 2026-11-05 after comparing four mock-ups: Cash Flow Tracker's compact grouped strip,
@@ -1524,10 +1561,12 @@ const ASSET_CLASS_COLORS: Record<string, string> = {
   'Cash': '#94a3b8',
 };
 
-// Colors for the by-currency bar chart — one distinct color per native currency
+// One colour per currency, on EVERY page (theme rule 3): Positions' by-currency chart, the
+// Portfolio tab's yearly bars and drawdowns, the currency toggles. PLN, the home currency, takes
+// the app's main dark slate. None of them is red or green, so a currency never reads as a loss.
 const CURRENCY_COLORS: Record<string, string> = {
-  PLN: CHART_PALETTE.wine, USD: CHART_PALETTE.blue, SGD: CHART_PALETTE.teal,
-  EUR: CHART_PALETTE.violet, CHF: CHART_PALETTE.terracotta,
+  PLN: '#1e293b', USD: CHART_PALETTE.blue, SGD: CHART_PALETTE.teal,
+  EUR: CHART_PALETTE.violet, CHF: CHART_PALETTE.rose,
   'M&C': CHART_PALETTE.gold, // matches the Metals & Crypto asset class color
 };
 
@@ -1630,18 +1669,15 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   return [f(0), f(8), f(4)];
 }
 
+/** The one heat scale (heatColorLight, with the theme at the top of the file), dark-mode aware. */
+const heatColor = (t: number, maxStrength = 1): string => themedCell(heatColorLight(t, maxStrength));
+
 /**
- * Return Map "Return" highlight: pale for returns near zero, deep green for big gains, deep red for
- * big losses. Anything beyond ±40% gets the deepest shade so one outlier doesn't wash out the rest.
+ * Return Map "Return" highlight and the Markets / Holdings heat cells: pale for returns near zero,
+ * deep green for big gains, deep red for big losses. Anything beyond ±40% gets the deepest shade so
+ * one outlier doesn't wash out the rest. (Their cells pick white or dark text per colour.)
  */
-const returnHeatColor = (ret: number): string => {
-  const t = Math.min(Math.abs(ret) / 40, 1);
-  const [from, to] = ret >= 0
-    ? [[236, 253, 243], [21, 128, 61]]   // very light green → green-700
-    : [[254, 242, 242], [185, 28, 28]];  // very light red → red-700
-  const mix = from.map((c, i) => Math.round(c + (to[i] - c) * t));
-  return themedCell(`#${mix.map(c => c.toString(16).padStart(2, '0')).join('')}`);
-};
+const returnHeatColor = (ret: number): string => heatColor(ret / 40);
 
 // "Group Metals & Crypto" feature (Positions tab): while on, assets take the class in the Lookup
 // tab's PortfolioClass column (gold, silver and crypto: "Metals & Crypto"), and those also get a
@@ -4181,7 +4217,7 @@ const PortfolioBacktester = () => {
    */
   const addPortfolio = () => {
     // Cycle through these colors for different portfolios
-    const colors = ['#000000', '#F5A623', '#ef4444', '#3b82f6', '#8b5cf6', '#ec4899'];
+    const colors = SERIES_COLORS;
     const newId = Math.max(...portfolios.map(p => p.id), 0) + 1;
 
     setPortfolios([...portfolios, {
@@ -6892,74 +6928,34 @@ const PortfolioBacktester = () => {
   };
 
   /**
-   * Generates a heatmap color based on value position in a min-max range.
-   * Uses HSL color space: Hue 0 (red) = lowest, 60 (yellow) = middle, 120 (green) = highest
-   *
-   * @param value - The value to color
-   * @param min - Minimum value in the range
-   * @param max - Maximum value in the range
-   * @returns HSL color string (e.g., "hsl(60, 80%, 85%)")
+   * Heatmap colour for a value's position in a min–max range (used by the Annual prices table):
+   * lowest = red, middle = neutral grey, highest = green, on the theme's one heat scale
+   * (heatColor). These cells keep the page's normal dark text, so the scale stops at its
+   * middle shades (0.67) to stay readable.
    */
   const getHeatmapColor = (value: number, min: number, max: number): string => {
-    // Handle edge case where all values are the same
-    if (min === max) {
-      return themedCell('hsl(60, 80%, 85%)');  // Neutral yellow
-    }
-
-    // Calculate position in range (0 = min, 1 = max)
-    const position = (value - min) / (max - min);
-
-    // Map position to hue: 0 (red) -> 60 (yellow) -> 120 (green)
-    const hue = position * 120;
-
-    // Return HSL color with fixed saturation and lightness for readability
-    return themedCell(`hsl(${hue}, 80%, 85%)`);
+    if (min === max) return heatColor(0);
+    const position = (value - min) / (max - min);   // 0 = min, 1 = max
+    return heatColor(position * 2 - 1, 0.67);
   };
 
   /**
-   * Price heatmap: dark red (lowest) → white (mid) → dark green (highest).
-   * Used for all price tables (Monthly prices, Annual prices, detail view prices).
-   * Only the background colour changes; the text keeps the page's normal colour (dark in light
-   * mode, light in dark mode, where themedCell turns the white middle near-black).
+   * Price heatmap: lowest red → middle neutral → highest green, per row, on the one heat scale.
+   * Used for all price tables (Monthly prices, Annual prices, detail view prices). Only the
+   * background colour changes; the text keeps the page's normal colour.
    */
   const getPriceHeatmap = (value: number, min: number, max: number): string => {
-    if (min === max) return themedCell('#ffffff');
+    if (min === max) return heatColor(0);
     const pos = (value - min) / (max - min); // 0 = min, 1 = max
-
-    let r: number, g: number, b: number;
-    if (pos < 0.5) {
-      // Bottom half: soft muted red → white
-      const t = pos / 0.5;
-      r = Math.round(205 + t * (255 - 205)); // 205 → 255
-      g = Math.round(130 + t * (255 - 130)); // 130 → 255
-      b = Math.round(130 + t * (255 - 130)); // 130 → 255
-    } else {
-      // Top half: white → soft muted green
-      const t = (pos - 0.5) / 0.5;
-      r = Math.round(255 - t * (255 - 120)); // 255 → 120
-      g = Math.round(255 - t * (255 - 190)); // 255 → 190
-      b = Math.round(255 - t * (255 - 120)); // 255 → 120
-    }
-
-    return themedCell(`rgb(${r}, ${g}, ${b})`);
+    return heatColor(pos * 2 - 1, 0.67);
   };
 
   /**
-   * Maps a correlation value (-1 to +1) to a color:
-   * +1 (perfect positive correlation) → Red (assets move together, less diversification)
-   *  0 (no correlation) → Yellow (assets are independent)
-   * -1 (perfect negative correlation) → Green (assets move opposite, great diversification)
-   *
-   * Uses the same HSL approach as getHeatmapColor but with a fixed range of -1 to +1.
+   * Correlation (-1 to +1) on the one heat scale:
+   * +1 (move together, little diversification) → red; 0 (independent) → neutral grey;
+   * -1 (move opposite, great diversification) → green.
    */
-  const getCorrelationColor = (value: number): string => {
-    // Formula: hue = (1 - value) * 60
-    // When value = +1: hue = 0 (red)
-    // When value =  0: hue = 60 (yellow)
-    // When value = -1: hue = 120 (green)
-    const hue = (1 - value) * 60;
-    return themedCell(`hsl(${hue}, 80%, 85%)`);
-  };
+  const getCorrelationColor = (value: number): string => heatColor(-value, 0.67);
 
   /**
    * Calculates the NxN correlation matrix for all filtered assets using monthly returns.
@@ -9664,7 +9660,7 @@ const PortfolioBacktester = () => {
                             >
                               {/* Single portfolio: colour each bar by sign, like the Monthly tab */}
                               {singleSeries && rows.map((row, index) => (
-                                <Cell key={index} fill={Number(row[result.portfolio.name]) < 0 ? '#ef4444' : '#000000'} />
+                                <Cell key={index} fill={Number(row[result.portfolio.name]) < 0 ? LOSS : GAIN} />
                               ))}
                               {/* Labels for positive returns - positioned above bar.
                                   A streak label is a plain month count, not a percentage. */}
@@ -9684,7 +9680,7 @@ const PortfolioBacktester = () => {
                                   dataKey={result.portfolio.name}
                                   position="bottom"
                                   formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                  style={{ fontSize: '11px', fill: '#ef4444' }}
+                                  style={{ fontSize: '11px', fill: LOSS }}
                                 />
                               )}
                             </Bar>
@@ -10973,11 +10969,11 @@ const PortfolioBacktester = () => {
                         </p>
                       ) : (
                         <p className="mt-1">
-                          <span className="inline-block w-3 h-3 border border-gray-200 mr-1" style={{ backgroundColor: themedCell('hsl(0, 80%, 85%)') }}></span>
+                          <span className="inline-block w-3 h-3 border border-gray-200 mr-1" style={{ backgroundColor: heatColor(-1, 0.67) }}></span>
                           Lowest price
-                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: themedCell('hsl(60, 80%, 85%)') }}></span>
+                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: heatColor(0) }}></span>
                           Mid
-                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: themedCell('hsl(120, 80%, 85%)') }}></span>
+                          <span className="inline-block w-3 h-3 border border-gray-200 ml-3 mr-1" style={{ backgroundColor: heatColor(1, 0.67) }}></span>
                           Highest price
                         </p>
                       )}
@@ -11345,7 +11341,7 @@ const PortfolioBacktester = () => {
               const W = 80, H = 24;
               const lo = Math.min(...vals), hi = Math.max(...vals), sp = (hi - lo) || 1;
               const pts = vals.map((v, i) => `${((i / (vals.length - 1)) * W).toFixed(1)},${(H - 1 - ((v - lo) / sp) * (H - 2)).toFixed(1)}`).join(' ');
-              const col = (vals[vals.length - 1] >= vals[0]) !== reversed ? '#15803d' : '#b91c1c';
+              const col = (vals[vals.length - 1] >= vals[0]) !== reversed ? GAIN : LOSS;
               return (
                 <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block">
                   <polygon points={`0,${H} ${pts} ${W},${H}`} fill={col} opacity={0.08} />
@@ -11648,7 +11644,7 @@ const PortfolioBacktester = () => {
                             cursor={{ fill: 'rgba(0,0,0,0.05)' }}
                           />
                           <Bar dataKey="v" isAnimationActive={false}>
-                            {data.map(d => <Cell key={d.date} fill={d.v < 0 ? '#dc2626' : '#111827'} />)}
+                            {data.map(d => <Cell key={d.date} fill={d.v < 0 ? LOSS : '#111827'} />)}
                           </Bar>
                         </BarChart>
                       </ResponsiveContainer>
@@ -12896,7 +12892,7 @@ const PortfolioBacktester = () => {
                             x={p.date}
                             y={p.v}
                             r={5}
-                            fill={p.max ? '#22c55e' : '#ef4444'}
+                            fill={p.max ? GAIN : LOSS}
                             stroke="#fff"
                             strokeWidth={2}
                             // A low sitting on the bottom of the axis would print its value over the
@@ -12926,7 +12922,7 @@ const PortfolioBacktester = () => {
                           cursor={{ fill: 'rgba(0,0,0,0.05)' }}
                         />
                         <Bar dataKey="margin" isAnimationActive={false}>
-                          {ratesData.map(d => <Cell key={d.series} fill={(d.margin ?? 0) < 0 ? '#dc2626' : '#111827'} />)}
+                          {ratesData.map(d => <Cell key={d.series} fill={(d.margin ?? 0) < 0 ? LOSS : '#111827'} />)}
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -13005,21 +13001,21 @@ const PortfolioBacktester = () => {
                           />
                           <Bar dataKey="ret" isAnimationActive={false} cursor="pointer">
                             {outcomeData.map(d => (
-                              <Cell key={d.series} fill={d.series === mBest.s.series ? '#22c55e' : d.series === mWorst.s.series ? '#ef4444' : d.ret < 0 ? '#dc2626' : '#111827'} />
+                              <Cell key={d.series} fill={d.series === mBest.s.series ? GAIN : d.series === mWorst.s.series ? LOSS : d.ret < 0 ? LOSS : '#111827'} />
                             ))}
                           </Bar>
                           <ReferenceDot x={mBest.s.sold} y={mBest.final} r={0} fill="none" stroke="none"
-                            label={{ value: `${mBest.s.series} ${fmtPctSigned(mBest.final)}`, position: 'top', fontSize: 11, fill: '#15803d', fontWeight: 600 }} />
+                            label={{ value: `${mBest.s.series} ${fmtPctSigned(mBest.final)}`, position: 'top', fontSize: 11, fill: GAIN, fontWeight: 600 }} />
                           <ReferenceDot x={mWorst.s.sold} y={mWorst.final} r={0} fill="none" stroke="none"
-                            label={{ value: `${mWorst.s.series} ${fmtPctSigned(mWorst.final)}`, position: mWorst.final < 0 ? 'bottom' : 'top', fontSize: 11, fill: '#b91c1c', fontWeight: 600 }} />
+                            label={{ value: `${mWorst.s.series} ${fmtPctSigned(mWorst.final)}`, position: mWorst.final < 0 ? 'bottom' : 'top', fontSize: 11, fill: LOSS, fontWeight: 600 }} />
                         </BarChart>
                       </ResponsiveContainer>
 
                       {/* Every path on one chart: grey, with the best, worst and the median picked out */}
                       <div className="flex flex-wrap gap-4 text-xs text-gray-600 mt-4 mb-1">
                         <span>Every matured series from purchase (100) to maturity, {basisLabel}:</span>
-                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#22c55e]" />Best ({mBest.s.series})</span>
-                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#ef4444]" />Worst ({mWorst.s.series})</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#2f7a4f]" />Best ({mBest.s.series})</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#b8423a]" />Worst ({mWorst.s.series})</span>
                         <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#111827]" />Median of all, month by month</span>
                         <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#d1d5db]" />Others</span>
                       </div>
@@ -13046,13 +13042,13 @@ const PortfolioBacktester = () => {
                           {maturedPaths.filter(p => p !== mBest && p !== mWorst).map(p => (
                             <Line key={p.s.series} dataKey={p.s.series} stroke="#d1d5db" strokeWidth={1} dot={false} isAnimationActive={false} activeDot={false} />
                           ))}
-                          <Line dataKey={mWorst.s.series} stroke="#ef4444" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line dataKey={mBest.s.series} stroke="#22c55e" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line dataKey={mWorst.s.series} stroke={LOSS} strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line dataKey={mBest.s.series} stroke={GAIN} strokeWidth={2} dot={false} isAnimationActive={false} />
                           <Line dataKey="median" stroke="#111827" strokeWidth={2} dot={false} isAnimationActive={false} />
                           <Customized component={<EdgeBubbles defs={[
-                            { value: mBest.pts[120], color: '#22c55e', label: formatPrice(mBest.pts[120]) },
+                            { value: mBest.pts[120], color: GAIN, label: formatPrice(mBest.pts[120]) },
                             { value: pathsData[120].median, color: '#111827', label: formatPrice(pathsData[120].median) },
-                            { value: mWorst.pts[120], color: '#ef4444', label: formatPrice(mWorst.pts[120]) },
+                            { value: mWorst.pts[120], color: LOSS, label: formatPrice(mWorst.pts[120]) },
                           ]} />} />
                         </LineChart>
                       </ResponsiveContainer>
@@ -13591,13 +13587,9 @@ const PortfolioBacktester = () => {
                                         asset.signals[colIdx] === 'SELL' ? 'font-bold' : ''
                                       }`}
                                       style={{
-                                        backgroundColor: ret !== null
-                                          ? ret >= 0
-                                            ? `hsla(120, 70%, 45%, ${Math.min(Math.abs(ret) / 15, 1) * 0.3 + 0.05})`
-                                            : `hsla(0, 70%, 45%, ${Math.min(Math.abs(ret) / 15, 1) * 0.3 + 0.05})`
-                                          : undefined,
+                                        backgroundColor: ret !== null ? heatColor(ret / 15, 0.67) : undefined,
                                         color: ret !== null
-                                          ? ret >= 0 ? '#166534' : '#991b1b'
+                                          ? ret >= 0 ? '#245f3d' : '#93342e'
                                           : '#9ca3af'
                                       }}
                                     >
@@ -13652,18 +13644,18 @@ const PortfolioBacktester = () => {
                         <div className="flex items-center gap-2">
                           <span>Price heatmap (per row):</span>
                           <div className="flex items-center">
-                            <div className="w-6 h-4 rounded-l" style={{ backgroundColor: themedCell('hsl(0, 80%, 85%)') }}></div>
-                            <div className="w-6 h-4" style={{ backgroundColor: themedCell('hsl(60, 80%, 85%)') }}></div>
-                            <div className="w-6 h-4 rounded-r" style={{ backgroundColor: themedCell('hsl(120, 80%, 85%)') }}></div>
+                            <div className="w-6 h-4 rounded-l" style={{ backgroundColor: heatColor(-1, 0.67) }}></div>
+                            <div className="w-6 h-4" style={{ backgroundColor: heatColor(0) }}></div>
+                            <div className="w-6 h-4 rounded-r" style={{ backgroundColor: heatColor(1, 0.67) }}></div>
                           </div>
                           <span>Low → High</span>
                         </div>
                       ) : (
                         <div className="flex items-center gap-2">
                           <span>Returns:</span>
-                          <span className="px-2 py-0.5 rounded" style={{ backgroundColor: 'hsla(120, 70%, 45%, 0.2)', color: '#166534' }}>+</span>
+                          <span className="px-2 py-0.5 rounded" style={{ backgroundColor: heatColor(0.4, 0.67), color: '#245f3d' }}>+</span>
                           <span>Positive</span>
-                          <span className="px-2 py-0.5 rounded" style={{ backgroundColor: 'hsla(0, 70%, 45%, 0.2)', color: '#991b1b' }}>−</span>
+                          <span className="px-2 py-0.5 rounded" style={{ backgroundColor: heatColor(-0.4, 0.67), color: '#93342e' }}>−</span>
                           <span>Negative</span>
                         </div>
                       )}
@@ -13929,7 +13921,7 @@ const PortfolioBacktester = () => {
                           // The SMA only exists on the nominal series, which is what this branch draws.
                           const lastSma = priceData[priceData.length - 1]?.sma10;
                           if (lastSma != null) {
-                            priceBubbleDefs.push({ value: lastSma, color: '#ef4444', label: formatPrice(lastSma) });
+                            priceBubbleDefs.push({ value: lastSma, color: SMA_COLOR, label: formatPrice(lastSma) });
                           }
                         }
                       }
@@ -13948,7 +13940,7 @@ const PortfolioBacktester = () => {
                       const smaDistBubbleDefs: BubbleDef[] = [];
                       if (lastSmaDist) {
                         // Green bubble if above SMA (positive distance), red if below
-                        const bubbleColor = lastSmaDist.smaDist >= 0 ? '#16a34a' : '#ef4444';
+                        const bubbleColor = lastSmaDist.smaDist >= 0 ? GAIN : LOSS;
                         smaDistBubbleDefs.push({
                           value: lastSmaDist.smaDist,
                           color: bubbleColor,
@@ -14583,7 +14575,7 @@ const PortfolioBacktester = () => {
                                             title={`${row.hint}\n\nMeasured over ${formatPeriod(row.periodMonths)}.`}>
                                           {!isAsset && (
                                             <span className="inline-block w-2 h-2 rounded-sm mr-1.5"
-                                                  style={{ backgroundColor: rowIdx === 1 ? '#F5A623' : '#9ca3af' }} />
+                                                  style={{ backgroundColor: rowIdx === 1 ? MARKET_LINE_COLOR : '#9ca3af' }} />
                                           )}
                                           {row.label}
                                         </td>
@@ -14930,7 +14922,7 @@ const PortfolioBacktester = () => {
                                   type="monotone"
                                   dataKey="sma10"
                                   name="10M SMA"
-                                  stroke="#ef4444"
+                                  stroke={SMA_COLOR}
                                   strokeWidth={1.5}
                                   dot={false}
                                   connectNulls
@@ -15002,7 +14994,7 @@ const PortfolioBacktester = () => {
                                   x={shownMaxPoint.date}
                                   y={shownMaxPoint.price}
                                   r={6}
-                                  fill="#22c55e"
+                                  fill={GAIN}
                                   stroke="#fff"
                                   strokeWidth={2}
                                   label={{
@@ -15020,7 +15012,7 @@ const PortfolioBacktester = () => {
                                   x={shownMinPoint.date}
                                   y={shownMinPoint.price}
                                   r={6}
-                                  fill="#ef4444"
+                                  fill={LOSS}
                                   stroke="#fff"
                                   strokeWidth={2}
                                   label={{
@@ -15073,14 +15065,14 @@ const PortfolioBacktester = () => {
                                     x={maxDrawdownPoint.date}
                                     y={maxDrawdownPoint.drawdown}
                                     r={6}
-                                    fill="#ef4444"
+                                    fill={LOSS}
                                     stroke="#fff"
                                     strokeWidth={2}
                                     label={{
                                       value: `${maxDrawdownPoint.drawdown.toFixed(1)}%`,
                                       position: 'left',
                                       fontSize: 11,
-                                      fill: '#ef4444',
+                                      fill: LOSS,
                                       fontWeight: 600,
                                     }}
                                   />
@@ -15232,7 +15224,7 @@ const PortfolioBacktester = () => {
                                   <Bar dataKey="return" isAnimationActive={false}>
                                     {/* Color each bar: black for positive, red for negative */}
                                     {returnsData.map((entry, index) => (
-                                      <Cell key={index} fill={entry.return >= 0 ? '#000000' : '#ef4444'} />
+                                      <Cell key={index} fill={entry.return >= 0 ? GAIN : LOSS} />
                                     ))}
                                     {/* Labels above positive bars — a plain month count on a streak
                                         view, where a "%" would be nonsense */}
@@ -15252,7 +15244,7 @@ const PortfolioBacktester = () => {
                                         dataKey="return"
                                         position="bottom"
                                         formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                        style={{ fontSize: '9px', fill: '#ef4444' }}
+                                        style={{ fontSize: '9px', fill: LOSS }}
                                       />
                                     )}
                                   </Bar>
@@ -15400,8 +15392,8 @@ const PortfolioBacktester = () => {
                               const text = `${gap >= 0 ? '+' : ''}${gap.toFixed(1)}`;
                               const muted = Math.abs(gap) < GAP_MUTED_THRESHOLD;
                               const pillW = text.length * 6 + 10;
-                              const fg = muted ? '#9ca3af' : gap >= 0 ? '#15803d' : '#b91c1c';
-                              const bg = gap >= 0 ? '#dcfce7' : '#fee2e2';
+                              const fg = muted ? '#9ca3af' : gap >= 0 ? GAIN : LOSS;
+                              const bg = gap >= 0 ? '#d9ecdf' : '#f6e0dd';
                               // Sits low in the top margin so it reads as belonging to the chart rather
                               // than floating above it. The Y-axis headroom above keeps this band clear.
                               return (
@@ -15506,9 +15498,8 @@ const PortfolioBacktester = () => {
                                           labelFormatter={(l: string) => `${l} ${stressYear}`}
                                         />
                                         <ReferenceLine y={0} stroke="#9CA3AF" strokeWidth={1} />
-                                        {/* Black for the asset and #F5A623 for the benchmark are the first
-                                            two portfolio colours on the Backtest tab, so "mine vs the other
-                                            one" reads the same way across the app.
+                                        {/* Black for the asset and gold (MARKET_LINE_COLOR) for the benchmark:
+                                            world equities are gold wherever they are the yardstick.
                                             Labels sit above every bar — including negative ones, where the
                                             bar's top edge is the zero line, so the number ends up just above
                                             it. isAnimationActive={false} is what makes them appear at all:
@@ -15519,7 +15510,7 @@ const PortfolioBacktester = () => {
                                           {/* The gap strip rides on this series purely to get its x */}
                                           <LabelList content={renderGapPill} />
                                         </Bar>
-                                        <Bar dataKey="bench" name="World equities (IWDA)" fill="#F5A623" isAnimationActive={false}>
+                                        <Bar dataKey="bench" name="World equities (IWDA)" fill={MARKET_LINE_COLOR} isAnimationActive={false}>
                                           <LabelList dataKey="bench" position="top" formatter={barLabel}
                                                      style={{ fontSize: '8px', fill: '#92600a' }} />
                                         </Bar>
@@ -15551,7 +15542,7 @@ const PortfolioBacktester = () => {
                                         <Bar dataKey="cumAsset" name={assetName} fill="#000000" isAnimationActive={false}>
                                           <LabelList content={renderEndLabel('cumAsset', '#111827')} />
                                         </Bar>
-                                        <Bar dataKey="cumBench" name="World equities (IWDA)" fill="#F5A623" isAnimationActive={false}>
+                                        <Bar dataKey="cumBench" name="World equities (IWDA)" fill={MARKET_LINE_COLOR} isAnimationActive={false}>
                                           <LabelList content={renderEndLabel('cumBench', '#92600a')} />
                                         </Bar>
                                       </BarChart>
@@ -15587,16 +15578,16 @@ const PortfolioBacktester = () => {
                                   {/* Gradient definitions: green above 0%, red below 0% */}
                                   <defs>
                                     <linearGradient id="smaDistStroke" x1="0" y1="0" x2="0" y2="1">
-                                      <stop offset="0%" stopColor="#16a34a" />
-                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor="#16a34a" />
-                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor="#ef4444" />
-                                      <stop offset="100%" stopColor="#ef4444" />
+                                      <stop offset="0%" stopColor={GAIN} />
+                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor={GAIN} />
+                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor={LOSS} />
+                                      <stop offset="100%" stopColor={LOSS} />
                                     </linearGradient>
                                     <linearGradient id="smaDistFill" x1="0" y1="0" x2="0" y2="1">
-                                      <stop offset="0%" stopColor="#16a34a" />
-                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor="#16a34a" />
-                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor="#ef4444" />
-                                      <stop offset="100%" stopColor="#ef4444" />
+                                      <stop offset="0%" stopColor={GAIN} />
+                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor={GAIN} />
+                                      <stop offset={`${smaDistGradientOffset * 100}%`} stopColor={LOSS} />
+                                      <stop offset="100%" stopColor={LOSS} />
                                     </linearGradient>
                                   </defs>
                                   {/* Gray dashed baseline at 0% — price equals SMA */}
@@ -15620,14 +15611,14 @@ const PortfolioBacktester = () => {
                                       x={maxSmaDistPoint.date}
                                       y={maxSmaDistPoint.smaDist}
                                       r={6}
-                                      fill="#16a34a"
+                                      fill={GAIN}
                                       stroke="#fff"
                                       strokeWidth={2}
                                       label={{
                                         value: `+${maxSmaDistPoint.smaDist.toFixed(1)}%`,
                                         position: 'left',
                                         fontSize: 11,
-                                        fill: '#16a34a',
+                                        fill: GAIN,
                                         fontWeight: 600,
                                       }}
                                     />
@@ -15638,14 +15629,14 @@ const PortfolioBacktester = () => {
                                       x={minSmaDistPoint.date}
                                       y={minSmaDistPoint.smaDist}
                                       r={6}
-                                      fill="#ef4444"
+                                      fill={LOSS}
                                       stroke="#fff"
                                       strokeWidth={2}
                                       label={{
                                         value: `${minSmaDistPoint.smaDist.toFixed(1)}%`,
                                         position: 'left',
                                         fontSize: 11,
-                                        fill: '#ef4444',
+                                        fill: LOSS,
                                         fontWeight: 600,
                                       }}
                                     />
@@ -16010,29 +16001,22 @@ const PortfolioBacktester = () => {
                               if (monthlyDDs[year].maxDD < worstDD) worstDD = monthlyDDs[year].maxDD;
                             }
 
-                            // Red heatmap for drawdowns: white (0%) → muted red (worst DD)
-                            // Aligned with getPriceHeatmap red end: rgb(205, 130, 130)
+                            // Drawdowns: white at 0% (nothing to see), then the red half of the one heat
+                            // scale up to the worst drawdown (stopping at its middle shade, for the text)
                             const getDDColor = (dd: number): string => {
                               if (dd === 0 || worstDD === 0) return themedCell('#ffffff');
                               const pos = dd / worstDD; // 0 = at ATH, 1 = worst drawdown
-                              const r = Math.round(255 - pos * (255 - 205));  // 255 → 205
-                              const g = Math.round(255 - pos * (255 - 130));  // 255 → 130
-                              const b = Math.round(255 - pos * (255 - 130));  // 255 → 130
-                              return themedCell(`rgb(${r}, ${g}, ${b})`);
+                              return heatColor(-pos, 0.67);
                             };
 
                             // Max ATH count for green heatmap scaling
                             const maxATHs = Math.max(...Object.values(monthlyDDs).map(y => y.athCount), 1);
 
-                            // Green heatmap for ATHs: white (0) → muted green (max ATHs)
-                            // Aligned with getPriceHeatmap green end: rgb(120, 190, 120)
+                            // All-time highs: white at 0, then the green half of the one heat scale
                             const getATHColor = (count: number): string => {
                               if (count === 0 || maxATHs === 0) return themedCell('#ffffff');
                               const pos = count / maxATHs;
-                              const r = Math.round(255 - pos * (255 - 120));  // 255 → 120
-                              const g = Math.round(255 - pos * (255 - 190));  // 255 → 190
-                              const b = Math.round(255 - pos * (255 - 120));  // 255 → 120
-                              return themedCell(`rgb(${r}, ${g}, ${b})`);
+                              return heatColor(pos, 0.67);
                             };
 
                             const years = Object.keys(monthlyDDs)
@@ -16124,13 +16108,13 @@ const PortfolioBacktester = () => {
                 <AssetFilterControls>
                   {/* SMA toggle — rendered inside the filter flex container for perfect alignment */}
                   {/* (Phones: a box in the row below instead) */}
-                  {/* An on/off switch: a strip of one. The red dot is the SMA line's colour. */}
+                  {/* An on/off switch: a strip of one. The dot is the SMA line's colour. */}
                   <span className={`${SEG} max-md:hidden`}>
                     <button
                       onClick={() => setGraphsShowSMA(!graphsShowSMA)}
                       className={segBtn(graphsShowSMA)}
                     >
-                      <span className="inline-block w-2 h-2 rounded-full bg-red-500 mr-1.5 align-middle -mt-px" />
+                      <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle -mt-px" style={{ backgroundColor: SMA_COLOR }} />
                       10m SMA
                     </button>
                   </span>
@@ -16269,13 +16253,13 @@ const PortfolioBacktester = () => {
                         {/* Null-safe only for the type's sake: this tab never asks for
                             non-positive prices, so the return is always a number here. */}
                         {totalReturn !== null && (
-                          <span style={{ color: totalReturn >= 0 ? '#16a34a' : '#dc2626' }}>
+                          <span style={{ color: totalReturn >= 0 ? GAIN : LOSS }}>
                             ({totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(1)}%)
                           </span>
                         )}
                         {' / '}
                         <span className="font-normal text-gray-500">
-                          Curr DD: (<span style={{ color: currDD === 0 ? '#16a34a' : currDD > -5 ? '#ca8a04' : currDD > -20 ? '#dc7c7c' : '#dc2626' }}>{currDD.toFixed(1)}%</span>)
+                          Curr DD: (<span style={{ color: currDD === 0 ? GAIN : currDD > -5 ? '#ca8a04' : currDD > -20 ? '#dc8a82' : LOSS }}>{currDD.toFixed(1)}%</span>)
                         </span>
                       </h3>
 
@@ -16328,7 +16312,7 @@ const PortfolioBacktester = () => {
                             <Line
                               type="monotone"
                               dataKey="sma10"
-                              stroke="#ef4444"
+                              stroke={SMA_COLOR}
                               strokeWidth={1}
                               dot={false}
                               connectNulls
@@ -16537,8 +16521,8 @@ const PortfolioBacktester = () => {
                               <Area
                                 type="monotone"
                                 dataKey="buyHoldValue"
-                                fill="#93c5fd"
-                                stroke="#3b82f6"
+                                fill="#d5e2f0"
+                                stroke={CHART_PALETTE.blue}
                                 strokeWidth={1}
                                 fillOpacity={0.6}
                                 name="buyHoldValue"
@@ -16547,7 +16531,7 @@ const PortfolioBacktester = () => {
                               <Line
                                 type="monotone"
                                 dataKey="trendFollowingValue"
-                                stroke="#16a34a"
+                                stroke={TREND_COLOR}
                                 strokeWidth={2}
                                 dot={false}
                                 name="trendFollowingValue"
@@ -16569,7 +16553,7 @@ const PortfolioBacktester = () => {
                                   x={signal.date}
                                   y={signal.value}
                                   r={6}
-                                  fill={signal.newSignal === 'BUY' ? '#22c55e' : '#ef4444'}
+                                  fill={signal.newSignal === 'BUY' ? GAIN : LOSS}
                                   stroke="white"
                                   strokeWidth={2}
                                 />
@@ -16612,8 +16596,8 @@ const PortfolioBacktester = () => {
                               <Area
                                 type="monotone"
                                 dataKey="buyHoldDrawdown"
-                                fill="#fecaca"
-                                stroke="#ef4444"
+                                fill="#efc5c0"
+                                stroke={LOSS}
                                 strokeWidth={1}
                                 fillOpacity={0.4}
                                 name="buyHoldDrawdown"
@@ -16622,7 +16606,7 @@ const PortfolioBacktester = () => {
                               <Line
                                 type="monotone"
                                 dataKey="trendFollowingDrawdown"
-                                stroke="#16a34a"
+                                stroke={TREND_COLOR}
                                 strokeWidth={2}
                                 dot={false}
                                 name="trendFollowingDrawdown"
@@ -16784,7 +16768,7 @@ const PortfolioBacktester = () => {
                                     />
                                     <Legend />
                                     {/* Buy & Hold bars - Blue */}
-                                    <Bar dataKey="Buy & Hold" fill="#3b82f6">
+                                    <Bar dataKey="Buy & Hold" fill={CHART_PALETTE.blue}>
                                       <LabelList
                                         dataKey="Buy & Hold"
                                         position="top"
@@ -16795,11 +16779,11 @@ const PortfolioBacktester = () => {
                                         dataKey="Buy & Hold"
                                         position="bottom"
                                         formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                        style={{ fontSize: '10px', fill: '#ef4444' }}
+                                        style={{ fontSize: '10px', fill: LOSS }}
                                       />
                                     </Bar>
                                     {/* Trend Following bars - Green */}
-                                    <Bar dataKey="Trend Following" fill="#16a34a">
+                                    <Bar dataKey="Trend Following" fill={TREND_COLOR}>
                                       <LabelList
                                         dataKey="Trend Following"
                                         position="top"
@@ -16810,7 +16794,7 @@ const PortfolioBacktester = () => {
                                         dataKey="Trend Following"
                                         position="bottom"
                                         formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                        style={{ fontSize: '10px', fill: '#ef4444' }}
+                                        style={{ fontSize: '10px', fill: LOSS }}
                                       />
                                     </Bar>
                                   </BarChart>
@@ -17075,12 +17059,7 @@ const PortfolioBacktester = () => {
                 const slicedData = assetData.slice(-(monthsNeeded + 1));
 
                 // Color palette for the dots — cycles if there are more than 20 assets
-                const DOT_COLORS = [
-                  '#6366f1','#f97316','#22c55e','#3b82f6','#ec4899',
-                  '#84cc16','#14b8a6','#f59e0b','#8b5cf6','#ef4444',
-                  '#06b6d4','#d97706','#10b981','#7c3aed','#e11d48',
-                  '#0ea5e9','#65a30d','#0d9488','#dc2626','#7e22ce',
-                ];
+                const DOT_COLORS = RETURN_MAP_ASSET_COLORS;
 
                 const scatterData: { ticker: string; name: string; x: number; y: number; color: string }[] = [];
                 let colorIdx = 0;
@@ -17215,7 +17194,7 @@ const PortfolioBacktester = () => {
                         />
                         {/* Dashed red zero line — only shown when at least one asset has negative return */}
                         {scatterData.some(d => d.y < 0) && (
-                          <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="6 3" strokeWidth={1.5} />
+                          <ReferenceLine y={0} stroke={LOSS} strokeDasharray="6 3" strokeWidth={1.5} />
                         )}
                         <Scatter
                           data={scatterData}
@@ -17324,13 +17303,13 @@ const PortfolioBacktester = () => {
                               />
                             </Bar>
                             {/* Top bar: Cumulative Profit (yellow) with profit label + total above */}
-                            <Bar dataKey="profitCumulative" stackId="value" fill="#F5A623" name="profitCumulative">
+                            <Bar dataKey="profitCumulative" stackId="value" fill={GAIN} name="profitCumulative">
                               {/* Profit value on the yellow segment */}
                               <LabelList
                                 dataKey="profitCumulative"
                                 position="center"
                                 formatter={(value: number) => value !== 0 && Math.abs(value) >= minInnerLabel ? `${barMillions(value)}M` : ''}
-                                style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
+                                style={{ fontSize: '15px', fill: '#fff', fontWeight: 700 }}
                               />
                               {/* Total (contributions + profit) above the bar — uses custom renderer */}
                               {/* to read the full data entry and compute the sum */}
@@ -17347,7 +17326,7 @@ const PortfolioBacktester = () => {
                                       x={x + width / 2}
                                       y={y - 18}
                                       textAnchor="middle"
-                                      style={{ fontSize: '13px', fill: '#991b1b', fontWeight: 700 }}
+                                      style={{ fontSize: '13px', fill: '#374151', fontWeight: 700 }}
                                     >
                                       {barMillions(total)}M
                                     </text>
@@ -17402,7 +17381,7 @@ const PortfolioBacktester = () => {
                               <div className="bg-white border border-gray-200 rounded shadow px-3 py-2 text-sm">
                                 <div className="font-semibold mb-1">Year: {label}</div>
                                 <div>Contributions: {Math.round(entry.contributions).toLocaleString()} {sym}</div>
-                                <div style={{ color: entry.profit < 0 ? '#ef4444' : undefined }}>
+                                <div style={{ color: entry.profit < 0 ? LOSS : undefined }}>
                                   Profit: {Math.round(entry.profit).toLocaleString()} {sym}
                                 </div>
                                 <div className="font-semibold mt-1">Total: {Math.round(entry.growthTotal).toLocaleString()} {sym}</div>
@@ -17412,7 +17391,7 @@ const PortfolioBacktester = () => {
                         />
                         {/* Negative profit (yellow) — renders below zero when loss occurs */}
                         {/* Must be FIRST in the stack so it extends downward from 0 */}
-                        <Bar dataKey="profitNegative" stackId="cp" fill="#F5A623" name="profitNegative">
+                        <Bar dataKey="profitNegative" stackId="cp" fill={LOSS} name="profitNegative">
                           {/* Loss amount, centred INSIDE the yellow loss bar (below zero) */}
                           <LabelList
                             dataKey="profitNegative"
@@ -17422,7 +17401,7 @@ const PortfolioBacktester = () => {
                               const a = Math.abs(value);
                               return a >= 1000 ? `(${(a / 1000).toFixed(0)}k)` : `(${Math.round(a).toLocaleString()})`;
                             }}
-                            style={{ fontSize: '14px', fill: '#7f1d1d', fontWeight: 700 }}
+                            style={{ fontSize: '14px', fill: '#93342e', fontWeight: 700 }}
                           />
                         </Bar>
                         {/* Transparent spacer = the loss amount. It cancels the negative bar's
@@ -17447,7 +17426,7 @@ const PortfolioBacktester = () => {
                             always sits at the top of the stack (its top edge = contributions +
                             positive profit = the "labelTop"), so a top-positioned label clears the
                             bar in every year, including losses (where its height is 0). */}
-                        <Bar dataKey="profitPositive" stackId="cp" fill="#F5A623" name="profitPositive">
+                        <Bar dataKey="profitPositive" stackId="cp" fill={GAIN} name="profitPositive">
                           <LabelList
                             dataKey="profitPositive"
                             position="center"
@@ -17456,7 +17435,7 @@ const PortfolioBacktester = () => {
                               if (value >= 1000) return `${(value / 1000).toFixed(0)}k`;
                               return Math.round(value).toLocaleString();
                             }}
-                            style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
+                            style={{ fontSize: '15px', fill: '#fff', fontWeight: 700 }}
                           />
                           {/* Growth total (contributions + profit) above the bar */}
                           <LabelList
@@ -17471,7 +17450,7 @@ const PortfolioBacktester = () => {
                               const unit = phone ? '' : ` ${sym}`;
                               const label = Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k${unit}` : `${Math.round(v).toLocaleString()}${unit}`;
                               return (
-                                <text x={x + width / 2} y={y - 10} textAnchor="middle" style={{ fontSize: '13px', fill: '#991b1b', fontWeight: 700 }}>
+                                <text x={x + width / 2} y={y - 10} textAnchor="middle" style={{ fontSize: '13px', fill: '#374151', fontWeight: 700 }}>
                                   {label}
                                 </text>
                               );
@@ -17758,7 +17737,7 @@ const PortfolioBacktester = () => {
                                       // fees and anything without a price — rather than a position that
                                       // did well or badly, so it should not read as a winner or a loser
                                       // sitting among them.
-                                      <Cell key={r.ticker || r.label} fill={r.isOther ? '#000000' : r.profit >= 0 ? '#16a34a' : '#dc2626'} />
+                                      <Cell key={r.ticker || r.label} fill={r.isOther ? '#000000' : r.profit >= 0 ? GAIN : LOSS} />
                                     ))}
                                     {/* Sign-aware label placement. Recharts gives the bar's LEFT
                                         edge as x with a positive width either way, so for a loss
@@ -18247,7 +18226,7 @@ const PortfolioBacktester = () => {
                     // returns — which is exactly what rebalancing back to the weights each month-end
                     // means.
                     const benchDef = DAILY_NAV_BENCHMARKS.find(b => b.id === dailyNavBenchmark);
-                    const BENCH_COLOR = CHART_PALETTE.teal;   // distinct from the blue NAV and red inflation lines
+                    const BENCH_COLOR = CHART_PALETTE.teal;   // distinct from the slate NAV and terracotta inflation lines
                     const benchPerDay: (number | null)[] = periodData.map(() => null);
                     const benchMonthly: number[] = [];       // index level at each month-end point used
                     const benchMonthReturns: number[] = [];  // the monthly returns between them
@@ -18406,8 +18385,8 @@ const PortfolioBacktester = () => {
                     // look like they had not been rebased at all. The raw price is still a click
                     // away in the tooltip.
                     const navBubbleDefs: BubbleDef[] = [
-                      { value: lastRow.nav,  color: '#1e40af', label: lastRow.nav.toFixed(2) },
-                      { value: lastRow.infl, color: '#dc2626', label: lastRow.infl.toFixed(2) },
+                      { value: lastRow.nav,  color: '#1e293b', label: lastRow.nav.toFixed(2) },
+                      { value: lastRow.infl, color: INFLATION_COLOR, label: lastRow.infl.toFixed(2) },
                     ];
                     if (benchStats) {
                       const bLast = benchMonthly[benchMonthly.length - 1];
@@ -18419,27 +18398,27 @@ const PortfolioBacktester = () => {
                     // under it (phones). 4th/5th entries = the benchmark's value and colour (null =
                     // no benchmark figure).
                     const navStatRows = [
-                      ['CAGR',        `${nominalCAGR.toFixed(1)}%`,  nominalCAGR  >= 0 ? '#16a34a' : '#dc2626',
-                        benchStats && `${benchStats.cagr.toFixed(1)}%`, benchStats && (benchStats.cagr >= 0 ? '#16a34a' : '#dc2626')],
+                      ['CAGR',        `${nominalCAGR.toFixed(1)}%`,  nominalCAGR  >= 0 ? GAIN : LOSS,
+                        benchStats && `${benchStats.cagr.toFixed(1)}%`, benchStats && (benchStats.cagr >= 0 ? GAIN : LOSS)],
                       ['Ann. Infl.',  `${annInflation.toFixed(1)}%`, '#6b7280',
                         benchStats && `${annInflation.toFixed(1)}%`, '#6b7280'],
-                      ['Real CAGR',   `${realCAGR.toFixed(1)}%`,     realCAGR     >= 0 ? '#16a34a' : '#dc2626',
-                        benchStats && `${benchStats.real.toFixed(1)}%`, benchStats && (benchStats.real >= 0 ? '#16a34a' : '#dc2626')],
+                      ['Real CAGR',   `${realCAGR.toFixed(1)}%`,     realCAGR     >= 0 ? GAIN : LOSS,
+                        benchStats && `${benchStats.real.toFixed(1)}%`, benchStats && (benchStats.real >= 0 ? GAIN : LOSS)],
                       ['Ann. Vol.',   `${annVol.toFixed(1)}%`,       '#374151',
                         benchStats && `${benchStats.vol.toFixed(1)}%`, '#374151'],
                       ['Sharpe',      sharpe.toFixed(2),             '#374151',
                         benchStats && benchStats.sharpe.toFixed(2), '#374151'],
-                      ['Max DD',      `${maxDD.toFixed(1)}%`,        '#dc2626',
-                        benchStats && `${benchStats.maxDD.toFixed(1)}%`, '#dc2626'],
-                      ['Curr DD',     `${currDD.toFixed(1)}%`,       currDD < -0.01 ? '#dc2626' : '#16a34a',
-                        benchStats && `${benchStats.currDD.toFixed(1)}%`, benchStats && (benchStats.currDD < -0.01 ? '#dc2626' : '#16a34a')],
+                      ['Max DD',      `${maxDD.toFixed(1)}%`,        LOSS,
+                        benchStats && `${benchStats.maxDD.toFixed(1)}%`, LOSS],
+                      ['Curr DD',     `${currDD.toFixed(1)}%`,       currDD < -0.01 ? LOSS : GAIN,
+                        benchStats && `${benchStats.currDD.toFixed(1)}%`, benchStats && (benchStats.currDD < -0.01 ? LOSS : GAIN)],
                       ['Longest DD',  `${longestDD}d`,               '#374151',
                         benchStats && '—', '#9ca3af'],
                     ] as [string, string, string, string | null, string | null][];
                     // Phones: the same colours as classes, so app/dark.css can lighten them in dark
                     // mode (an inline colour can't be reached from there)
                     const statColourClass = (c: string | null) =>
-                      c === '#16a34a' ? 'text-green-600' : c === '#dc2626' ? 'text-red-600'
+                      c === GAIN ? 'text-green-600' : c === LOSS ? 'text-red-600'
                         : c === '#6b7280' ? 'text-gray-500' : c === '#9ca3af' ? 'text-gray-400' : 'text-gray-700';
 
                     // ---- 8. Render ----
@@ -18525,7 +18504,7 @@ const PortfolioBacktester = () => {
                                   <thead>
                                     <tr>
                                       <td></td>
-                                      <td style={{ color: '#1e40af', fontWeight: 600, paddingRight: 10 }}>Portfolio</td>
+                                      <td style={{ color: '#1e293b', fontWeight: 600, paddingRight: 10 }}>Portfolio</td>
                                       {/* No hover tooltip here: the overlay has pointerEvents none. The * is explained in the note under the chart. */}
                                       <td style={{ color: BENCH_COLOR, fontWeight: 600 }}>{benchDef.id}*</td>
                                     </tr>
@@ -18584,7 +18563,7 @@ const PortfolioBacktester = () => {
                                   type="monotone"
                                   dataKey="nav"
                                   name={`NAV ${dailyNavCurrency}`}
-                                  stroke="#1e40af"
+                                  stroke="#1e293b"
                                   strokeWidth={2}
                                   dot={false}
                                   connectNulls
@@ -18594,7 +18573,7 @@ const PortfolioBacktester = () => {
                                   type="monotone"
                                   dataKey="infl"
                                   name={`Inflation ${dailyNavCurrency}`}
-                                  stroke="#dc2626"
+                                  stroke={INFLATION_COLOR}
                                   strokeWidth={1.5}
                                   strokeDasharray="5 3"
                                   dot={false}
@@ -18620,7 +18599,7 @@ const PortfolioBacktester = () => {
                           <div className="hidden max-md:block mt-1">
                             {benchStats && benchDef && (
                               <div className="text-[11px] mb-1.5">
-                                <span className="font-semibold" style={{ color: '#1e40af' }}>Portfolio</span>
+                                <span className="font-semibold" style={{ color: '#1e293b' }}>Portfolio</span>
                                 <span className="text-gray-400"> · </span>
                                 <span className="font-semibold" style={{ color: BENCH_COLOR }}>{benchDef.id}*</span>
                               </div>
@@ -18652,7 +18631,7 @@ const PortfolioBacktester = () => {
                   {(() => {
                     // Colors matching Returns by Year: PLN=black, USD=red, SGD=yellow
                     // (CHF = violet: the app's usual CHF terracotta sits too close to this chart's USD red)
-                    const DD_COLORS: Record<string, string> = { PLN: '#000000', USD: '#ef4444', SGD: '#F5A623', CHF: CHART_PALETTE.violet };
+                    const DD_COLORS: Record<string, string> = { PLN: CURRENCY_COLORS.PLN, USD: CURRENCY_COLORS.USD, SGD: CURRENCY_COLORS.SGD, CHF: CURRENCY_COLORS.CHF };
 
                     // Re-use the same period-cutoff logic as the Daily NAV chart
                     const today = new Date();
@@ -18866,7 +18845,7 @@ const PortfolioBacktester = () => {
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
                     {/* Pick several; the dot is that currency's bar colour in the charts */}
                     <span className={SEG}>
-                    {([['PLN', '#000000'], ['USD', '#ef4444'], ['SGD', '#F5A623']] as const).map(([c, color]) => {
+                    {([['PLN', CURRENCY_COLORS.PLN], ['USD', CURRENCY_COLORS.USD], ['SGD', CURRENCY_COLORS.SGD]] as const).map(([c, color]) => {
                       const active = selectedReturnCurrencies.includes(c);
                       return (
                         <button
@@ -18893,9 +18872,9 @@ const PortfolioBacktester = () => {
                         Only rows with a valid (finite) return value are included. */}
                     {(() => {
                       const ccyKeys: { key: 'PLN' | 'USD' | 'SGD'; field: 'returnPln' | 'returnUsd' | 'returnSgd'; color: string }[] = [
-                        { key: 'PLN', field: 'returnPln', color: '#374151' },
-                        { key: 'USD', field: 'returnUsd', color: '#ef4444' },
-                        { key: 'SGD', field: 'returnSgd', color: '#d97706' },
+                        { key: 'PLN', field: 'returnPln', color: CURRENCY_COLORS.PLN },
+                        { key: 'USD', field: 'returnUsd', color: CURRENCY_COLORS.USD },
+                        { key: 'SGD', field: 'returnSgd', color: CURRENCY_COLORS.SGD },
                       ];
                       const cagrParts = ccyKeys
                         .filter(c => selectedReturnCurrencies.includes(c.key))
@@ -18932,7 +18911,7 @@ const PortfolioBacktester = () => {
                         />
                         <Legend />
                         {selectedReturnCurrencies.includes('PLN') && (
-                          <Bar dataKey="Return PLN" fill="#000000">
+                          <Bar dataKey="Return PLN" fill={CURRENCY_COLORS.PLN}>
                             <LabelList
                               dataKey="Return PLN"
                               position="top"
@@ -18943,12 +18922,12 @@ const PortfolioBacktester = () => {
                               dataKey="Return PLN"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
                             />
                           </Bar>
                         )}
                         {selectedReturnCurrencies.includes('USD') && (
-                          <Bar dataKey="Return USD" fill="#ef4444">
+                          <Bar dataKey="Return USD" fill={CURRENCY_COLORS.USD}>
                             <LabelList
                               dataKey="Return USD"
                               position="top"
@@ -18959,12 +18938,12 @@ const PortfolioBacktester = () => {
                               dataKey="Return USD"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
                             />
                           </Bar>
                         )}
                         {selectedReturnCurrencies.includes('SGD') && (
-                          <Bar dataKey="Return SGD" fill="#F5A623">
+                          <Bar dataKey="Return SGD" fill={CURRENCY_COLORS.SGD}>
                             <LabelList
                               dataKey="Return SGD"
                               position="top"
@@ -18975,7 +18954,7 @@ const PortfolioBacktester = () => {
                               dataKey="Return SGD"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
                             />
                           </Bar>
                         )}
@@ -19000,7 +18979,7 @@ const PortfolioBacktester = () => {
                         />
                         <Legend />
                         {selectedReturnCurrencies.includes('PLN') && (
-                          <Bar dataKey="Growth PLN" fill="#000000">
+                          <Bar dataKey="Growth PLN" fill={CURRENCY_COLORS.PLN}>
                             <LabelList
                               dataKey="Growth PLN"
                               position="top"
@@ -19011,12 +18990,12 @@ const PortfolioBacktester = () => {
                               dataKey="Growth PLN"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
                             />
                           </Bar>
                         )}
                         {selectedReturnCurrencies.includes('USD') && (
-                          <Bar dataKey="Growth USD" fill="#ef4444">
+                          <Bar dataKey="Growth USD" fill={CURRENCY_COLORS.USD}>
                             <LabelList
                               dataKey="Growth USD"
                               position="top"
@@ -19027,12 +19006,12 @@ const PortfolioBacktester = () => {
                               dataKey="Growth USD"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
                             />
                           </Bar>
                         )}
                         {selectedReturnCurrencies.includes('SGD') && (
-                          <Bar dataKey="Growth SGD" fill="#F5A623">
+                          <Bar dataKey="Growth SGD" fill={CURRENCY_COLORS.SGD}>
                             <LabelList
                               dataKey="Growth SGD"
                               position="top"
@@ -19043,7 +19022,7 @@ const PortfolioBacktester = () => {
                               dataKey="Growth SGD"
                               position="bottom"
                               formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: '#ef4444' }}
+                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
                             />
                           </Bar>
                         )}
@@ -20576,8 +20555,8 @@ const PortfolioBacktester = () => {
                                     {/* Both series shown only when the category really moves both
                                         ways (FX conversions, transfers). Green in, red out — the
                                         same language as the In/Out columns in the table below. */}
-                                    {hasIn && <Bar dataKey="inflow" name="In" fill="#16a34a" isAnimationActive={false} />}
-                                    {hasOut && <Bar dataKey="outflow" name="Out" fill="#dc2626" isAnimationActive={false} />}
+                                    {hasIn && <Bar dataKey="inflow" name="In" fill={GAIN} isAnimationActive={false} />}
+                                    {hasOut && <Bar dataKey="outflow" name="Out" fill={LOSS} isAnimationActive={false} />}
                                     {hasIn && hasOut && <Legend wrapperStyle={{ fontSize: 11 }} />}
                                   </BarChart>
                                 </ResponsiveContainer>
@@ -21233,7 +21212,7 @@ const PortfolioBacktester = () => {
                           const priceBubbleDefs: BubbleDef[] = [];
                           if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#000000', label: formatPrice(lastPrice) });
                           if (lastCompPrice != null && openInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: CHART_PALETTE.gold, label: formatPrice(lastCompPrice) });
-                          if (lastAvgBuyPrice != null && openShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#22c55e', label: formatPrice(lastAvgBuyPrice) });
+                          if (lastAvgBuyPrice != null && openShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: GAIN, label: formatPrice(lastAvgBuyPrice) });
                           const OpenPriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
 
                           return (
@@ -21389,11 +21368,11 @@ const PortfolioBacktester = () => {
                                 <Area type="stepAfter" dataKey="investedCapital" name="Invested" stroke="#000000" fill="#000000" fillOpacity={0.08} strokeWidth={1.5} strokeDasharray="6 3" />
                                 <Area type="monotone" dataKey="marketValue" name="Market Value" stroke={CHART_PALETTE.blue} fill={CHART_PALETTE.blue} fillOpacity={0.2} strokeWidth={2} />
                                 {maxMVPoint && (
-                                  <ReferenceDot x={maxMVPoint.date} y={maxMVPoint.marketValue} r={6} fill="#22c55e" stroke="#fff" strokeWidth={2}
+                                  <ReferenceDot x={maxMVPoint.date} y={maxMVPoint.marketValue} r={6} fill={GAIN} stroke="#fff" strokeWidth={2}
                                     label={{ value: maxMVPoint.marketValue.toLocaleString(), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                 )}
                                 {minMVPoint && (
-                                  <ReferenceDot x={minMVPoint.date} y={minMVPoint.marketValue} r={6} fill="#ef4444" stroke="#fff" strokeWidth={2}
+                                  <ReferenceDot x={minMVPoint.date} y={minMVPoint.marketValue} r={6} fill={LOSS} stroke="#fff" strokeWidth={2}
                                     label={{ value: minMVPoint.marketValue.toLocaleString(), position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                 )}
                               </AreaChart>
@@ -21413,7 +21392,7 @@ const PortfolioBacktester = () => {
                           const lastPnL = lastPnLRow?.pnl ?? null;
                           const pnlBubbleDefs: BubbleDef[] = [];
                           if (lastPnL != null) {
-                            pnlBubbleDefs.push({ value: lastPnL, color: lastPnL >= 0 ? '#22c55e' : '#ef4444', label: `${lastPnL >= 0 ? '+' : ''}${lastPnL.toLocaleString()}` });
+                            pnlBubbleDefs.push({ value: lastPnL, color: lastPnL >= 0 ? GAIN : LOSS, label: `${lastPnL >= 0 ? '+' : ''}${lastPnL.toLocaleString()}` });
                           }
                           const OpenPnLBubble = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, pnlBubbleDefs);
 
@@ -21439,16 +21418,16 @@ const PortfolioBacktester = () => {
                                 <AreaChart data={capitalChartData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
                                   <defs>
                                     <linearGradient id="openPnlGradient" x1="0" y1="0" x2="0" y2="1">
-                                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.4} />
-                                      <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" stopOpacity={0.05} />
-                                      <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" stopOpacity={0.05} />
-                                      <stop offset="100%" stopColor="#ef4444" stopOpacity={0.4} />
+                                      <stop offset="0%" stopColor={GAIN} stopOpacity={0.4} />
+                                      <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor={GAIN} stopOpacity={0.05} />
+                                      <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor={LOSS} stopOpacity={0.05} />
+                                      <stop offset="100%" stopColor={LOSS} stopOpacity={0.4} />
                                     </linearGradient>
                                     <linearGradient id="openPnlStrokeGradient" x1="0" y1="0" x2="0" y2="1">
-                                      <stop offset="0%" stopColor="#22c55e" />
-                                      <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" />
-                                      <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" />
-                                      <stop offset="100%" stopColor="#ef4444" />
+                                      <stop offset="0%" stopColor={GAIN} />
+                                      <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor={GAIN} />
+                                      <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor={LOSS} />
+                                      <stop offset="100%" stopColor={LOSS} />
                                     </linearGradient>
                                   </defs>
                                   {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
@@ -21459,11 +21438,11 @@ const PortfolioBacktester = () => {
                                   <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
                                   <Area type="monotone" dataKey="pnl" name="PnL" stroke="url(#openPnlStrokeGradient)" fill="url(#openPnlGradient)" strokeWidth={2} />
                                   {maxPnLPoint && (
-                                    <ReferenceDot x={maxPnLPoint.date} y={maxPnLPoint.pnl} r={6} fill="#22c55e" stroke="#fff" strokeWidth={2}
+                                    <ReferenceDot x={maxPnLPoint.date} y={maxPnLPoint.pnl} r={6} fill={GAIN} stroke="#fff" strokeWidth={2}
                                       label={{ value: `${maxPnLPoint.pnl >= 0 ? '+' : ''}${maxPnLPoint.pnl.toLocaleString()}`, position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                   )}
                                   {minPnLPoint && (
-                                    <ReferenceDot x={minPnLPoint.date} y={minPnLPoint.pnl} r={6} fill="#ef4444" stroke="#fff" strokeWidth={2}
+                                    <ReferenceDot x={minPnLPoint.date} y={minPnLPoint.pnl} r={6} fill={LOSS} stroke="#fff" strokeWidth={2}
                                       label={{ value: `${minPnLPoint.pnl >= 0 ? '+' : ''}${minPnLPoint.pnl.toLocaleString()}`, position: 'left', fontSize: 12, fill: '#111827', fontWeight: 600 }} />
                                   )}
                                 </AreaChart>
@@ -22072,8 +22051,8 @@ const PortfolioBacktester = () => {
                           if (lastPrice != null) priceBubbleDefs.push({ value: lastPrice, color: '#000000', label: formatPrice(lastPrice) });
                           // Only show comparison bubble when the comparison line is actually visible
                           if (lastCompPrice != null && closedInvestedInto) priceBubbleDefs.push({ value: lastCompPrice, color: CHART_PALETTE.gold, label: formatPrice(lastCompPrice) });
-                          if (lastAvgBuyPrice != null && closedShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: '#22c55e', label: formatPrice(lastAvgBuyPrice) });
-                          if (lastAvgSellPrice != null && closedShowAvgSell) priceBubbleDefs.push({ value: lastAvgSellPrice, color: '#ef4444', label: formatPrice(lastAvgSellPrice) });
+                          if (lastAvgBuyPrice != null && closedShowAvgBuy) priceBubbleDefs.push({ value: lastAvgBuyPrice, color: GAIN, label: formatPrice(lastAvgBuyPrice) });
+                          if (lastAvgSellPrice != null && closedShowAvgSell) priceBubbleDefs.push({ value: lastAvgSellPrice, color: LOSS, label: formatPrice(lastAvgSellPrice) });
                           const PriceBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, priceBubbleDefs);
 
                           return (
@@ -22380,7 +22359,7 @@ const PortfolioBacktester = () => {
                                 x={maxMVPoint.date}
                                 y={maxMVPoint.marketValue}
                                 r={6}
-                                fill="#22c55e"
+                                fill={GAIN}
                                 stroke="#fff"
                                 strokeWidth={2}
                                 label={{
@@ -22398,7 +22377,7 @@ const PortfolioBacktester = () => {
                                 x={minMVPoint.date}
                                 y={minMVPoint.marketValue}
                                 r={6}
-                                fill="#ef4444"
+                                fill={LOSS}
                                 stroke="#fff"
                                 strokeWidth={2}
                                 label={{
@@ -22447,7 +22426,7 @@ const PortfolioBacktester = () => {
                           // Build bubble def and delegate to shared renderer
                           const pnlBubbleDefs: BubbleDef[] = [];
                           if (lastPnL != null) {
-                            const color = lastPnL >= 0 ? '#22c55e' : '#ef4444';
+                            const color = lastPnL >= 0 ? GAIN : LOSS;
                             pnlBubbleDefs.push({ value: lastPnL, color, label: `${lastPnL >= 0 ? '+' : ''}${lastPnL.toLocaleString()}` });
                           }
                           const PnLBubble = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, pnlBubbleDefs);
@@ -22480,17 +22459,17 @@ const PortfolioBacktester = () => {
                             <defs>
                               {/* Fill gradient: green above zero, red below zero (semi-transparent) */}
                               <linearGradient id="pnlGradient" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="#22c55e" stopOpacity={0.4} />
-                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" stopOpacity={0.05} />
-                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" stopOpacity={0.05} />
-                                <stop offset="100%" stopColor="#ef4444" stopOpacity={0.4} />
+                                <stop offset="0%" stopColor={GAIN} stopOpacity={0.4} />
+                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor={GAIN} stopOpacity={0.05} />
+                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor={LOSS} stopOpacity={0.05} />
+                                <stop offset="100%" stopColor={LOSS} stopOpacity={0.4} />
                               </linearGradient>
                               {/* Stroke gradient: green above zero, red below zero (solid line) */}
                               <linearGradient id="pnlStrokeGradient" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="#22c55e" />
-                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#22c55e" />
-                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor="#ef4444" />
-                                <stop offset="100%" stopColor="#ef4444" />
+                                <stop offset="0%" stopColor={GAIN} />
+                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor={GAIN} />
+                                <stop offset={`${(pnlZeroFraction * 100).toFixed(1)}%`} stopColor={LOSS} />
+                                <stop offset="100%" stopColor={LOSS} />
                               </linearGradient>
                             </defs>
                             {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
@@ -22518,7 +22497,7 @@ const PortfolioBacktester = () => {
                                 x={maxPnLPoint.date}
                                 y={maxPnLPoint.pnl}
                                 r={6}
-                                fill="#22c55e"
+                                fill={GAIN}
                                 stroke="#fff"
                                 strokeWidth={2}
                                 label={{
@@ -22536,7 +22515,7 @@ const PortfolioBacktester = () => {
                                 x={minPnLPoint.date}
                                 y={minPnLPoint.pnl}
                                 r={6}
-                                fill="#ef4444"
+                                fill={LOSS}
                                 stroke="#fff"
                                 strokeWidth={2}
                                 label={{
