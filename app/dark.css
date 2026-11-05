@@ -83,20 +83,22 @@ html.dark .hover\:bg-slate-700:hover { background-color: #ffffff; }
 html.dark .border-slate-400 { border-color: #6b7280; }
 html.dark .ring-slate-900 { --tw-ring-color: var(--d-selected); }
 
-/* Soft tinted backgrounds: a faint wash of the same hue instead of a pale pastel */
-html.dark .bg-green-50 { background-color: rgb(34 197 94 / 0.10); }
-html.dark .bg-green-50\/30 { background-color: rgb(34 197 94 / 0.05); }
-html.dark .bg-green-100 { background-color: rgb(34 197 94 / 0.18); }
-html.dark .bg-red-50 { background-color: rgb(239 68 68 / 0.10); }
-html.dark .bg-red-100 { background-color: rgb(239 68 68 / 0.18); }
+/* Soft tinted backgrounds: a faint wash of the same hue instead of a pale pastel.
+   Green and red are the theme's one gain and one loss colour (tailwind.config.js), whose
+   dark-mode versions are #6cc08b and #ef8a80 = rgb(108 192 139) and rgb(239 138 128). */
+html.dark .bg-green-50 { background-color: rgb(108 192 139 / 0.10); }
+html.dark .bg-green-50\/30 { background-color: rgb(108 192 139 / 0.05); }
+html.dark .bg-green-100 { background-color: rgb(108 192 139 / 0.18); }
+html.dark .bg-red-50 { background-color: rgb(239 138 128 / 0.10); }
+html.dark .bg-red-100 { background-color: rgb(239 138 128 / 0.18); }
 html.dark .bg-blue-50 { background-color: rgb(59 130 246 / 0.12); }
 html.dark .bg-blue-100 { background-color: rgb(59 130 246 / 0.20); }
 html.dark .bg-blue-200 { background-color: rgb(59 130 246 / 0.30); }
-html.dark .bg-yellow-50 { background-color: rgb(234 179 8 / 0.10); }
+html.dark .bg-yellow-50 { background-color: rgb(245 158 11 / 0.10); }
 html.dark .bg-amber-50 { background-color: rgb(245 158 11 / 0.10); }
 html.dark .bg-amber-50\/40 { background-color: rgb(245 158 11 / 0.05); }
 html.dark .bg-amber-100 { background-color: rgb(245 158 11 / 0.18); }
-html.dark .bg-orange-50 { background-color: rgb(249 115 22 / 0.10); }
+html.dark .bg-orange-50 { background-color: rgb(245 158 11 / 0.10); }
 
 /* Hover backgrounds (listed after the plain ones, and one notch stronger, so they win) */
 html.dark .hover\:bg-gray-50:hover { background-color: var(--d-50); }
@@ -111,9 +113,9 @@ html.dark .border-gray-100 { border-color: var(--d-line-soft); }
 html.dark .border-gray-200 { border-color: var(--d-line); }
 html.dark .border-gray-300 { border-color: var(--d-line-strong); }
 html.dark .border-black { border-color: var(--d-text-800); }
-html.dark .border-red-200 { border-color: rgb(239 68 68 / 0.30); }
-html.dark .border-red-300 { border-color: rgb(239 68 68 / 0.45); }
-html.dark .border-green-200 { border-color: rgb(34 197 94 / 0.30); }
+html.dark .border-red-200 { border-color: rgb(239 138 128 / 0.30); }
+html.dark .border-red-300 { border-color: rgb(239 138 128 / 0.45); }
+html.dark .border-green-200 { border-color: rgb(108 192 139 / 0.30); }
 html.dark .border-amber-200 { border-color: rgb(245 158 11 / 0.30); }
 html.dark .border-amber-300 { border-color: rgb(245 158 11 / 0.45); }
 
@@ -130,19 +132,20 @@ html.dark .text-slate-700 { color: var(--d-text-700); }
 html.dark .hover\:text-slate-900:hover { color: #ffffff; }
 
 /* Coloured text: the same hues a few shades lighter, so they read on a dark background */
-html.dark .text-red-500, html.dark .text-red-600, html.dark .text-red-700 { color: #f87171; }
-html.dark .text-red-800 { color: #fca5a5; }
-html.dark .hover\:text-red-700:hover { color: #fca5a5; }
-html.dark .text-green-500, html.dark .text-green-600, html.dark .text-green-700 { color: #4ade80; }
-html.dark .text-green-800 { color: #86efac; }
-html.dark .hover\:text-green-900:hover { color: #bbf7d0; }
+html.dark .text-red-500, html.dark .text-red-600, html.dark .text-red-700 { color: #ef8a80; }
+html.dark .text-red-800 { color: #f4b0a9; }
+html.dark .hover\:text-red-700:hover { color: #f4b0a9; }
+html.dark .text-green-500, html.dark .text-green-600, html.dark .text-green-700 { color: #6cc08b; }
+html.dark .text-green-800 { color: #9fd6b2; }
+html.dark .hover\:text-green-900:hover { color: #c3e6cf; }
 html.dark .text-blue-600, html.dark .text-blue-700 { color: #60a5fa; }
 html.dark .hover\:text-blue-900:hover { color: #93c5fd; }
 html.dark .text-amber-600, html.dark .text-amber-700 { color: #fbbf24; }
 html.dark .text-amber-800, html.dark .text-amber-900 { color: #fcd34d; }
 html.dark .hover\:text-amber-700:hover, html.dark .hover\:text-amber-900:hover { color: #fde68a; }
-html.dark .text-yellow-800 { color: #fde047; }
-html.dark .text-orange-600, html.dark .text-orange-700 { color: #fb923c; }
+/* (yellow and orange are amber in the theme, tailwind.config.js, so they take amber's dark colours) */
+html.dark .text-yellow-800 { color: #fcd34d; }
+html.dark .text-orange-600, html.dark .text-orange-700 { color: #fbbf24; }
 html.dark .text-purple-700 { color: #c084fc; }
 html.dark .text-teal-700 { color: #2dd4bf; }
 
@@ -185,12 +188,20 @@ html.dark svg [stroke="#666" i], html.dark svg [stroke="#6b7280" i] { stroke: va
 html.dark svg [stroke="#ccc" i], html.dark svg [stroke="#d1d5db" i],
 html.dark svg [stroke="#e5e7eb" i], html.dark svg [stroke="#f0f0f0" i],
 html.dark svg [stroke="#f3f4f6" i] { stroke: var(--d-line-strong); }
-html.dark svg [fill="#fecaca" i] { fill: rgb(239 68 68 / 0.25); }
+/* The theme's gain and loss colours (GAIN #2f7a4f / LOSS #b8423a in the component) are a little
+   dark for a near-black card, so charts draw them in their lighter dark-mode versions: bars,
+   lines, dots, gradient stops, and the price "bubbles" on the right edge of charts. */
+html.dark svg [fill="#2f7a4f" i] { fill: #6cc08b; }
+html.dark svg [stroke="#2f7a4f" i] { stroke: #6cc08b; }
+html.dark svg [stop-color="#2f7a4f" i] { stop-color: #6cc08b; }
+html.dark svg [fill="#b8423a" i] { fill: #ef8a80; }
+html.dark svg [stroke="#b8423a" i] { stroke: #ef8a80; }
+html.dark svg [stop-color="#b8423a" i] { stop-color: #ef8a80; }
+/* Pale red area under a drawdown line */
+html.dark svg [fill="#efc5c0" i] { fill: rgb(239 138 128 / 0.25); }
 /* Small green / red "pill" labels drawn inside charts (pale fill, dark-green or dark-red text) */
-html.dark svg [fill="#dcfce7" i] { fill: rgb(34 197 94 / 0.18); }
-html.dark svg [fill="#fee2e2" i] { fill: rgb(239 68 68 / 0.18); }
-html.dark svg [fill="#15803d" i] { fill: #4ade80; }
-html.dark svg [fill="#b91c1c" i] { fill: #f87171; }
+html.dark svg [fill="#d9ecdf" i] { fill: rgb(108 192 139 / 0.18); }
+html.dark svg [fill="#f6e0dd" i] { fill: rgb(239 138 128 / 0.18); }
 /* White outlines between pie slices and white dots on lines take the card colour instead */
 html.dark svg [stroke="#fff" i], html.dark svg [stroke="#ffffff" i] { stroke: var(--d-card); }
 html.dark svg circle[fill="#fff" i], html.dark svg circle[fill="#ffffff" i] { fill: var(--d-card); }
@@ -209,25 +220,33 @@ html.dark [style*="background-color: rgb(255, 255, 255)"],
 html.dark [style*="background: rgb(255, 255, 255)"],
 html.dark [style*="background: white"] { background-color: var(--d-card) !important; }
 html.dark [style*="border: 1px solid rgb(229, 231, 235)"] { border-color: var(--d-line-strong) !important; }
+/* Dark slate (#1e293b: PLN, and the first portfolio's colour) drawn as an HTML bar or dot becomes
+   near-white, as it already does in the SVG charts below; white numbers written on it turn dark */
+html.dark [style*="background-color: rgb(30, 41, 59)"] { background-color: var(--d-text-800) !important; }
+html.dark [style*="background-color: rgb(30, 41, 59)"] > [style*="color: white"] { color: var(--d-page) !important; }
 
 /* Text colours. Each is matched only as the "color" property itself — either first in the style
    (^=) or after another property ("; color") — so "background-color: <same rgb>" never matches.
    Otherwise a red-background badge would get red text and vanish. */
 /* Black text (the first portfolio's colour is black) and dark-grey text */
 html.dark [style^="color: rgb(0, 0, 0)"], html.dark [style*="; color: rgb(0, 0, 0)"],
-html.dark [style^="color: rgb(17, 24, 39)"], html.dark [style*="; color: rgb(17, 24, 39)"] { color: var(--d-text-800) !important; }
+html.dark [style^="color: rgb(17, 24, 39)"], html.dark [style*="; color: rgb(17, 24, 39)"],
+html.dark [style^="color: rgb(30, 41, 59)"], html.dark [style*="; color: rgb(30, 41, 59)"] { color: var(--d-text-800) !important; }
 html.dark [style^="color: rgb(55, 65, 81)"], html.dark [style*="; color: rgb(55, 65, 81)"] { color: var(--d-text-700) !important; }
 html.dark [style^="color: rgb(107, 114, 128)"], html.dark [style*="; color: rgb(107, 114, 128)"] { color: var(--d-text-500) !important; }
-html.dark [style^="color: rgb(22, 163, 74)"], html.dark [style*="; color: rgb(22, 163, 74)"],
-html.dark [style^="color: rgb(22, 101, 52)"], html.dark [style*="; color: rgb(22, 101, 52)"] { color: #4ade80 !important; }
-html.dark [style^="color: rgb(220, 38, 38)"], html.dark [style*="; color: rgb(220, 38, 38)"],
-html.dark [style^="color: rgb(153, 27, 27)"], html.dark [style*="; color: rgb(153, 27, 27)"] { color: #f87171 !important; }
+/* Gain and loss text (the theme's GAIN #2f7a4f / green-800 #245f3d, LOSS #b8423a / red-800 #93342e) */
+html.dark [style^="color: rgb(47, 122, 79)"], html.dark [style*="; color: rgb(47, 122, 79)"],
+html.dark [style^="color: rgb(36, 95, 61)"], html.dark [style*="; color: rgb(36, 95, 61)"] { color: #6cc08b !important; }
+html.dark [style^="color: rgb(184, 66, 58)"], html.dark [style*="; color: rgb(184, 66, 58)"],
+html.dark [style^="color: rgb(147, 52, 46)"], html.dark [style*="; color: rgb(147, 52, 46)"] { color: #ef8a80 !important; }
 /* SVG text labels with an inline fill */
 html.dark [style*="fill: rgb(102, 102, 102)"] { fill: var(--d-text-500) !important; }
 html.dark [style*="fill: rgb(55, 65, 81)"] { fill: var(--d-text-700) !important; }
 html.dark [style*="fill: rgb(146, 96, 10)"] { fill: #fbbf24 !important; }
+html.dark [style*="fill: rgb(47, 122, 79)"] { fill: #6cc08b !important; }
+html.dark [style*="fill: rgb(184, 66, 58)"] { fill: #ef8a80 !important; }
 /* Dark-red totals above the Portfolio tab's bars: a soft light red that stands out on the dark card */
-html.dark [style*="fill: rgb(153, 27, 27)"] { fill: #fca5a5 !important; }
+html.dark [style*="fill: rgb(147, 52, 46)"] { fill: #f4b0a9 !important; }
 
 /* The left panel sits on a page almost as dark as itself, so give it a faint edge */
 html.dark nav[aria-label="Pages"] { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.07); }
