@@ -8564,7 +8564,10 @@ const PortfolioBacktester = () => {
   // cell draw over the filters. For "sticky" to last the whole page, the bar must sit DIRECTLY
   // inside the tab's outer box — inside anything shorter it would stop being pinned when that
   // shorter box scrolls away.
-  const PINNED_FILTERS = 'sticky top-0 z-40 bg-white pt-2 pb-1';
+  // Desktop ("md:top-4"): it pins 16px below the top of the window, level with the top of the
+  // dark sidebar, just under the grey strip that covers those 16px (.page-top-mask in
+  // globals.css). Phones keep it at the very top.
+  const PINNED_FILTERS = 'sticky top-0 md:top-4 z-40 bg-white pt-2 pb-1';
 
   // PHONES ONLY (every "max-md:" class applies below 768px of width and nowhere else, so none of
   // the phone fixes below can change the desktop or laptop layout).
@@ -8785,6 +8788,9 @@ const PortfolioBacktester = () => {
         </div>
       </nav>
       <div className="min-w-0 min-[1520px]:flex-1">
+        {/* Desktop only: a grey strip pinned to the top 16px of the window, so while scrolling the
+            white card never shows above the top of the dark sidebar (see .page-top-mask in globals.css) */}
+        <div aria-hidden="true" className="page-top-mask" />
         {/* Main card: soft rounded corners, hairline border and a very light shadow (elegant, not heavy).
             On wide screens no bottom margin, so it ends level with the dark sidebar beside it. */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1520px]:mb-0 max-md:p-3">

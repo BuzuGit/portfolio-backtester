@@ -31,6 +31,57 @@ html {
   background-color: theme('colors.page');
 }
 
+/* Desktop and tablets (768px and wider): a grey strip pinned across the top 16px of the window,
+   directly above the white content card. The dark sidebar always stays 16px below the top of the
+   window, but the white card used to scroll right up to the window's edge (and the pinned filter
+   bars stuck at the very top), so a band of white showed above the sidebar. This strip hides
+   whatever scrolls up into those 16px, so the white always starts level with the sidebar's top.
+   - It sits in the 16px of grey page edge above the card, so with the page not scrolled it
+     covers only grey and changes nothing.
+   - The thin line along its bottom edge and the two rounded pieces hanging below its corners
+     redraw the top of the card (its hairline border and 12px rounded corners), so while
+     scrolling the white looks like the top of a card rather than one cut straight off.
+     Without scrolling they lie exactly on the card's own border and corners.
+   - z-index 45: above the pinned filter bars (40), below the menu drawer (50).
+   The colours are variables so dark mode can swap them (dark.css). Phones don't get it. */
+.page-top-mask {
+  display: none;
+}
+@media (min-width: 768px) {
+  .page-top-mask {
+    --mask-page: theme('colors.page');
+    --mask-line: theme('colors.gray.200');
+    display: block;
+    position: sticky;
+    top: 0;
+    z-index: 45;
+    height: 16px;
+    /* Pull it up into the page's 16px top edge, so it adds no height to the page */
+    margin-top: -16px;
+    background-color: var(--mask-page);
+    /* The card's 1px top border, drawn just below the strip */
+    box-shadow: 0 1px 0 var(--mask-line);
+  }
+  /* The rounded corners: 12x12 squares that are grey outside a quarter circle (the same 12px
+     radius as the card's corners), with the border's colour on the curve itself */
+  .page-top-mask::before,
+  .page-top-mask::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    width: 12px;
+    height: 12px;
+  }
+  .page-top-mask::before {
+    left: 0;
+    background: radial-gradient(circle at 100% 100%, transparent 10.5px, var(--mask-line) 11px, var(--mask-line) 12px, var(--mask-page) 12.5px);
+  }
+  .page-top-mask::after {
+    right: 0;
+    background: radial-gradient(circle at 0 100%, transparent 10.5px, var(--mask-line) 11px, var(--mask-line) 12px, var(--mask-page) 12.5px);
+  }
+}
+
 /* iPhone / iPad Safari zooms the whole page in whenever you tap a text box or dropdown whose text
    is smaller than 16px, and leaves it zoomed in afterwards. Most of the app's controls are 12-14px,
    so on a phone every dropdown tap did that. Giving them 16px text there stops it.
