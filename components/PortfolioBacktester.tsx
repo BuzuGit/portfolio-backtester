@@ -1498,15 +1498,22 @@ const CHART_PALETTE = {
 //     every page.
 //  4. SERIES_COLORS is the order portfolios and other lines take their colours in (dark slate
 //     first, the app's main colour). MARKET_LINE_COLOR (gold) is world equities wherever it is the
-//     yardstick; the 10-month SMA, inflation and the Trend Following strategy have fixed colours.
+//     yardstick; the 10-month SMA (red: the one exception to rule 1), inflation and the Trend
+//     Following strategy have fixed colours. PROFIT_COLOR, the user's favourite yellow, is profit.
 //  5. Amber = warning, a blue tint = a highlighted row, grey = neutral.
 // Dark mode: app/dark.css swaps GAIN and LOSS for lighter versions that read on a dark card.
 const GAIN = '#2f7a4f';
 const LOSS = '#b8423a';
 const SERIES_COLORS = ['#1e293b', CHART_PALETTE.blue, CHART_PALETTE.teal, CHART_PALETTE.violet, CHART_PALETTE.rose, CHART_PALETTE.wine];
-const SMA_COLOR = CHART_PALETTE.blue;           // the 10-month moving average line, on every chart
+// The 10-month moving average line, on every chart: red, the one exception to rule 1 (the user's
+// choice, 2026-11-05 — the SMA has always been the red line, and that is how it is recognised)
+const SMA_COLOR = '#ef4444';
 const INFLATION_COLOR = CHART_PALETTE.terracotta; // inflation / CPI lines (as EDO and Monthly already had)
 const TREND_COLOR = CHART_PALETTE.teal;         // the Trend Following strategy, beside Buy & Hold in blue
+// The app's signature warm yellow (the user's favourite colour, 2026-11-05): one of the theme's
+// main colours. Profit on the Portfolio tab; see the memory note before using it elsewhere.
+const THEME_YELLOW = '#F5A623';
+const PROFIT_COLOR = THEME_YELLOW;
 
 // The one heat scale: 7 colours from deep red (worst) through neutral grey (about zero) to deep
 // green (best). `t` runs from -1 to +1. Tables whose numbers are written in the page's normal
@@ -4336,13 +4343,21 @@ const PortfolioBacktester = () => {
    * Finds the closest available date in the data if exact date doesn't exist.
    */
   const setDatePreset = (preset: 'YTD' | '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | 'Max') => {
-    if (!assetData || assetData.length === 0) return;
+    const start = presetStartDate(preset);
+    if (start) setSelectedStartDate(start);
+  };
+
+  /**
+   * The start date a quick preset (YTD, 1Y … 10Y, Max) would set, without setting it. Used by
+   * setDatePreset above, and to light up the preset button that matches the dates on screen.
+   */
+  const presetStartDate = (preset: 'YTD' | '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | 'Max'): string | null => {
+    if (!assetData || assetData.length === 0) return null;
 
     if (preset === 'Max') {
       // Use the limiting asset's first date (shortest history), or the first date in the dataset
       const limiting = getLimitingAsset();
-      setSelectedStartDate(limiting ? limiting.date : assetData[0].date);
-      return;
+      return limiting ? limiting.date : assetData[0].date;
     }
 
     const endDate = new Date(selectedDateRange.end);
@@ -4367,16 +4382,19 @@ const PortfolioBacktester = () => {
       targetDateStr = limiting.date;
     }
 
-    // Find first date >= target date
+    // Find first date >= target date; if there is none after the target, the first available date
     const closestDate = assetData.find(row => row.date >= targetDateStr);
-
-    if (closestDate) {
-      setSelectedStartDate(closestDate.date);
-    } else {
-      // If no date found after target, use the first available date
-      setSelectedStartDate(assetData[0].date);
-    }
+    return closestDate ? closestDate.date : assetData[0].date;
   };
+
+  /**
+   * Which quick preset the dates on screen match (undefined if none: dates picked by hand).
+   * When the shortest asset history cuts several presets to the same start (say 9Y, 10Y and Max
+   * all begin at its first month) the longest one wins, since that is what "Max" means.
+   */
+  const DATE_PRESETS = ['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'] as const;
+  const activeDatePreset = (): (typeof DATE_PRESETS)[number] | undefined =>
+    [...DATE_PRESETS].reverse().find(p => presetStartDate(p) === selectedDateRange.start);
 
   /**
    * Updates a specific field of an asset in a portfolio
@@ -6373,6 +6391,8 @@ const PortfolioBacktester = () => {
       ticker: string;
       name: string;
       prices: (number | null)[];  // 13 prices, null if no data
+      prevPrices: (number | null)[]; // the month-end price before each of those 13 months
+      startDependent: boolean;    // EDO: each month is a fresh purchase, not a price ratio
       returns: (number | null)[]; // 13 monthly returns (%), null if can't compute
       sma10: number | null;       // 10-month SMA (average of last 10 months including current)
       signal: 'BUY' | 'SELL' | null;  // BUY if price > SMA, SELL if price < SMA
@@ -6380,9 +6400,10 @@ const PortfolioBacktester = () => {
       dd12m: number | null;       // 12-month drawdown: how far current price is below the 12-month high (%)
       ret12m: number | null;      // 12-month return: % change from first to last of the 13 displayed months
     }>;
+    prevMonth: string;            // label of the month before the first displayed month
   } => {
     if (!assetData || assetData.length === 0) {
-      return { months: [], assets: [] };
+      return { months: [], assets: [], prevMonth: '' };
     }
 
     // Use monthlyEndDate (tab-specific), then selectedEndDate (global), then last date in data
@@ -6537,6 +6558,10 @@ const PortfolioBacktester = () => {
         ticker: asset.ticker,
         name: asset.name,
         prices,
+        // The month-end price BEFORE each displayed month: what each month's return starts from
+        // (only for the Returns table's tooltip, which shows how the return was worked out)
+        prevPrices: allPrices.slice(8, 21),
+        startDependent,
         returns: startDependent
           ? returns.map((r, i) => (r === null ? null : freshReturn(allMonthDates[i + 8], monthDates[i])))
           : returns,
@@ -6548,7 +6573,11 @@ const PortfolioBacktester = () => {
       };
     });
 
-    return { months, assets };
+    // The label of the month before the first displayed one ("Oct25"), for that column's tooltip
+    const d0 = allMonthDates[8];
+    const prevMonth = `${d0.toLocaleDateString('en-US', { month: 'short' })}${d0.getFullYear().toString().slice(-2)}`;
+
+    return { months, assets, prevMonth };
   };
 
   /**
@@ -8944,24 +8973,26 @@ const PortfolioBacktester = () => {
                   <div className="hidden max-md:flex w-40">
                     <PhoneChoice
                       label="Quick range"
-                      display="Choose…"
+                      display={activeDatePreset() ?? 'Choose…'}
                       subtitle="Sets start and end date"
-                      options={['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'].map(p => ({ value: p, label: p }))}
+                      options={DATE_PRESETS.map(p => ({ value: p, label: p }))}
+                      selected={activeDatePreset()}
                       onPick={p => setDatePreset(p as Parameters<typeof setDatePreset>[0])}
                     />
                   </div>
-                  {/* Quick presets set both dates at once, so none of them stays "chosen" */}
+                  {/* The preset matching the dates on screen is the chosen one (slate); after
+                      picking dates by hand none is */}
                   <div className={`flex gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
                     <span className={SEG}>
-                    {(['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'] as const).map(preset => (
+                    {(() => { const active = activeDatePreset(); return DATE_PRESETS.map(preset => (
                       <button
                         key={preset}
                         onClick={() => setDatePreset(preset)}
-                        className={segBtn(false)}
+                        className={segBtn(preset === active)}
                       >
                         {preset}
                       </button>
-                    ))}
+                    )); })()}
                     </span>
                   </div>
                 </div>
@@ -11565,7 +11596,7 @@ const PortfolioBacktester = () => {
                       {plainCell(st?.sharpe != null ? st.sharpe.toFixed(2) : null, `Sharpe = CAGR ÷ Vol (0% risk-free rate, as elsewhere in the app), ${span}`)}
                       {plainCell(st ? `${st.maxDD.toFixed(1)}%` : null, `Max drawdown, ${span}`, 'text-red-700')}
                       {plainCell(st ? (st.longestDDMonths === 0 ? '0m' : formatPeriod(st.longestDDMonths)) : null, `Longest stretch below a previous peak, ${span}`)}
-                      {plainCell(st ? (st.currDD > -0.01 ? 'ATH' : `${st.currDD.toFixed(1)}%`) : null,
+                      {plainCell(st ? (st.currDD > -0.01 ? 'Peak' : `${st.currDD.toFixed(1)}%`) : null,
                         `Current drawdown from the highest value in the window, ${span}`, st && st.currDD > -0.01 ? 'text-green-700 font-semibold' : 'text-orange-700')}
                       <td className="px-2 py-1">{sparkline(r.spark.slice(-trendPoints))}</td>
                       {STATS_YEARS.map(y => (
@@ -12147,16 +12178,17 @@ const PortfolioBacktester = () => {
                                         </>
                                       ) : (<>
                                       {/* (Price sits second, right after the name — see above.) */}
-                                      {/* Current drawdown from the all-time high — same look as the Annual tab's "Curr DD" */}
+                                      {/* Current drawdown from the all-time high — the same look as the Holdings
+                                          page's Curr DD: plain text, "Peak" in green at the high, else the % in amber */}
                                       {r.drawdown === null ? (
                                         <td className="px-2 py-1 text-right text-xs text-gray-300 max-md:hidden">–</td>
                                       ) : r.isAtAth ? (
-                                        <td className="px-2 py-1 text-right text-xs font-semibold bg-green-100 text-green-700 cursor-help max-md:hidden" title={`At all-time high: ${fmtLevel(r.isFx, r.price ?? 0)} ${r.priceCurrency}`}>
-                                          ATH
+                                        <td className="px-2 py-1 text-right text-xs font-semibold text-green-700 cursor-help max-md:hidden" title={`At all-time high: ${fmtLevel(r.isFx, r.price ?? 0)} ${r.priceCurrency}`}>
+                                          Peak
                                         </td>
                                       ) : (
                                         <td
-                                          className="px-2 py-1 text-right text-xs tabular-nums bg-orange-50 text-orange-700 cursor-help max-md:hidden"
+                                          className="px-2 py-1 text-right text-xs tabular-nums text-orange-700 cursor-help max-md:hidden"
                                           title={`ATH ${fmtLevel(r.isFx, r.athPrice ?? 0)} ${r.priceCurrency} (${monthLabel(r.athDate)})`}
                                         >
                                           {r.drawdown.toFixed(1)}%
@@ -12294,7 +12326,9 @@ const PortfolioBacktester = () => {
                 {/* One compact box: the bar fills it from the left (largest holding = full width; the */}
                 {/* subtotal and total rows simply fill it), and the figure sits inside, right-aligned. */}
                 <div className="relative w-14 h-5 ml-auto bg-gray-100 rounded-sm overflow-hidden">
-                  <div className="absolute inset-y-0 left-0" style={{ width: `${Math.min(1, Math.max(0, w / maxWeight)) * 100}%`, background: 'rgb(209, 213, 219)' }} />
+                  {/* The bar's grey is a class (bg-gray-300), not an inline colour, so dark mode turns it
+                      dark grey too (app/dark.css); inline, it stayed light grey under light text. */}
+                  <div className="absolute inset-y-0 left-0 bg-gray-300" style={{ width: `${Math.min(1, Math.max(0, w / maxWeight)) * 100}%` }} />
                   <span className={`relative block pr-1 text-right text-xs leading-5 tabular-nums ${w < 0 ? 'text-red-600' : 'text-gray-800'} ${bold ? 'font-semibold' : ''}`}>{w.toFixed(1)}%</span>
                 </div>
               </td>
@@ -13406,7 +13440,7 @@ const PortfolioBacktester = () => {
               })()}
 
               {(() => {
-                const { months, assets: unsortedAssets } = getMonthlyPricesData();
+                const { months, assets: unsortedAssets, prevMonth } = getMonthlyPricesData();
 
                 // If the selected ticker was filtered out, deselect it
                 if (monthlySelectedTicker && !unsortedAssets.find(a => a.ticker === monthlySelectedTicker)) {
@@ -13580,10 +13614,25 @@ const PortfolioBacktester = () => {
                                   ))
                                 ) : (
                                   /* Returns view: green for positive, red for negative */
-                                  asset.returns.map((ret, colIdx) => (
+                                  asset.returns.map((ret, colIdx) => {
+                                    // Hover text: how this month's return was worked out, from the
+                                    // two month-end prices it compares (EDO: a fresh bond each month)
+                                    const from = colIdx === 0 ? prevMonth : months[colIdx - 1];
+                                    const p0 = asset.prevPrices[colIdx], p1 = asset.prices[colIdx];
+                                    const howCalculated = ret === null || p0 === null || p1 === null ? undefined
+                                      : asset.startDependent
+                                        ? `${asset.name}, ${months[colIdx]}: ${ret >= 0 ? '+' : ''}${ret.toFixed(2)}%\n`
+                                          + `A fresh EDO bought at the end of ${from} and valued at the end of ${months[colIdx]}\n`
+                                          + '(each month is a new purchase, as on the Annual tab)'
+                                        : `${asset.name}, ${months[colIdx]}: ${ret >= 0 ? '+' : ''}${ret.toFixed(2)}%\n`
+                                          + `End of ${from}: ${formatPrice(p0)}\n`
+                                          + `End of ${months[colIdx]}: ${formatPrice(p1)}\n`
+                                          + `${formatPrice(p1)} ÷ ${formatPrice(p0)} − 1 = ${ret >= 0 ? '+' : ''}${ret.toFixed(2)}%`;
+                                    return (
                                     <td
                                       key={colIdx}
-                                      className={`text-right py-0.5 px-1 font-mono ${
+                                      title={howCalculated}
+                                      className={`text-right py-0.5 px-1 font-mono ${howCalculated ? 'cursor-help' : ''} ${
                                         asset.signals[colIdx] === 'SELL' ? 'font-bold' : ''
                                       }`}
                                       style={{
@@ -13595,7 +13644,8 @@ const PortfolioBacktester = () => {
                                     >
                                       {ret !== null ? `${ret.toFixed(1)}%` : '-'}
                                     </td>
-                                  ))
+                                    );
+                                  })
                                 )}
                                 {/* 10m SMA column */}
                                 <td className="text-right py-0.5 px-1 bg-gray-50 font-mono border-l border-gray-200">
@@ -16540,7 +16590,7 @@ const PortfolioBacktester = () => {
                               <Line
                                 type="monotone"
                                 dataKey="sma10"
-                                stroke="#9ca3af"
+                                stroke={SMA_COLOR}
                                 strokeWidth={1.5}
                                 strokeDasharray="5 5"
                                 dot={false}
@@ -17303,13 +17353,13 @@ const PortfolioBacktester = () => {
                               />
                             </Bar>
                             {/* Top bar: Cumulative Profit (yellow) with profit label + total above */}
-                            <Bar dataKey="profitCumulative" stackId="value" fill={GAIN} name="profitCumulative">
+                            <Bar dataKey="profitCumulative" stackId="value" fill={PROFIT_COLOR} name="profitCumulative">
                               {/* Profit value on the yellow segment */}
                               <LabelList
                                 dataKey="profitCumulative"
                                 position="center"
                                 formatter={(value: number) => value !== 0 && Math.abs(value) >= minInnerLabel ? `${barMillions(value)}M` : ''}
-                                style={{ fontSize: '15px', fill: '#fff', fontWeight: 700 }}
+                                style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
                               />
                               {/* Total (contributions + profit) above the bar — uses custom renderer */}
                               {/* to read the full data entry and compute the sum */}
@@ -17391,7 +17441,7 @@ const PortfolioBacktester = () => {
                         />
                         {/* Negative profit (yellow) — renders below zero when loss occurs */}
                         {/* Must be FIRST in the stack so it extends downward from 0 */}
-                        <Bar dataKey="profitNegative" stackId="cp" fill={LOSS} name="profitNegative">
+                        <Bar dataKey="profitNegative" stackId="cp" fill={PROFIT_COLOR} name="profitNegative">
                           {/* Loss amount, centred INSIDE the yellow loss bar (below zero) */}
                           <LabelList
                             dataKey="profitNegative"
@@ -17426,7 +17476,7 @@ const PortfolioBacktester = () => {
                             always sits at the top of the stack (its top edge = contributions +
                             positive profit = the "labelTop"), so a top-positioned label clears the
                             bar in every year, including losses (where its height is 0). */}
-                        <Bar dataKey="profitPositive" stackId="cp" fill={GAIN} name="profitPositive">
+                        <Bar dataKey="profitPositive" stackId="cp" fill={PROFIT_COLOR} name="profitPositive">
                           <LabelList
                             dataKey="profitPositive"
                             position="center"
@@ -17435,7 +17485,7 @@ const PortfolioBacktester = () => {
                               if (value >= 1000) return `${(value / 1000).toFixed(0)}k`;
                               return Math.round(value).toLocaleString();
                             }}
-                            style={{ fontSize: '15px', fill: '#fff', fontWeight: 700 }}
+                            style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
                           />
                           {/* Growth total (contributions + profit) above the bar */}
                           <LabelList

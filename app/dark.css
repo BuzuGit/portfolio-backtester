@@ -224,6 +224,9 @@ html.dark [style*="border: 1px solid rgb(229, 231, 235)"] { border-color: var(--
    near-white, as it already does in the SVG charts below; white numbers written on it turn dark */
 html.dark [style*="background-color: rgb(30, 41, 59)"] { background-color: var(--d-text-800) !important; }
 html.dark [style*="background-color: rgb(30, 41, 59)"] > [style*="color: white"] { color: var(--d-page) !important; }
+/* The light-grey Weight bars behind the % figures (Positions tables) turn dark grey, so the light
+   text written on top of them stays readable */
+html.dark [style*="background-color: rgb(209, 213, 219)"] { background-color: var(--d-300) !important; }
 
 /* Text colours. Each is matched only as the "color" property itself — either first in the style
    (^=) or after another property ("; color") — so "background-color: <same rgb>" never matches.
