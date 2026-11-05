@@ -1676,6 +1676,35 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   return [f(0), f(8), f(4)];
 }
 
+/**
+ * The value label of a LOSS bar, just past the bar's lower end: between the bar and the month /
+ * year labels under the chart, where the eye reads it (a gain bar's label sits above it, as
+ * position="top" already does). Use as
+ *   <LabelList dataKey="…" content={lossBarLabel(v => `${v.toFixed(1)}%`, { fontSize: '11px', fill: LOSS })} />
+ * and give the chart room under its lowest bar: <YAxis padding={{ bottom: lossLabelRoom(…) }} />.
+ *
+ * Why not Recharts' own position="bottom": for a bar below zero, Recharts hands the label a box
+ * anchored at one end with a NEGATIVE height back to the other, so "bottom" lands on the zero line
+ * and every loss label ended up above the axis instead of under its bar. This works out both ends
+ * itself and takes the lower one, whichever way round Recharts gave them.
+ */
+const lossBarLabel = (format: (v: number) => string, style: React.CSSProperties = {}) =>
+  (props: { x?: string | number; y?: string | number; width?: string | number; height?: string | number; value?: unknown }) => {
+    const v = Number(props.value);
+    if (props.value === null || props.value === undefined || !isFinite(v) || v >= 0) return null;
+    const x = Number(props.x), w = Number(props.width), y = Number(props.y), h = Number(props.height);
+    if (![x, w, y, h].every(isFinite)) return null;
+    const lower = Math.max(y, y + h);                        // the bar's lower end
+    const size = parseFloat(String(style.fontSize ?? 11)) || 11;
+    return (
+      <text x={x + w / 2} y={lower + size + 1} textAnchor="middle" style={{ fontSize: `${size}px`, fill: LOSS, ...style }}>
+        {format(v)}
+      </text>
+    );
+  };
+/** Room (px) to leave under a bar chart's lowest bar for its loss label: none if nothing is below zero. */
+const lossLabelRoom = (anyBelowZero: boolean, fontPx: number) => (anyBelowZero ? fontPx + 6 : 0);
+
 /** The one heat scale (heatColorLight, with the theme at the top of the file), dark-mode aware. */
 const heatColor = (t: number, maxStrength = 1): string => themedCell(heatColorLight(t, maxStrength));
 
@@ -9654,8 +9683,10 @@ const PortfolioBacktester = () => {
                               how this chart has always looked. Once the labels are too dense to
                               draw, it appears, so the bars never lose their scale entirely.
                               Streaks are a count of months, so it drops the % sign. */}
+                          {/* padding: room under the lowest bar for its loss label (lossBarLabel) */}
                           {showLabels
-                            ? <YAxis hide domain={['auto', 'auto']} />
+                            ? <YAxis hide domain={['auto', 'auto']}
+                                padding={{ bottom: lossLabelRoom(rows.some(r => backtestResults.some(res => Number(r[res.portfolio.name]) < 0)), 11) }} />
                             : <YAxis tick={{ fontSize: 9 }} width={40} tickFormatter={(v: number) => streak ? v.toFixed(0) : `${v.toFixed(0)}%`} />}
                           <Tooltip
                             formatter={(value: number, name: string, props: { payload?: PeriodicReturnsRow }) => {
@@ -9709,9 +9740,7 @@ const PortfolioBacktester = () => {
                               {showLabels && (
                                 <LabelList
                                   dataKey={result.portfolio.name}
-                                  position="bottom"
-                                  formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                  style={{ fontSize: '11px', fill: LOSS }}
+                                  content={lossBarLabel((value: number) => `${value.toFixed(1)}%`, { fontSize: '11px', fill: LOSS })}
                                 />
                               )}
                             </Bar>
@@ -10035,6 +10064,7 @@ const PortfolioBacktester = () => {
                               tick={{ fontSize: 9 }}
                               width={45}
                               tickFormatter={(v: number) => `${v.toFixed(0)}${unit}`}
+                              padding={{ bottom: lossLabelRoom(rows.some(r => Number(r.delta) < 0), 9) }}
                             />
                             <Tooltip
                               formatter={(value: number) => [
@@ -10071,9 +10101,7 @@ const PortfolioBacktester = () => {
                               {showLabels && (
                                 <LabelList
                                   dataKey="delta"
-                                  position="bottom"
-                                  formatter={(value: number) => value < 0 ? value.toFixed(1) : ''}
-                                  style={{ fontSize: '9px', fill: b.color }}
+                                  content={lossBarLabel((value: number) => value.toFixed(1), { fontSize: '9px', fill: b.color })}
                                 />
                               )}
                             </Bar>
@@ -15241,6 +15269,7 @@ const PortfolioBacktester = () => {
                                     tick={{ fontSize: 9 }}
                                     width={40}
                                     tickFormatter={(v: number) => streakView ? v.toFixed(0) : `${v.toFixed(0)}%`}
+                                    padding={{ bottom: lossLabelRoom(returnsData.some(d => d.return < 0), 9) }}
                                   />
                                   <Tooltip
                                     formatter={(value: number) => streakView
@@ -15296,9 +15325,7 @@ const PortfolioBacktester = () => {
                                     {showReturnLabels && (
                                       <LabelList
                                         dataKey="return"
-                                        position="bottom"
-                                        formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                        style={{ fontSize: '9px', fill: LOSS }}
+                                        content={lossBarLabel((value: number) => `${value.toFixed(1)}%`, { fontSize: '9px', fill: LOSS })}
                                       />
                                     )}
                                   </Bar>
@@ -15325,8 +15352,9 @@ const PortfolioBacktester = () => {
                             // Bar labels drop the leading "+" — the bar's direction already says the sign,
                             // and with 24 of them on screen every saved character helps. Months with no
                             // price return an empty string so nothing is drawn for them.
+                            // Gains: above the bar (Recharts' "top"). Losses: lossBarLabel, under the bar.
                             const barLabel = (v: number | null) =>
-                              (v === null || v === undefined) ? '' : `${v.toFixed(1)}%`;
+                              (v === null || v === undefined || v < 0) ? '' : `${v.toFixed(1)}%`;
 
                             // --- The gap strip ---
                             // Drawn as a LabelList with custom content rather than as HTML above the
@@ -15353,7 +15381,8 @@ const PortfolioBacktester = () => {
                             const stressHi = Math.max(0, ...stressVals);
                             const stressLo = Math.min(0, ...stressVals);
                             const stressSpan = (stressHi - stressLo) || 1;
-                            const stressDomain: [number, number] = [stressLo - stressSpan * 0.06, stressHi + stressSpan * 0.18];
+                            // (Room below for the loss labels under the lowest bars: 10% of the span)
+                            const stressDomain: [number, number] = [stressLo - stressSpan * (stressLo < 0 ? 0.10 : 0.06), stressHi + stressSpan * 0.18];
                             // Pinning the domain costs Recharts its round auto-ticks — the axis came out
                             // reading -10%, -4%, 2%, 11%. So the ticks are chosen here instead: a 1/2/5
                             // step, and only the multiples that fall INSIDE the domain. That keeps the
@@ -15554,19 +15583,21 @@ const PortfolioBacktester = () => {
                                         <ReferenceLine y={0} stroke="#9CA3AF" strokeWidth={1} />
                                         {/* Black for the asset and gold (MARKET_LINE_COLOR) for the benchmark:
                                             world equities are gold wherever they are the yardstick.
-                                            Labels sit above every bar — including negative ones, where the
-                                            bar's top edge is the zero line, so the number ends up just above
-                                            it. isAnimationActive={false} is what makes them appear at all:
-                                            Recharts draws labels only after the entry animation finishes. */}
+                                            Labels sit above a gain bar and under a loss bar (lossBarLabel),
+                                            in each series' own label colour. isAnimationActive={false} is what
+                                            makes them appear at all: Recharts draws labels only after the
+                                            entry animation finishes. */}
                                         <Bar dataKey="asset" name={assetName} fill="#000000" isAnimationActive={false}>
                                           <LabelList dataKey="asset" position="top" formatter={barLabel}
                                                      style={{ fontSize: '8px', fill: '#374151' }} />
+                                          <LabelList dataKey="asset" content={lossBarLabel(v => `${v.toFixed(1)}%`, { fontSize: '8px', fill: '#374151' })} />
                                           {/* The gap strip rides on this series purely to get its x */}
                                           <LabelList content={renderGapPill} />
                                         </Bar>
                                         <Bar dataKey="bench" name="World equities (IWDA)" fill={MARKET_LINE_COLOR} isAnimationActive={false}>
                                           <LabelList dataKey="bench" position="top" formatter={barLabel}
                                                      style={{ fontSize: '8px', fill: '#92600a' }} />
+                                          <LabelList dataKey="bench" content={lossBarLabel(v => `${v.toFixed(1)}%`, { fontSize: '8px', fill: '#92600a' })} />
                                         </Bar>
                                       </BarChart>
                                     </ResponsiveContainer>
@@ -16815,7 +16846,8 @@ const PortfolioBacktester = () => {
                                   >
                                     <CartesianGrid strokeDasharray="3 3" />
                                     <XAxis dataKey="year" />
-                                    <YAxis hide domain={['auto', 'auto']} />
+                                    <YAxis hide domain={['auto', 'auto']}
+                                      padding={{ bottom: lossLabelRoom(chartData.some(d => Number(d['Buy & Hold']) < 0 || Number(d['Trend Following']) < 0), 10) }} />
                                     <Tooltip
                                       formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                                       labelFormatter={(label) => `Year: ${label}`}
@@ -16831,9 +16863,7 @@ const PortfolioBacktester = () => {
                                       />
                                       <LabelList
                                         dataKey="Buy & Hold"
-                                        position="bottom"
-                                        formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                        style={{ fontSize: '10px', fill: LOSS }}
+                                        content={lossBarLabel((value: number) => `${value.toFixed(1)}%`, { fontSize: '10px', fill: LOSS })}
                                       />
                                     </Bar>
                                     {/* Trend Following bars - Green */}
@@ -16846,9 +16876,7 @@ const PortfolioBacktester = () => {
                                       />
                                       <LabelList
                                         dataKey="Trend Following"
-                                        position="bottom"
-                                        formatter={(value: number) => value < 0 ? `${value.toFixed(1)}%` : ''}
-                                        style={{ fontSize: '10px', fill: LOSS }}
+                                        content={lossBarLabel((value: number) => `${value.toFixed(1)}%`, { fontSize: '10px', fill: LOSS })}
                                       />
                                     </Bar>
                                   </BarChart>
@@ -18958,7 +18986,9 @@ const PortfolioBacktester = () => {
                         margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
                       >
                         <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                        <YAxis hide domain={['auto', 'auto']} />
+                        {/* padding: room under the lowest bar for its loss label (lossBarLabel) */}
+                        <YAxis hide domain={['auto', 'auto']}
+                          padding={{ bottom: lossLabelRoom(getReturnsChartData().some(d => ['Return PLN', 'Return USD', 'Return SGD'].some(k => Number(d[k as keyof typeof d]) < 0)), 14) }} />
                         <Tooltip
                           formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                           labelFormatter={(label) => `Year: ${label}`}
@@ -18974,9 +19004,7 @@ const PortfolioBacktester = () => {
                             />
                             <LabelList
                               dataKey="Return PLN"
-                              position="bottom"
-                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
+                              content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
                             />
                           </Bar>
                         )}
@@ -18990,9 +19018,7 @@ const PortfolioBacktester = () => {
                             />
                             <LabelList
                               dataKey="Return USD"
-                              position="bottom"
-                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
+                              content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
                             />
                           </Bar>
                         )}
@@ -19006,9 +19032,7 @@ const PortfolioBacktester = () => {
                             />
                             <LabelList
                               dataKey="Return SGD"
-                              position="bottom"
-                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
+                              content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
                             />
                           </Bar>
                         )}
@@ -19026,7 +19050,9 @@ const PortfolioBacktester = () => {
                         margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
                       >
                         <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                        <YAxis hide domain={['auto', 'auto']} />
+                        {/* padding: room under the lowest bar for its loss label (lossBarLabel) */}
+                        <YAxis hide domain={['auto', 'auto']}
+                          padding={{ bottom: lossLabelRoom(getGrowthByYearChartData().some(d => d['Growth PLN'] < 0 || d['Growth USD'] < 0 || d['Growth SGD'] < 0), 14) }} />
                         <Tooltip
                           formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                           labelFormatter={(label) => `Year: ${label}`}
@@ -19042,9 +19068,7 @@ const PortfolioBacktester = () => {
                             />
                             <LabelList
                               dataKey="Growth PLN"
-                              position="bottom"
-                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
+                              content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
                             />
                           </Bar>
                         )}
@@ -19058,9 +19082,7 @@ const PortfolioBacktester = () => {
                             />
                             <LabelList
                               dataKey="Growth USD"
-                              position="bottom"
-                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
+                              content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
                             />
                           </Bar>
                         )}
@@ -19074,9 +19096,7 @@ const PortfolioBacktester = () => {
                             />
                             <LabelList
                               dataKey="Growth SGD"
-                              position="bottom"
-                              formatter={(value: number) => value < 0 ? barPct(value) : ''}
-                              style={{ fontSize: '14px', fontWeight: 600, fill: LOSS }}
+                              content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
                             />
                           </Bar>
                         )}
