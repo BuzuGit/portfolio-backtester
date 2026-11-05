@@ -2085,10 +2085,10 @@ const PortfolioBacktester = () => {
   // Closed round trips, rebuilt from the Transactions ledger by lib/positions.ts (the old
   // "Closed"/"Exit" sheet tabs are gone). "Closed tab" below = the Closed half of Positions.
   const [closedData, setClosedData] = useState<ClosedPositionRow[]>([]);
-  // Asset filter for the Positions page, Open and Closed alike (every ticker you have ever
-  // held is selected by default after data loads)
+  // Every ticker you have ever held (open or closed), rebuilt on each data load. The Positions
+  // page shows all of them: its Assets filter was removed on 2026-11-05 (nothing worth hiding
+  // there), so this is no longer a user choice.
   const [closedSelectedTickers, setClosedSelectedTickers] = useState<string[]>([]);
-  const [closedOpenFilterDropdown, setClosedOpenFilterDropdown] = useState<'assets' | null>(null);
   // Which asset the user drilled into (empty string = showing summary list)
   const [closedSelectedTicker, setClosedSelectedTicker] = useState<string>('');
   // "Invested Into" comparison: which other asset to compare against
@@ -2116,8 +2116,6 @@ const PortfolioBacktester = () => {
   const [closedIncludedTxns, setClosedIncludedTxns] = useState<Set<number> | null>(null);
   // Ref for the "select all" checkbox so we can set the indeterminate DOM property
   const closedSelectAllRef = useRef<HTMLInputElement>(null);
-  // Ref for click-outside detection on the Closed tab filter dropdowns
-  const closedFilterRef = useRef<HTMLDivElement>(null);
 
   // ---- Positions currency conversion ----
   // Currency to convert all position values into (PLN default, '' = no conversion)
@@ -2401,21 +2399,6 @@ const PortfolioBacktester = () => {
     }
   }, [yearsDropdownOpen]);
 
-  // Close Closed tab filter dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      // A tap inside the phone's slide-up panel isn't "outside": the panel lives elsewhere on the page
-      if ((event.target as Element).closest?.('[role="dialog"]')) return;
-      if (closedFilterRef.current && !closedFilterRef.current.contains(event.target as Node)) {
-        setClosedOpenFilterDropdown(null);
-      }
-    };
-    if (closedOpenFilterDropdown) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [closedOpenFilterDropdown]);
-
   // Manage the "indeterminate" state of the select-all checkbox in the Closed tab.
   // HTML checkbox has three visual states: checked, unchecked, and indeterminate (dash icon).
   // React can't set indeterminate via props — it's a DOM property, so we use a ref.
@@ -2513,8 +2496,10 @@ const PortfolioBacktester = () => {
       setDailyData(fetchedDailyData);
       setPresetPortfolios(fetchedPresets);
       setEdoData(fetchedEdo);
-      if (resetSelections) {
-        // Auto-select all position tickers (both open and closed) by default
+      {
+        // Every position ticker (open and closed). On EVERY load, not only the first: with no
+        // Assets filter on the Positions page any more, a position added to the sheet must
+        // appear after Refresh Data rather than wait for a full page reload.
         const closedTickers = new Set(effectiveClosed.map((row: ClosedPositionRow) => row.ticker));
         // Open tickers come from the ledger replay, which correctly keeps a position open
         // when it was only PARTLY sold. The old rule — "bought and never sold" — dropped
@@ -2986,10 +2971,6 @@ const PortfolioBacktester = () => {
     );
   };
 
-  /** Select/deselect all position assets (both open and closed). */
-  const toggleAllPositionAssets = (selectAll: boolean) => {
-    setClosedSelectedTickers(selectAll ? getPositionsTabLookup().map(a => a.ticker) : []);
-  };
 
   /** Returns all closed position rows for a specific ticker. */
   const getClosedTransactions = (ticker: string): ClosedPositionRow[] => {
@@ -3751,16 +3732,6 @@ const PortfolioBacktester = () => {
    * Empty until the ledger has loaded.
    */
   const getOpenTickers = (): string[] => positionsModel?.open.map(o => o.ticker) ?? [];
-
-  /**
-   * Returns assets that exist in BOTH the lookup table AND either closed or open positions.
-   * Used by the shared "Positions" tab filter dropdown.
-   */
-  const getPositionsTabLookup = (): AssetLookup[] => {
-    const closedTickers = new Set(closedData.map(row => row.ticker));
-    const openTickers = new Set(getOpenTickers());
-    return assetLookup.filter(asset => closedTickers.has(asset.ticker) || openTickers.has(asset.ticker));
-  };
 
   /**
    * Returns the purchase rows that make up an open position, sorted by date.
@@ -19091,91 +19062,24 @@ const PortfolioBacktester = () => {
             <div className="mt-2">
               {edoMissingBanner}
 
-              {/* --- Positions Tab Filter Controls --- */}
-              {/* Shared filter for both open and closed positions */}
-              <div ref={closedFilterRef} className="flex flex-wrap gap-2 mb-4">
-                {/* Assets Dropdown */}
-                {(() => {
-                  const positionsLookup = getPositionsTabLookup();
-                  const allAssetsSelected = closedSelectedTickers.length === positionsLookup.length && positionsLookup.length > 0;
-
-                  const getSelectionText = (selected: number, total: number, label: string) => {
-                    if (selected === 0) return `No ${label}`;
-                    if (selected === total) return `All ${label}`;
-                    return `${selected} of ${total}`;
-                  };
-
-                  return (
-                    <div className="relative">
-                      <button
-                        onClick={() => setClosedOpenFilterDropdown(closedOpenFilterDropdown === 'assets' ? null : 'assets')}
-                        className={`h-8 px-3 text-xs border rounded-lg flex items-center gap-2 max-md:h-auto max-md:py-1.5 max-md:text-sm ${
-                          closedOpenFilterDropdown === 'assets' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
-                        }`}
-                      >
-                        <span className="font-medium">Assets:</span>
-                        <span className="text-gray-600">{getSelectionText(closedSelectedTickers.length, positionsLookup.length, 'assets')}</span>
-                        <svg className={`w-4 h-4 transition-transform ${closedOpenFilterDropdown === 'assets' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                      {closedOpenFilterDropdown === 'assets' && (
-                        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg min-w-[280px] max-md:hidden">
-                          <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
-                            <span className="text-sm font-medium text-gray-700">Select Assets</span>
-                            <button onClick={() => toggleAllPositionAssets(!allAssetsSelected)} className="text-xs text-blue-600 hover:underline">
-                              {allAssetsSelected ? 'Deselect All' : 'Select All'}
-                            </button>
-                          </div>
-                          <div className="max-h-60 overflow-y-auto p-2">
-                            {positionsLookup.map(asset => (
-                              <label key={asset.ticker} className="flex items-center gap-2 py-1 px-2 text-sm cursor-pointer hover:bg-gray-100 rounded">
-                                <input
-                                  type="checkbox"
-                                  checked={closedSelectedTickers.includes(asset.ticker)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setClosedSelectedTickers([...closedSelectedTickers, asset.ticker]);
-                                    } else {
-                                      setClosedSelectedTickers(closedSelectedTickers.filter(t => t !== asset.ticker));
-                                    }
-                                  }}
-                                />
-                                <span>{asset.ticker} - {asset.name}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {/* Currency conversion dropdown — converts all position values to chosen currency.
-                    Phones: a "Currency: USD ▾" button matching the Assets one, opening a slide-up
-                    panel ("-" = no conversion, each position in its own currency, reads "Native"). */}
-                <div className="hidden max-md:flex">
-                  <PhoneChoice
-                    variant="filter"
-                    label="Currency"
-                    options={CURRENCY_OPTIONS.map(o => ({ value: o.value, label: o.value === '' ? 'Native' : o.label, hint: o.value === '' ? 'no conversion' : undefined }))}
-                    selected={positionsCurrency}
-                    onPick={setPositionsCurrency}
-                  />
-                </div>
-                <div className="flex items-center gap-1 max-md:hidden">
-                  <span className="text-xs text-gray-500" title="Convert all position values to this currency for comparison">Ccy:</span>
-                  <select
-                    aria-label="Currency"
-                    value={positionsCurrency}
-                    onChange={(e) => setPositionsCurrency(e.target.value)}
-                    className={FIELD}
-                    title="Target currency: converts invested/value/PnL columns to this currency"
-                  >
+              {/* --- Positions Tab Controls (Open and Closed alike) ---
+                  No Assets filter: every position is always shown (removed 2026-11-05).
+                  Currency: buttons on desktop AND phones — only four choices, so they fit on a
+                  phone's width and a slide-up panel would just be an extra tap. "Native" = no
+                  conversion, each position in its own currency. */}
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mb-4">
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-gray-500 mr-1" title="Convert all position values to this currency for comparison">Currency:</span>
+                  <span className={SEG}>
                     {CURRENCY_OPTIONS.map(opt => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      <button
+                        key={opt.value}
+                        onClick={() => setPositionsCurrency(opt.value)}
+                        className={segBtn(positionsCurrency === opt.value)}
+                        title={opt.value === '' ? 'No conversion: each position in its own currency' : `Convert invested / value / PnL to ${opt.label}`}
+                      >{opt.value === '' ? 'Native' : opt.label}</button>
                     ))}
-                  </select>
+                  </span>
                 </div>
 
                 {/* "Group M&C" toggle — when on, classes come from the Lookup tab's PortfolioClass
@@ -19207,8 +19111,8 @@ const PortfolioBacktester = () => {
                 if (closedSelectedTickers.length === 0) {
                   return (
                     <div className="bg-white p-8 rounded-lg shadow text-center text-gray-500">
-                      <p className="text-lg mb-2">Select assets using the filters above</p>
-                      <p className="text-sm">Use the Assets filter to choose which positions to view.</p>
+                      <p className="text-lg mb-2">No positions yet</p>
+                      <p className="text-sm">Positions appear here once the Transactions tab of the sheet has purchases.</p>
                     </div>
                   );
                 }
@@ -22751,17 +22655,6 @@ const PortfolioBacktester = () => {
           />
         );
       })()}
-      {closedOpenFilterDropdown === 'assets' && isPhoneScreen() && (
-        <PhoneCheckSheet
-          title="Assets"
-          options={getPositionsTabLookup().map(a => ({ value: a.ticker, label: a.ticker, hint: a.name }))}
-          checked={closedSelectedTickers}
-          onToggle={v => setClosedSelectedTickers(closedSelectedTickers.includes(v)
-            ? closedSelectedTickers.filter(t => t !== v) : [...closedSelectedTickers, v])}
-          onSetAll={toggleAllPositionAssets}
-          onClose={() => setClosedOpenFilterDropdown(null)}
-        />
-      )}
 
       {/* Phones only: the pull-to-refresh arrow. It waits just above the top edge, invisible, and
           is moved into view by the touch handlers next to loadDataFromSheet. */}
