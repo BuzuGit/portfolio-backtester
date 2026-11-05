@@ -11358,8 +11358,10 @@ const PortfolioBacktester = () => {
             const yoyCap = Math.max(1e-9, ...allRows.filter(r => r.kind === 'cpiyoy')
               .flatMap(r => MARKETS_PERIODS.map(p => r.returns[p]))
               .filter((v): v is number => v !== null).map(Math.abs));
-            // Medium shades of the same green/red the cells use, so bars and cells read as one palette.
-            const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
+            // The theme's one gain green and one loss red, exactly as the bar charts on Monthly and
+            // Backtest draw them (they used to be a lighter heat-cell shade: two greens for one
+            // meaning). themedCell gives their lighter versions in dark mode.
+            const BAR_UP = themedCell(GAIN), BAR_DOWN = themedCell(LOSS);
 
             // The sparkline shows the last N years of each row's full history: N years of monthly
             // steps = 12N + 1 month-end points (all of it on "Max").
@@ -11597,7 +11599,7 @@ const PortfolioBacktester = () => {
                       {plainCell(st ? `${st.maxDD.toFixed(1)}%` : null, `Max drawdown, ${span}`, 'text-red-700')}
                       {plainCell(st ? (st.longestDDMonths === 0 ? '0m' : formatPeriod(st.longestDDMonths)) : null, `Longest stretch below a previous peak, ${span}`)}
                       {plainCell(st ? (st.currDD > -0.01 ? 'Peak' : `${st.currDD.toFixed(1)}%`) : null,
-                        `Current drawdown from the highest value in the window, ${span}`, st && st.currDD > -0.01 ? 'text-green-700 font-semibold' : 'text-orange-700')}
+                        `Current drawdown from the highest value in the window, ${span}`, st && st.currDD > -0.01 ? 'text-green-700 font-semibold' : 'text-red-600')}
                       <td className="px-2 py-1">{sparkline(r.spark.slice(-trendPoints))}</td>
                       {STATS_YEARS.map(y => (
                         <React.Fragment key={y}>
@@ -12179,7 +12181,8 @@ const PortfolioBacktester = () => {
                                       ) : (<>
                                       {/* (Price sits second, right after the name — see above.) */}
                                       {/* Current drawdown from the all-time high — the same look as the Holdings
-                                          page's Curr DD: plain text, "Peak" in green at the high, else the % in amber */}
+                                          page's Curr DD: plain text, "Peak" in green at the high, else the % in the
+                                          same red as a price that fell (the Price column) */}
                                       {r.drawdown === null ? (
                                         <td className="px-2 py-1 text-right text-xs text-gray-300 max-md:hidden">–</td>
                                       ) : r.isAtAth ? (
@@ -12188,7 +12191,7 @@ const PortfolioBacktester = () => {
                                         </td>
                                       ) : (
                                         <td
-                                          className="px-2 py-1 text-right text-xs tabular-nums text-orange-700 cursor-help max-md:hidden"
+                                          className="px-2 py-1 text-right text-xs tabular-nums text-red-600 cursor-help max-md:hidden"
                                           title={`ATH ${fmtLevel(r.isFx, r.athPrice ?? 0)} ${r.priceCurrency} (${monthLabel(r.athDate)})`}
                                         >
                                           {r.drawdown.toFixed(1)}%
@@ -12304,7 +12307,8 @@ const PortfolioBacktester = () => {
             const retHi = Math.max(0, ...assetRows.map(barVal));
             const retSpan = (retHi - retLo) || 1;
             const zeroPct = (-retLo / retSpan) * 100;
-            const BAR_UP = returnHeatColor(28), BAR_DOWN = returnHeatColor(-28);
+            // The theme's gain green / loss red, the same as every bar chart (see Markets above)
+            const BAR_UP = themedCell(GAIN), BAR_DOWN = themedCell(LOSS);
             // Heat colours for Return % and XIRR, each column on its own scale (as on the Markets pages).
             const cap = (vals: (number | null)[]) => Math.max(1e-9, ...vals.filter((v): v is number => v !== null).map(Math.abs));
             const pctCap = cap(assetRows.map(r => r.retPct));
