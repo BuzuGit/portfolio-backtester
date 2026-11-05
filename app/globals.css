@@ -150,6 +150,23 @@ html {
     padding-left: 4px;
     padding-right: 4px;
   }
+  /* The on/off switches sit in one grey strip (SEG in the component): it takes the whole row,
+     its switches share it equally (three to a line), and a long label wraps onto two lines
+     rather than being cut off. */
+  .phone-chart-controls > span {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .phone-chart-controls > span > button {
+    flex: 1 1 30%;
+    min-width: 0;
+    height: auto;
+    min-height: 34px;
+    padding: 4px;
+    white-space: normal;
+    line-height: 1.15;
+  }
   .phone-chart-controls > div {
     grid-column: span 3;
   }
