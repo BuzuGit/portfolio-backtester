@@ -1486,6 +1486,34 @@ const CHART_PALETTE = {
   wine:      '#8a3f52', // deep wine
 } as const;
 
+// ----------------------------------------
+// ONE LOOK FOR EVERY BUTTON AND FILTER
+// ----------------------------------------
+// Chosen on 2026-11-05 after comparing four mock-ups: Cash Flow Tracker's compact grouped strip,
+// in the Markets tab's colours. Use these for every control instead of writing the classes by
+// hand: hand-written classes are how the app ended up with ~25 different button looks.
+//
+//   SEG + segBtn(on)  a pick-one row (Currency, Period, View...): the options sit together in one
+//                     light-grey strip, and the chosen one is dark slate with white text. An on/off
+//                     switch is a strip with a single button in it.
+//   FIELD             a dropdown, date or number box (toolbars and filter bars).
+//   FIELD_SM          the same, smaller, for boxes inside a dense row (a portfolio's asset rows).
+//   BTN_MAIN          a page's main action (Run Backtest, Add).
+//   BTN_SECOND        any other button (+ Add Asset, Show / Hide, Clear...).
+//
+// Desktop: everything 32px tall. Phones ("max-md:", below 768px): a little taller for fingers.
+// Dark mode needs nothing here: app/dark.css already turns bg-gray-100 into the dark grey, and
+// bg-slate-800 with white text into the light "selected" pill with dark text.
+const SEG = 'inline-flex items-center gap-0.5 p-[3px] rounded-lg bg-gray-100 shrink-0';
+const segBtn = (on: boolean) =>
+  `h-[26px] px-2.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors max-md:h-[34px] max-md:px-3 max-md:text-[13px] ${
+    on ? 'bg-slate-800 text-white' : 'text-gray-600 hover:bg-gray-200'
+  }`;
+const FIELD = 'h-8 px-2.5 text-xs border border-gray-300 rounded-lg bg-white max-md:h-10 max-md:text-sm';
+const FIELD_SM = 'h-[26px] px-1.5 text-xs border border-gray-300 rounded-md bg-white max-md:h-9';
+const BTN_MAIN = 'h-8 px-4 inline-flex items-center justify-center gap-2 rounded-lg bg-slate-800 text-white text-xs font-semibold hover:bg-slate-700 disabled:opacity-50 max-md:h-11 max-md:text-[15px]';
+const BTN_SECOND = 'h-8 px-3 inline-flex items-center justify-center gap-1.5 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200 transition-colors max-md:h-11 max-md:text-[15px]';
+
 // Asset class colors for the breakdown chart and table color dots
 const ASSET_CLASS_COLORS: Record<string, string> = {
   'Fixed Income': CHART_PALETTE.olive, 'Equities': CHART_PALETTE.wine,
@@ -8361,7 +8389,7 @@ const PortfolioBacktester = () => {
         <div className="relative">
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assets' ? null : 'assets')}
-            className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+            className={`phone-filter-box h-8 px-3 text-xs border rounded-lg flex items-center gap-2 max-md:h-auto max-md:py-1.5 max-md:text-sm ${
               openFilterDropdown === 'assets' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
             }`}
           >
@@ -8408,7 +8436,7 @@ const PortfolioBacktester = () => {
         <div className="relative">
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetClass' ? null : 'assetClass')}
-            className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+            className={`phone-filter-box h-8 px-3 text-xs border rounded-lg flex items-center gap-2 max-md:h-auto max-md:py-1.5 max-md:text-sm ${
               openFilterDropdown === 'assetClass' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
             }`}
           >
@@ -8455,7 +8483,7 @@ const PortfolioBacktester = () => {
         <div className="relative">
           <button
             onClick={() => setOpenFilterDropdown(openFilterDropdown === 'currency' ? null : 'currency')}
-            className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+            className={`phone-filter-box h-8 px-3 text-xs border rounded-lg flex items-center gap-2 max-md:h-auto max-md:py-1.5 max-md:text-sm ${
               openFilterDropdown === 'currency' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
             }`}
           >
@@ -8502,7 +8530,7 @@ const PortfolioBacktester = () => {
           <div className="relative">
             <button
               onClick={() => setOpenFilterDropdown(openFilterDropdown === 'assetSubcategory' ? null : 'assetSubcategory')}
-              className={`phone-filter-box px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+              className={`phone-filter-box h-8 px-3 text-xs border rounded-lg flex items-center gap-2 max-md:h-auto max-md:py-1.5 max-md:text-sm ${
                 openFilterDropdown === 'assetSubcategory' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
               }`}
             >
@@ -8859,7 +8887,7 @@ const PortfolioBacktester = () => {
             <button
               onClick={loadDataFromSheet}
               disabled={isLoading}
-              className="px-3 py-1.5 bg-slate-800 text-white rounded-lg hover:bg-slate-700 font-semibold flex items-center gap-2 disabled:opacity-50 text-sm"
+              className={BTN_MAIN}
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
               {isLoading ? 'Loading...' : 'Refresh Data'}
@@ -8927,7 +8955,7 @@ const PortfolioBacktester = () => {
               <button
                 type="button"
                 onClick={() => setNavOpen(true)}
-                className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center gap-2"
+                className={BTN_SECOND}
                 aria-label="Open navigation"
               >
                 <Menu className="w-4 h-4" />
@@ -8955,16 +8983,19 @@ const PortfolioBacktester = () => {
                       onPick={p => setDatePreset(p as Parameters<typeof setDatePreset>[0])}
                     />
                   </div>
+                  {/* Quick presets set both dates at once, so none of them stays "chosen" */}
                   <div className={`flex gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
+                    <span className={SEG}>
                     {(['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'] as const).map(preset => (
                       <button
                         key={preset}
                         onClick={() => setDatePreset(preset)}
-                        className="px-2 py-1 text-xs bg-white border border-gray-300 rounded hover:bg-gray-100 font-medium"
+                        className={segBtn(false)}
                       >
                         {preset}
                       </button>
                     ))}
+                    </span>
                   </div>
                 </div>
                 {/* Phones: two to a row (three cut the dates off: "2009-12-…"), and the boxes a
@@ -8980,7 +9011,7 @@ const PortfolioBacktester = () => {
                         <select
                           value={selectedDateRange.start}
                           onChange={(e) => setSelectedStartDate(e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
+                          className={`w-full ${FIELD}`}
                         >
                           {assetData.filter(row => !minDate || row.date >= minDate).map(row => (
                             <option key={row.date} value={row.date}>{row.date}</option>
@@ -9001,7 +9032,7 @@ const PortfolioBacktester = () => {
                     <select
                       value={selectedDateRange.end}
                       onChange={(e) => setSelectedEndDate(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
+                      className={`w-full ${FIELD}`}
                     >
                       {assetData.slice().reverse().filter(row => row.date >= selectedDateRange.start).map(row => (
                         <option key={row.date} value={row.date}>{row.date}</option>
@@ -9016,7 +9047,7 @@ const PortfolioBacktester = () => {
                       type="number"
                       value={startingCapital}
                       onChange={(e) => setStartingCapital(parseFloat(e.target.value))}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
+                      className={`w-full ${FIELD}`}
                     />
                   </div>
 
@@ -9026,7 +9057,7 @@ const PortfolioBacktester = () => {
                     <select
                       value={rebalanceFreq}
                       onChange={(e) => setRebalanceFreq(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
+                      className={`w-full ${FIELD}`}
                     >
                       <option value="monthly">Monthly</option>
                       <option value="quarterly">Quarterly</option>
@@ -9044,7 +9075,7 @@ const PortfolioBacktester = () => {
                     <select
                       value={withdrawalRate}
                       onChange={(e) => setWithdrawalRate(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
+                      className={`w-full ${FIELD}`}
                     >
                       <option value="2">2.0%</option>
                       <option value="2.5">2.5%</option>
@@ -9062,7 +9093,7 @@ const PortfolioBacktester = () => {
                     <select
                       value={inflationRate}
                       onChange={(e) => setInflationRate(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm max-md:py-2 max-md:rounded-lg"
+                      className={`w-full ${FIELD}`}
                     >
                       <option value="0">0%</option>
                       <option value="1">1%</option>
@@ -9083,7 +9114,7 @@ const PortfolioBacktester = () => {
                   <h2 className="text-lg font-semibold text-gray-700">Portfolios</h2>
                   <button
                     onClick={addPortfolio}
-                    className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 flex items-center gap-1 text-sm"
+                    className={BTN_SECOND}
                   >
                     <Plus className="w-4 h-4" />Add
                   </button>
@@ -9133,7 +9164,7 @@ const PortfolioBacktester = () => {
                                 <select
                                   value={current?.name ?? ''}
                                   onChange={(e) => applyPreset(portfolio.id, e.target.value)}
-                                  className="flex-1 min-w-0 px-1 py-0.5 text-xs border border-gray-300 rounded max-md:py-1.5"
+                                  className={`flex-1 min-w-0 ${FIELD_SM}`}
                                   title="Load a ready-made portfolio from the Portfolios sheet. Replaces this card's assets and weights; currency and inflation stay as set."
                                 >
                                   <option value="">Custom</option>
@@ -9174,7 +9205,7 @@ const PortfolioBacktester = () => {
                                 aria-label="Asset"
                                 value={asset.asset}
                                 onChange={(e) => updateAsset(portfolio.id, idx, 'asset', e.target.value)}
-                                className="flex-1 min-w-0 px-1 py-1 text-xs border border-gray-300 rounded max-md:py-1.5"
+                                className={`flex-1 min-w-0 ${FIELD_SM}`}
                               >
                                 <option value="">Select...</option>
                                 {availableAssetsFiltered.map(a => (
@@ -9192,7 +9223,7 @@ const PortfolioBacktester = () => {
                                 onBlur={() => clearNumDraft(portfolio.id, idx, 'weight')}
                                 placeholder="%"
                                 title="Weight %. Negative = short this asset (e.g. 200 CSPX / -100 IB01)."
-                                className={`w-14 px-1 py-1 text-xs border rounded shrink-0 text-right max-md:py-1.5 ${isShort ? 'border-red-300 text-red-600 font-semibold' : 'border-gray-300'}`}
+                                className={`w-14 h-[26px] px-1 text-xs border rounded-md bg-white shrink-0 text-right max-md:h-9 ${isShort ? 'border-red-300 text-red-600 font-semibold' : 'border-gray-300'}`}
                               />
                               {/* Cost Input — optional annual carry on this leg */}
                               <input
@@ -9203,7 +9234,7 @@ const PortfolioBacktester = () => {
                                 onBlur={() => clearNumDraft(portfolio.id, idx, 'costPct')}
                                 placeholder="—"
                                 title="Annual carry on this leg, as % of its notional. Negative = you pay (e.g. -0.5 for a 50bps borrow spread). Leave empty for none."
-                                className={`w-14 px-1 py-1 text-xs border rounded shrink-0 text-right max-md:py-1.5 ${asset.costPct ? 'border-amber-300 text-amber-700' : 'border-gray-200 text-gray-500'}`}
+                                className={`w-14 h-[26px] px-1 text-xs border rounded-md bg-white shrink-0 text-right max-md:h-9 ${asset.costPct ? 'border-amber-300 text-amber-700' : 'border-gray-200 text-gray-500'}`}
                               />
                               {/* Remove Asset. Phones: a 32px button around a bigger bin, so a finger can
                                   hit it (the bare 12px icon was too small) */}
@@ -9222,7 +9253,7 @@ const PortfolioBacktester = () => {
                         {/* Add Asset Button */}
                         <button
                           onClick={() => addAssetToPortfolio(portfolio.id)}
-                          className="w-full py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded max-md:py-2"
+                          className={`w-full ${BTN_SECOND}`}
                         >
                           + Add Asset
                         </button>
@@ -9259,7 +9290,7 @@ const PortfolioBacktester = () => {
                                     return p;
                                   }));
                                 }}
-                                className="px-1 py-0.5 text-xs border border-gray-300 rounded max-md:flex-1 max-md:min-w-0 max-md:py-1.5"
+                                className={`${FIELD_SM} max-md:flex-1 max-md:min-w-0`}
                                 title={describeFxConversion(portfolio.assets, portfolio.baseCurrency, getAssetCurrency)}
                               >
                                 {PORTFOLIO_CURRENCY_OPTIONS.map(opt => (
@@ -9283,7 +9314,7 @@ const PortfolioBacktester = () => {
                                     return p;
                                   }));
                                 }}
-                                className="px-1 py-0.5 text-xs border border-gray-300 rounded max-md:flex-1 max-md:min-w-0 max-md:py-1.5"
+                                className={`${FIELD_SM} max-md:flex-1 max-md:min-w-0`}
                                 title="Inflation adjustment: divides portfolio values by CPI to show real purchasing power"
                               >
                                 {CPI_OPTIONS.map(opt => (
@@ -9301,7 +9332,7 @@ const PortfolioBacktester = () => {
                 {/* Run Backtest Button */}
                 <button
                   onClick={runBacktest}
-                  className="mt-4 w-full py-2 bg-slate-800 text-white font-semibold rounded-lg hover:bg-slate-700"
+                  className={`mt-4 w-full ${BTN_MAIN}`}
                 >
                   Run Backtest
                 </button>
@@ -9541,50 +9572,42 @@ const PortfolioBacktester = () => {
                       </div>
                       <div className="flex items-center gap-2 mb-2 px-2 flex-wrap max-md:hidden">
                         <span className="text-xs font-semibold text-gray-500">Returns:</span>
+                        <span className={SEG}>
                         {(['monthly', 'quarterly', 'annual'] as const).map(p => (
                           <button
                             key={p}
                             onClick={() => setBacktestReturnsPeriod(p)}
-                            className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                              backtestReturnsPeriod === p
-                                ? 'bg-slate-800 text-white border-slate-800'
-                                : 'bg-white border-gray-300 hover:bg-gray-100'
-                            }`}
+                            className={segBtn(backtestReturnsPeriod === p)}
                           >
                             {p === 'monthly' ? 'Monthly' : p === 'quarterly' ? 'Quarterly' : 'Annual'}
                           </button>
                         ))}
-                        <span className="w-px h-4 bg-gray-300" />
+                        </span>
+                        <span className={SEG}>
                         {ROLLING_RETURN_YEARS.map(r => (
                           <button
                             key={r.period}
                             onClick={() => setBacktestReturnsPeriod(r.period)}
                             title={`Rolling ${r.years}-year CAGR: every bar is the annual return the portfolio would have earned starting in that month and holding for ${r.years} year${r.years === 1 ? '' : 's'}. The X axis is the month the holding period STARTED.`}
-                            className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                              backtestReturnsPeriod === r.period
-                                ? 'bg-slate-800 text-white border-slate-800'
-                                : 'bg-white border-gray-300 hover:bg-gray-100'
-                            }`}
+                            className={segBtn(backtestReturnsPeriod === r.period)}
                           >
                             Rolling {r.years}Y
                           </button>
                         ))}
+                        </span>
                         {/* Streak counters — months, not percentages, hence their own group */}
-                        <span className="w-px h-4 bg-gray-300" />
+                        <span className={SEG}>
                         {STREAK_VIEWS.map(s => (
                           <button
                             key={s.period}
                             onClick={() => setBacktestReturnsPeriod(s.period)}
                             title={s.hint}
-                            className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                              backtestReturnsPeriod === s.period
-                                ? 'bg-slate-800 text-white border-slate-800'
-                                : 'bg-white border-gray-300 hover:bg-gray-100'
-                            }`}
+                            className={segBtn(backtestReturnsPeriod === s.period)}
                           >
                             {s.label}
                           </button>
                         ))}
+                        </span>
                       </div>
                       {rows.length === 0 ? (
                         <p className="text-xs text-gray-500 px-2 py-6">
@@ -9812,7 +9835,7 @@ const PortfolioBacktester = () => {
                         </h3>
                         {/* Two views of the same pair: who won each period, or how closely
                             the two moved together. Styled like the Returns period buttons. */}
-                        <div className="flex items-center gap-1">
+                        <div className={SEG}>
                           {([['gap', 'Gap'], ['correlation', 'Correlation']] as const).map(([view, label]) => (
                             <button
                               key={view}
@@ -9820,11 +9843,7 @@ const PortfolioBacktester = () => {
                               title={view === 'gap'
                                 ? 'Period-by-period difference between the two portfolios — who won, and by how much.'
                                 : 'Rolling correlation of the two portfolios’ monthly returns — whether they were moving together, and how that changed over time.'}
-                              className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                deltaChartView === view
-                                  ? 'bg-slate-800 text-white border-slate-800'
-                                  : 'bg-white border-gray-300 hover:bg-gray-100'
-                              }`}
+                              className={segBtn(deltaChartView === view)}
                             >
                               {label}
                             </button>
@@ -9836,7 +9855,7 @@ const PortfolioBacktester = () => {
                       <div className="flex items-center gap-2 text-sm">
                         <select
                           aria-label="Portfolio shown as positive bars"
-                          className="border rounded px-2 py-1 text-sm"
+                          className={FIELD}
                           value={aIdx}
                           onChange={(e) => setDeltaPortfolioA(parseInt(e.target.value))}
                         >
@@ -9847,7 +9866,7 @@ const PortfolioBacktester = () => {
                         <span className="text-gray-500">vs</span>
                         <select
                           aria-label="Portfolio shown as negative bars"
-                          className="border rounded px-2 py-1 text-sm"
+                          className={FIELD}
                           value={bIdx}
                           onChange={(e) => setDeltaPortfolioB(parseInt(e.target.value))}
                         >
@@ -9872,20 +9891,18 @@ const PortfolioBacktester = () => {
                         {/* How far back each point looks */}
                         <div className="flex items-center gap-2 mb-2 px-2 flex-wrap">
                           <span className="text-xs font-semibold text-gray-500">Window:</span>
+                          <span className={SEG}>
                           {CORRELATION_WINDOWS.map(w => (
                             <button
                               key={w}
                               onClick={() => setCorrelationWindow(w)}
                               title={`Each point is the correlation over the ${w} months ending that month.`}
-                              className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                correlationWindow === w
-                                  ? 'bg-slate-800 text-white border-slate-800'
-                                  : 'bg-white border-gray-300 hover:bg-gray-100'
-                              }`}
+                              className={segBtn(correlationWindow === w)}
                             >
                               {w}M
                             </button>
                           ))}
+                          </span>
                         </div>
                         {corrRows.length === 0 ? (
                           <p className="text-xs text-gray-500 px-2 py-6">
@@ -10257,7 +10274,7 @@ const PortfolioBacktester = () => {
                   {/* Dropdown to pick which portfolio's detail to show */}
                   <select
                     aria-label="Portfolio"
-                    className="border rounded px-2 py-1 text-sm"
+                    className={FIELD}
                     value={selectedDetailPortfolio}
                     onChange={(e) => setSelectedDetailPortfolio(parseInt(e.target.value))}
                   >
@@ -10331,7 +10348,7 @@ const PortfolioBacktester = () => {
                   {/* Dropdown to pick which portfolio's rebalancing detail to show */}
                   <select
                     aria-label="Portfolio"
-                    className="border rounded px-2 py-1 text-sm"
+                    className={FIELD}
                     value={selectedRebalancingPortfolio}
                     onChange={(e) => setSelectedRebalancingPortfolio(parseInt(e.target.value))}
                   >
@@ -10446,24 +10463,16 @@ const PortfolioBacktester = () => {
                   {/* Filter controls for Assets, Asset Class, Currency, and Years */}
                   <AssetFilterControls>
                     {/* Toggle buttons to switch between returns view and prices view */}
-                    <div className="flex gap-0">
+                    <div className={SEG}>
                       <button
                         onClick={() => setAnnualViewMode('returns')}
-                        className={`px-3 py-1.5 text-sm font-medium rounded-l-lg border transition-colors ${
-                          annualViewMode === 'returns'
-                            ? 'bg-slate-800 text-white border-slate-800'
-                            : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
-                        }`}
+                        className={segBtn(annualViewMode === 'returns')}
                       >
                         Returns
                       </button>
                       <button
                         onClick={() => setAnnualViewMode('prices')}
-                        className={`px-3 py-1.5 text-sm font-medium rounded-r-lg border border-l-0 transition-colors ${
-                          annualViewMode === 'prices'
-                            ? 'bg-slate-800 text-white border-slate-800'
-                            : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
-                        }`}
+                        className={segBtn(annualViewMode === 'prices')}
                       >
                         Prices
                       </button>
@@ -10472,7 +10481,7 @@ const PortfolioBacktester = () => {
                     <div className="relative" ref={yearsDropdownRef}>
                       <button
                         onClick={() => setYearsDropdownOpen(!yearsDropdownOpen)}
-                        className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+                        className={`h-8 px-3 text-xs border rounded-lg flex items-center gap-2 max-md:h-auto max-md:py-1.5 max-md:text-sm ${
                           yearsDropdownOpen ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
                         }`}
                       >
@@ -11060,16 +11069,12 @@ const PortfolioBacktester = () => {
                     {bestToWorstLayout === 'map' && (
                       <>
                         {/* Return Map: how many recent years to show */}
-                        <div className="flex gap-1">
+                        <div className={SEG}>
                           {([5, 10, 'all'] as const).map(w => (
                             <button
                               key={w}
                               onClick={() => setReturnMapWindow(w)}
-                              className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
-                                returnMapWindow === w
-                                  ? 'bg-slate-800 text-white border-slate-800'
-                                  : 'bg-white border-gray-300 hover:bg-gray-100'
-                              }`}
+                              className={segBtn(returnMapWindow === w)}
                             >
                               {w === 'all' ? 'All' : `${w}Y`}
                             </button>
@@ -11086,28 +11091,28 @@ const PortfolioBacktester = () => {
                         </div>
                         <div className="flex items-center gap-1 max-md:hidden">
                           <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                          <span className={SEG}>
                           {(['native', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
                             <button
                               key={c}
                               onClick={() => setReturnMapCurrency(c)}
-                              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                                returnMapCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                              }`}
+                              className={segBtn(returnMapCurrency === c)}
                             >{c === 'native' ? 'Native' : c}</button>
                           ))}
+                          </span>
                         </div>
                         {/* Return Map: what the cell colour means */}
                         <div className="flex items-center gap-1">
                           <span className="text-xs text-gray-500 mr-1">Colour:</span>
+                          <span className={SEG}>
                           {([['asset', 'Asset'], ['class', 'Asset class'], ['return', 'Return']] as const).map(([value, label]) => (
                             <button
                               key={value}
                               onClick={() => setReturnMapHighlight(value)}
-                              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                                returnMapHighlight === value ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                              }`}
+                              className={segBtn(returnMapHighlight === value)}
                             >{label}</button>
                           ))}
+                          </span>
                         </div>
                       </>
                     )}
@@ -11137,7 +11142,7 @@ const PortfolioBacktester = () => {
                           setSelectedRankingYear(parseInt(e.target.value));
                           setBestToWorstMode('year');
                         }}
-                        className={`px-3 py-1.5 text-sm border rounded-lg ${isYearMode ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+                        className={`h-8 px-2.5 text-xs border rounded-lg ${isYearMode ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
                       >
                         {years.slice().reverse().map(year => (
                           <option key={year} value={year}>{year}</option>
@@ -11146,19 +11151,17 @@ const PortfolioBacktester = () => {
                     </div>
                     {/* Period Buttons */}
                     <div className={`flex gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
+                      <span className={SEG}>
                       {([1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const).map(period => (
                         <button
                           key={period}
                           onClick={() => setBestToWorstMode(period)}
-                          className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
-                            bestToWorstMode === period
-                              ? 'bg-slate-800 text-white border-slate-800'
-                              : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(bestToWorstMode === period)}
                         >
                           {period}Y
                         </button>
                       ))}
+                      </span>
                     </div>
                     </>)}
                   </AssetFilterControls>
@@ -11645,12 +11648,10 @@ const PortfolioBacktester = () => {
                       onPick={rg => setMarketsChartRange(rg as typeof marketsChartRange)}
                     />
                   </div>
-                  <div className="flex gap-1 max-md:hidden">
+                  <div className={`${SEG} max-md:hidden`}>
                     {(['1Y', '3Y', '5Y', '10Y', 'Max'] as const).map(rg => (
                       <button key={rg} type="button" onClick={() => setMarketsChartRange(rg)}
-                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                          marketsChartRange === rg ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}>{rg}</button>
+                        className={segBtn(marketsChartRange === rg)}>{rg}</button>
                     ))}
                   </div>
                 </div>
@@ -11782,6 +11783,7 @@ const PortfolioBacktester = () => {
                   </div>
                   <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                    <span className={SEG}>
                     {marketsIsCountry
                       // Country page: the currency IS the country (PLN = Poland...), so no "Native",
                       // and GBP / JPY are offered too. Separate from the other pages' currency choice.
@@ -11790,23 +11792,21 @@ const PortfolioBacktester = () => {
                             key={c}
                             onClick={() => setMarketsCountry(c)}
                             title={COUNTRY_NAMES[c]}
-                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                              marketsCountry === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}
+                            className={segBtn(marketsCountry === c)}
                           >{c}</button>
                         ))
                       : (['Native', 'PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
                           <button
                             key={c}
                             onClick={() => setMarketsCurrency(c)}
-                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                              marketsCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}
+                            className={segBtn(marketsCurrency === c)}
                           >{c}</button>
                         ))}
+                    </span>
                   </div>
                   <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
                     <span className="text-xs text-gray-500 mr-1">Period:</span>
+                    <span className={SEG}>
                     {MARKETS_PERIODS.map(p => (
                       <button
                         key={p}
@@ -11814,25 +11814,24 @@ const PortfolioBacktester = () => {
                           setMarketsPeriod(p);
                           if (p === '1Y' || p === '3Y' || p === '5Y' || p === '10Y' || p === 'Max') setMarketsTrendPeriod(p);
                         }}
-                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                          marketsPeriod === p ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
+                        className={segBtn(marketsPeriod === p)}
                       >{p}</button>
                     ))}
+                    </span>
                   </div>
                   {/* Returns (default) or Stats for the asset sections; not offered where there are no assets */}
                   {!isMacroTable && (
                     <div className="flex items-center gap-1 max-md:hidden">
                       <span className="text-xs text-gray-500 mr-1">View:</span>
+                      <span className={SEG}>
                       {([['returns', 'Returns'], ['stats', 'Stats']] as const).map(([v, label]) => (
                         <button
                           key={v}
                           onClick={() => switchMarketsView(v)}
-                          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                            marketsView === v ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
+                          className={segBtn(marketsView === v)}
                         >{label}</button>
                       ))}
+                      </span>
                     </div>
                   )}
                   {/* (The Category choice lives in the left panel, under "Markets".) */}
@@ -12379,15 +12378,15 @@ const PortfolioBacktester = () => {
                   </div>
                   <div className="flex items-center gap-1 max-md:hidden">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                    <span className={SEG}>
                     {HOLDINGS_CURRENCIES.map(c => (
                       <button
                         key={c}
                         onClick={() => setHoldingsCurrency(c)}
-                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                          holdingsCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
+                        className={segBtn(holdingsCurrency === c)}
                       >{c}</button>
                     ))}
+                    </span>
                   </div>
                 </div>
 
@@ -12848,15 +12847,15 @@ const PortfolioBacktester = () => {
                   </div>
                   <div className="flex items-center gap-1 max-md:hidden">
                     <span className="text-xs text-gray-500 mr-1">Series:</span>
+                    <span className={SEG}>
                     {([['all', 'All'], ['running', 'Running'], ['matured', 'Matured']] as const).map(([k, label]) => (
                       <button
                         key={k}
                         onClick={() => setEdoStatusFilter(k)}
-                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                          edoStatusFilter === k ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
+                        className={segBtn(edoStatusFilter === k)}
                       >{label}</button>
                     ))}
+                    </span>
                   </div>
                 </div>
 
@@ -12971,18 +12970,21 @@ const PortfolioBacktester = () => {
                           Matured series · {maturedPaths.length} ten-year holds · {basisLabel}
                         </div>
                         <div className="flex items-center gap-3">
+                          <span className={SEG}>
                           {([[false, 'Pre-tax'], [true, 'After tax']] as const).map(([v, label]) => (
                             <button key={label} onClick={() => setEdoMaturedTax(v)}
-                              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${edoMaturedTax === v ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                              className={segBtn(edoMaturedTax === v)}
                             >{label}</button>
                           ))}
-                          <span className="w-px h-4 bg-gray-200" />
+                          </span>
+                          <span className={SEG}>
                           {([[true, 'Real'], [false, 'Nominal']] as const).map(([v, label]) => (
                             <button key={label} onClick={() => setEdoMaturedReal(v)}
                               title={v ? 'After Polish inflation since purchase' : 'Before inflation'}
-                              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${edoMaturedReal === v ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                              className={segBtn(edoMaturedReal === v)}
                             >{label}</button>
                           ))}
+                          </span>
                         </div>
                       </div>
 
@@ -13096,18 +13098,18 @@ const PortfolioBacktester = () => {
                         </span>
                       </div>
                       <div className="flex items-center gap-1">
+                        <span className={SEG}>
                         {lineButtons.map(b => (
                           <button
                             key={b.key}
                             onClick={() => toggleLine(b.key)}
-                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                              edoLines[b.key] ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}
+                            className={segBtn(edoLines[b.key])}
                           >{b.label}</button>
                         ))}
+                        </span>
                         <button
                           onClick={() => setEdoLines(allOn ? { value: true, cpi: false, tax: false } : { value: true, cpi: true, tax: true })}
-                          className="ml-1 px-2.5 py-1 rounded text-xs font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+                          className={`ml-1 ${BTN_SECOND}`}
                         >{allOn ? 'Value only' : 'All 3'}</button>
                       </div>
                     </div>
@@ -13315,24 +13317,16 @@ const PortfolioBacktester = () => {
                 </div>
                 <div className="contents max-md:hidden">
                 {/* Toggle buttons to switch between price view and return (%) view */}
-                <div className="flex gap-0">
+                <div className={SEG}>
                   <button
                     onClick={() => setMonthlyViewMode('prices')}
-                    className={`px-3 py-1.5 text-sm font-medium rounded-l-lg border transition-colors ${
-                      monthlyViewMode === 'prices'
-                        ? 'bg-slate-800 text-white border-slate-800'
-                        : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
-                    }`}
+                    className={segBtn(monthlyViewMode === 'prices')}
                   >
                     Monthly Prices
                   </button>
                   <button
                     onClick={() => setMonthlyViewMode('returns')}
-                    className={`px-3 py-1.5 text-sm font-medium rounded-r-lg border border-l-0 transition-colors ${
-                      monthlyViewMode === 'returns'
-                        ? 'bg-slate-800 text-white border-slate-800'
-                        : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
-                    }`}
+                    className={segBtn(monthlyViewMode === 'returns')}
                   >
                     Monthly Returns
                   </button>
@@ -13343,7 +13337,7 @@ const PortfolioBacktester = () => {
                   aria-label="End month"
                   value={monthlyEndDate}
                   onChange={(e) => setMonthlyEndDate(e.target.value)}
-                  className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
+                  className={FIELD}
                 >
                   {endMonthChoices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
@@ -13354,7 +13348,7 @@ const PortfolioBacktester = () => {
                   aria-label="Seasonality"
                   value={seasonMonth === null ? '' : String(seasonMonth)}
                   onChange={(e) => setSeasonMonth(e.target.value === '' ? null : parseInt(e.target.value))}
-                  className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
+                  className={FIELD}
                   title="Rank the filtered assets by how often they lost money in a chosen month"
                 >
                   <option value="">Seasonality: off</option>
@@ -14201,32 +14195,24 @@ const PortfolioBacktester = () => {
                               {/* Currency buttons — re-express everything below in the chosen currency.
                                   The button matching the asset's native currency is highlighted by
                                   default (that's the "original currency" view). */}
-                              <div className="flex gap-1">
+                              <div className={SEG}>
                                 {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(ccy => (
                                   <button
                                     key={ccy}
                                     onClick={() => setMonthlyDisplayCurrency(ccy)}
-                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                      monthlyDisplayCurrency === ccy
-                                        ? 'bg-slate-800 text-white border-slate-800'
-                                        : 'bg-white border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={segBtn(monthlyDisplayCurrency === ccy)}
                                   >
                                     {ccy}
                                   </button>
                                 ))}
                               </div>
                               {/* Period buttons — how many years of history to show */}
-                              <div className="flex gap-1">
+                              <div className={SEG}>
                                 {MONTHLY_CHART_PERIODS.map(p => (
                                   <button
                                     key={p}
                                     onClick={() => setMonthlyChartPeriod(p)}
-                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                      monthlyChartPeriod === p
-                                        ? 'bg-slate-800 text-white border-slate-800'
-                                        : 'bg-white border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={segBtn(monthlyChartPeriod === p)}
                                   >
                                     {p === 'max' ? 'Max' : p}
                                   </button>
@@ -14731,6 +14717,7 @@ const PortfolioBacktester = () => {
                                 onPick={k => setMonthlyPriceChartMode(k as (typeof modes)[number]['key'])}
                               />
                             </div>
+                            <span className={`${SEG} max-md:hidden`}>
                             {modes.map(opt => (
                               <button
                                 key={opt.key}
@@ -14738,19 +14725,16 @@ const PortfolioBacktester = () => {
                                 // Highlights the EFFECTIVE mode, so that when a vs-IWDA view falls
                                 // back (e.g. you then select IWDA itself) the highlighted button
                                 // still matches the chart on screen instead of nothing being lit.
-                                className={`px-2 py-1 text-xs font-medium rounded border transition-colors max-md:hidden ${
-                                  priceChartMode === opt.key
-                                    ? 'bg-slate-800 text-white border-slate-800'
-                                    : 'bg-white border-gray-300 hover:bg-gray-100'
-                                }`}
+                                className={segBtn(priceChartMode === opt.key)}
                               >
                                 {opt.label}
                               </button>
                             ))}
+                            </span>
                             </>); })()}
                             {/* Axis scale, kept slightly apart because it applies to all three
                                 views above rather than being a fourth view of its own. */}
-                            <div className="flex gap-1 ml-3">
+                            <div className={`${SEG} ml-3`}>
                               {([
                                 { key: false, label: 'Linear' },
                                 { key: true, label: 'Log' },
@@ -14761,11 +14745,7 @@ const PortfolioBacktester = () => {
                                   title={opt.key
                                     ? 'Logarithmic: equal distances mean equal PERCENTAGE moves, so early years stay readable after an asset has multiplied'
                                     : 'Normal scale: equal distances mean equal amounts of money'}
-                                  className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                    monthlyPriceChartLog === opt.key
-                                      ? 'bg-slate-800 text-white border-slate-800'
-                                      : 'bg-white border-gray-300 hover:bg-gray-100'
-                                  }`}
+                                  className={segBtn(monthlyPriceChartLog === opt.key)}
                                 >
                                   {opt.label}
                                 </button>
@@ -15156,52 +15136,44 @@ const PortfolioBacktester = () => {
                               </div>
                               <div className="flex items-center gap-2 mb-1 px-2 flex-wrap max-md:hidden">
                                 <span className="text-xs font-semibold text-gray-500">Returns:</span>
+                                <span className={SEG}>
                                 {(['monthly', 'quarterly', 'annual'] as const).map(p => (
                                   <button
                                     key={p}
                                     onClick={() => setReturnsChartPeriod(p)}
-                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                      returnsChartPeriod === p
-                                        ? 'bg-slate-800 text-white border-slate-800'
-                                        : 'bg-white border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={segBtn(returnsChartPeriod === p)}
                                   >
                                     {p === 'monthly' ? 'Monthly' : p === 'quarterly' ? 'Quarterly' : 'Annual'}
                                   </button>
                                 ))}
-                                {/* Rolling CAGR buttons — same look, kept in their own group after a
-                                    divider because they answer a different question to the three above. */}
-                                <span className="w-px h-4 bg-gray-300" />
+                                </span>
+                                {/* Rolling CAGR buttons — same look, kept in their own strip because
+                                    they answer a different question to the three above. */}
+                                <span className={SEG}>
                                 {ROLLING_RETURN_YEARS.map(r => (
                                   <button
                                     key={r.period}
                                     onClick={() => setReturnsChartPeriod(r.period)}
                                     title={`Rolling ${r.years}-year CAGR: every bar is the annual return you would have earned buying in that month and holding for ${r.years} year${r.years === 1 ? '' : 's'}. The X axis is the month the holding period STARTED.`}
-                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                      returnsChartPeriod === r.period
-                                        ? 'bg-slate-800 text-white border-slate-800'
-                                        : 'bg-white border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={segBtn(returnsChartPeriod === r.period)}
                                   >
                                     Rolling {r.years}Y
                                   </button>
                                 ))}
+                                </span>
                                 {/* Streak counters — months, not percentages, hence their own group */}
-                                <span className="w-px h-4 bg-gray-300" />
+                                <span className={SEG}>
                                 {STREAK_VIEWS.map(s => (
                                   <button
                                     key={s.period}
                                     onClick={() => setReturnsChartPeriod(s.period)}
                                     title={s.hint}
-                                    className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                      returnsChartPeriod === s.period
-                                        ? 'bg-slate-800 text-white border-slate-800'
-                                        : 'bg-white border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={segBtn(returnsChartPeriod === s.period)}
                                   >
                                     {s.label}
                                   </button>
                                 ))}
+                                </span>
                               </div>
                               {/* A rolling window needs at least that many years of history to draw
                                   a single bar; say so instead of showing an empty chart. */}
@@ -15491,19 +15463,17 @@ const PortfolioBacktester = () => {
                                 </div>
                                 <div className="flex items-center gap-2 mb-2 px-2 flex-wrap max-md:hidden">
                                   <span className="text-xs font-semibold text-gray-700">During stress:</span>
+                                  <span className={SEG}>
                                   {STRESS_YEARS.map(y => (
                                     <button
                                       key={y}
                                       onClick={() => setStressYear(y)}
-                                      className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                        stressYear === y
-                                          ? 'bg-slate-800 text-white border-slate-800'
-                                          : 'bg-white border-gray-300 hover:bg-gray-100'
-                                      }`}
+                                      className={segBtn(stressYear === y)}
                                     >
                                       {y}
                                     </button>
                                   ))}
+                                  </span>
                                   <span className="text-xs text-gray-400">in {ccy}</span>
                                 </div>
 
@@ -16183,16 +16153,16 @@ const PortfolioBacktester = () => {
                 <AssetFilterControls>
                   {/* SMA toggle — rendered inside the filter flex container for perfect alignment */}
                   {/* (Phones: a box in the row below instead) */}
-                  <button
-                    onClick={() => setGraphsShowSMA(!graphsShowSMA)}
-                    className={`max-md:hidden px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors whitespace-nowrap ${
-                      graphsShowSMA
-                        ? 'bg-red-500 text-white border-red-500'
-                        : 'bg-white border-gray-300 hover:bg-gray-50 text-gray-700'
-                    }`}
-                  >
-                    10m SMA
-                  </button>
+                  {/* An on/off switch: a strip of one. The red dot is the SMA line's colour. */}
+                  <span className={`${SEG} max-md:hidden`}>
+                    <button
+                      onClick={() => setGraphsShowSMA(!graphsShowSMA)}
+                      className={segBtn(graphsShowSMA)}
+                    >
+                      <span className="inline-block w-2 h-2 rounded-full bg-red-500 mr-1.5 align-middle -mt-px" />
+                      10m SMA
+                    </button>
+                  </span>
                 </AssetFilterControls>
                 <div className={`flex items-center gap-3 ${PHONE_SCROLL_ROW} max-md:w-full`}>
                   {/* End Date selector — pick which month the charts end at (endMonthChoices) */}
@@ -16200,7 +16170,7 @@ const PortfolioBacktester = () => {
                     aria-label="End month"
                     value={graphsEndDate}
                     onChange={(e) => setGraphsEndDate(e.target.value)}
-                    className="px-2 py-1 text-xs border border-gray-300 rounded bg-white max-md:hidden"
+                    className={`${FIELD} max-md:hidden`}
                   >
                     {endMonthChoices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
@@ -16228,18 +16198,14 @@ const PortfolioBacktester = () => {
                       onPick={v => setGraphsShowSMA(v === 'on')}
                     />
                   </div>
-                  <div className="flex gap-1 max-md:hidden">
+                  <div className={`${SEG} max-md:hidden`}>
                     {(['1Y', '2Y', '3Y', '4Y', '5Y', '10Y', '15Y', 'Max'] as const).map(p => {
                       const value = p === 'Max' ? 'max' : p;
                       return (
                         <button
                           key={p}
                           onClick={() => setGraphsPeriod(value as typeof graphsPeriod)}
-                          className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                            graphsPeriod === value
-                              ? 'bg-slate-800 text-white border-slate-800'
-                              : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(graphsPeriod === value)}
                         >
                           {p}
                         </button>
@@ -16444,11 +16410,11 @@ const PortfolioBacktester = () => {
                     <div className={`${PINNED_FILTERS} grid grid-cols-2 md:grid-cols-5 gap-4 mb-4`}>
                       {/* Asset Selector */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Asset</label>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Asset</label>
                         <select
                           value={selectedTrendAsset}
                           onChange={(e) => setSelectedTrendAsset(e.target.value)}
-                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                          className={`w-full ${FIELD}`}
                         >
                           {assetLookup.map(asset => (
                             <option key={asset.ticker} value={asset.ticker}>
@@ -16460,11 +16426,11 @@ const PortfolioBacktester = () => {
 
                       {/* Start Date Selector */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
                         <select
                           value={selectedDateRange.start}
                           onChange={(e) => setSelectedStartDate(e.target.value)}
-                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                          className={`w-full ${FIELD}`}
                         >
                           {assetData.map(row => (
                             <option key={row.date} value={row.date}>{row.date}</option>
@@ -16474,11 +16440,11 @@ const PortfolioBacktester = () => {
 
                       {/* End Date Selector */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
                         <select
                           value={selectedDateRange.end}
                           onChange={(e) => setSelectedEndDate(e.target.value)}
-                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                          className={`w-full ${FIELD}`}
                         >
                           {assetData.slice().reverse().filter(row => row.date >= selectedDateRange.start).map(row => (
                             <option key={row.date} value={row.date}>{row.date}</option>
@@ -16488,11 +16454,11 @@ const PortfolioBacktester = () => {
 
                       {/* Risk-Free Rate Selector */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Risk-Free Rate</label>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Risk-Free Rate</label>
                         <select
                           value={trendRiskFreeRate}
                           onChange={(e) => setTrendRiskFreeRate(parseFloat(e.target.value))}
-                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                          className={`w-full ${FIELD}`}
                         >
                           {RISK_FREE_RATE_OPTIONS.map(opt => (
                             <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -16502,11 +16468,11 @@ const PortfolioBacktester = () => {
 
                       {/* Commission Selector */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Commission</label>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Commission</label>
                         <select
                           value={trendCommission}
                           onChange={(e) => setTrendCommission(parseFloat(e.target.value))}
-                          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+                          className={`w-full ${FIELD}`}
                         >
                           {COMMISSION_OPTIONS.map(opt => (
                             <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -17023,7 +16989,7 @@ const PortfolioBacktester = () => {
               <AssetFilterControls>
                 {/* Correlation Period dropdown — styled to match the other filter buttons */}
                 <div className="relative">
-                  <div className="px-3 py-1.5 text-sm border border-gray-300 bg-white rounded-lg flex items-center gap-2">
+                  <div className="h-8 px-3 text-xs border border-gray-300 bg-white rounded-lg flex items-center gap-2 max-md:h-10 max-md:text-sm">
                     <span className="font-medium">Period:</span>
                     <select
                       value={correlationPeriod}
@@ -17337,15 +17303,15 @@ const PortfolioBacktester = () => {
                       phones too (all five fit on one line there), a little taller for the thumb. */}
                   <div className="mb-4 flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                    <span className={SEG}>
                     {(['PLN', 'USD', 'EUR', 'CHF', 'SGD'] as const).map(c => (
                       <button
                         key={c}
                         onClick={() => setPortfolioCurrency(c)}
-                        className={`px-2.5 py-1 max-md:py-1.5 rounded text-xs font-medium transition-colors ${
-                          portfolioCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
+                        className={segBtn(portfolioCurrency === c)}
                       >{c}</button>
                     ))}
+                    </span>
                   </div>
 
                   {/* Chart 1: Portfolio Value by Year — stacked bar chart */}
@@ -17693,7 +17659,7 @@ const PortfolioBacktester = () => {
                                 <select
                                   value={selectedYear}
                                   onChange={(e) => setBreakdownYear(parseInt(e.target.value, 10))}
-                                  className="px-2 py-1 rounded border border-gray-300 text-xs font-medium text-gray-700 bg-white hover:bg-gray-50"
+                                  className={FIELD}
                                 >
                                   {allYears.map(y => (
                                     <option key={y} value={y}>{y}</option>
@@ -17703,11 +17669,7 @@ const PortfolioBacktester = () => {
                             )}
                             <button
                               onClick={() => setBreakdownExpanded(v => !v)}
-                              className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                                breakdownExpanded
-                                  ? 'bg-slate-800 text-white hover:bg-slate-700'
-                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                              }`}
+                              className={BTN_SECOND}
                             >
                               {breakdownExpanded ? 'Hide' : 'Show'}
                             </button>
@@ -18542,29 +18504,35 @@ const PortfolioBacktester = () => {
                         <div className="flex items-center gap-5 mb-4 flex-wrap max-md:hidden">
                           <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW}`}>
                             <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                            <span className={SEG}>
                             {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => (
                               <button key={c} onClick={() => setDailyNavCurrency(c)}
-                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavCurrency === c ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                className={segBtn(dailyNavCurrency === c)}
                               >{c}</button>
                             ))}
+                            </span>
                           </div>
                           {/* Benchmark buttons — one at a time; clicking the active one hides it again */}
                           <div className={`flex items-center gap-1 ${PHONE_SCROLL_ROW}`}>
                             <span className="text-xs text-gray-500 mr-1">Benchmark:</span>
+                            <span className={SEG}>
                             {DAILY_NAV_BENCHMARKS.map(b => (
                               <button key={b.id} title={b.note}
                                 onClick={() => setDailyNavBenchmark(prev => prev === b.id ? '' : b.id)}
-                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavBenchmark === b.id ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                className={segBtn(dailyNavBenchmark === b.id)}
                               >{b.id}</button>
                             ))}
+                            </span>
                           </div>
                           <div className="flex items-center gap-1">
                             <span className="text-xs text-gray-500 mr-1">Period:</span>
+                            <span className={SEG}>
                             {(['1Y', '3Y', '5Y', 'Max'] as const).map(p => (
                               <button key={p} onClick={() => setDailyNavPeriod(p)}
-                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${dailyNavPeriod === p ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                className={segBtn(dailyNavPeriod === p)}
                               >{p}</button>
                             ))}
+                            </span>
                           </div>
                         </div>
 
@@ -18801,6 +18769,9 @@ const PortfolioBacktester = () => {
                           {/* Currency mini-buttons — clicking toggles a currency on/off */}
                           <div className="flex items-center gap-1">
                             <span className="text-xs text-gray-500 mr-1 max-md:hidden">Currency:</span>
+                            {/* Pick several: each one switched on is slate, like a chosen option.
+                                The dot is that currency's line colour in the chart. */}
+                            <span className={SEG}>
                             {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => {
                               const active = ddSelectedCurrencies.includes(c);
                               return (
@@ -18812,13 +18783,14 @@ const PortfolioBacktester = () => {
                                       prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]
                                     );
                                   }}
-                                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors border ${
-                                    active ? 'text-white border-transparent' : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
-                                  }`}
-                                  style={active ? { backgroundColor: DD_COLORS[c], borderColor: DD_COLORS[c] } : {}}
-                                >{c}</button>
+                                  className={segBtn(active)}
+                                >
+                                  <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle -mt-px" style={{ backgroundColor: DD_COLORS[c] }} />
+                                  {c}
+                                </button>
                               );
                             })}
+                            </span>
                           </div>
 
                           {/* Period buttons — same style as Daily NAV (phones: one box) */}
@@ -18832,11 +18804,13 @@ const PortfolioBacktester = () => {
                           </div>
                           <div className="flex items-center gap-1 max-md:hidden">
                             <span className="text-xs text-gray-500 mr-1">Period:</span>
+                            <span className={SEG}>
                             {(['1Y', '3Y', '5Y', 'Max'] as const).map(p => (
                               <button key={p} onClick={() => setDdPeriod(p)}
-                                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${ddPeriod === p ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                className={segBtn(ddPeriod === p)}
                               >{p}</button>
                             ))}
+                            </span>
                           </div>
 
                           {/* Max DD per currency for the selected period */}
@@ -18919,6 +18893,8 @@ const PortfolioBacktester = () => {
                   {/* Currency toggle buttons — controls which bars appear in Charts 3 & 4; multi-select */}
                   <div className="mb-4 flex items-center gap-1">
                     <span className="text-xs text-gray-500 mr-1">Currency:</span>
+                    {/* Pick several; the dot is that currency's bar colour in the charts */}
+                    <span className={SEG}>
                     {([['PLN', '#000000'], ['USD', '#ef4444'], ['SGD', '#F5A623']] as const).map(([c, color]) => {
                       const active = selectedReturnCurrencies.includes(c);
                       return (
@@ -18927,13 +18903,14 @@ const PortfolioBacktester = () => {
                           onClick={() => setSelectedReturnCurrencies(prev =>
                             prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]
                           )}
-                          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors border ${
-                            active ? 'text-white border-transparent' : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
-                          }`}
-                          style={active ? { backgroundColor: color, borderColor: color } : {}}
-                        >{c}</button>
+                          className={segBtn(active)}
+                        >
+                          <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle -mt-px" style={{ backgroundColor: color }} />
+                          {c}
+                        </button>
                       );
                     })}
+                    </span>
                   </div>
 
                   {/* Chart 3: Returns by Year — grouped bar chart */}
@@ -19132,7 +19109,7 @@ const PortfolioBacktester = () => {
                     <div className="relative">
                       <button
                         onClick={() => setClosedOpenFilterDropdown(closedOpenFilterDropdown === 'assets' ? null : 'assets')}
-                        className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-2 ${
+                        className={`h-8 px-3 text-xs border rounded-lg flex items-center gap-2 max-md:h-auto max-md:py-1.5 max-md:text-sm ${
                           closedOpenFilterDropdown === 'assets' ? 'border-slate-400 bg-gray-100' : 'border-gray-300 bg-white hover:bg-gray-50'
                         }`}
                       >
@@ -19192,7 +19169,7 @@ const PortfolioBacktester = () => {
                     aria-label="Currency"
                     value={positionsCurrency}
                     onChange={(e) => setPositionsCurrency(e.target.value)}
-                    className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                    className={FIELD}
                     title="Target currency: converts invested/value/PnL columns to this currency"
                   >
                     {CURRENCY_OPTIONS.map(opt => (
@@ -19203,7 +19180,9 @@ const PortfolioBacktester = () => {
 
                 {/* "Group M&C" toggle — when on, classes come from the Lookup tab's PortfolioClass
                     column, so gold, silver and crypto become "Metals & Crypto" as both an asset
-                    class and a separate currency bar, keeping fiat bars pure */}
+                    class and a separate currency bar, keeping fiat bars pure.
+                    An on/off switch: a strip of one, slate while on. */}
+                <span className={SEG}>
                 <button
                   onClick={() => {
                     setGroupMetalsCrypto(prev => !prev);
@@ -19211,18 +19190,14 @@ const PortfolioBacktester = () => {
                     setOpenAssetClassFilter(null);
                     setOpenCurrencyFilter(null);
                   }}
-                  className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors ${
-                    groupMetalsCrypto
-                      ? 'bg-amber-700 text-white border-amber-700'
-                      : 'bg-white text-gray-500 border-gray-300 hover:border-amber-600 hover:text-amber-700'
-                  }`}
+                  className={segBtn(groupMetalsCrypto)}
                   title={groupMetalsCrypto
                     ? 'Showing the Lookup tab\'s PortfolioClass (blank = Asset Class); Metals & Crypto also get their own currency bar — click for the standard Asset Class'
                     : 'Showing the standard Asset Class from the Lookup tab — click to use PortfolioClass (e.g. Metals & Crypto)'}
                 >
-                  <span>{groupMetalsCrypto ? '●' : '○'}</span>
                   Group M&amp;C
                 </button>
+                </span>
               </div>
 
               {/* --- SUMMARY VIEW (when no specific asset or cash balance is drilled into) --- */}
@@ -20463,7 +20438,7 @@ const PortfolioBacktester = () => {
                       <p className="mb-3">That cash balance is no longer in the data — it may have changed in the sheet.</p>
                       <button
                         onClick={() => { setCashSelected(''); setCashCategory(''); }}
-                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50"
+                        className={BTN_SECOND}
                       >
                         Back to list
                       </button>
@@ -20507,7 +20482,7 @@ const PortfolioBacktester = () => {
                     <div className="flex items-center gap-3 mb-4">
                       <button
                         onClick={() => { setCashSelected(''); setCashCategory(''); }}
-                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1 max-md:shrink-0 max-md:pl-2"
+                        className={`${BTN_SECOND} max-md:shrink-0 max-md:pl-2`}
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -20959,7 +20934,7 @@ const PortfolioBacktester = () => {
                     <div className="flex items-center gap-3 mb-4">
                       <button
                         onClick={() => { setOpenSelectedTicker(''); setOpenIncludedTxns(null); }}
-                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1 max-md:shrink-0 max-md:pl-2"
+                        className={`${BTN_SECOND} max-md:shrink-0 max-md:pl-2`}
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -21169,34 +21144,33 @@ const PortfolioBacktester = () => {
 
                       {/* Chart controls ("phone-chart-controls": a tidy grid on phones, see globals.css) */}
                       <div className="flex flex-wrap items-end gap-4 mb-4 px-2 phone-chart-controls">
+                        {/* On/off switches in one strip; each is slate while on. The green dot is
+                            the Avg Buy line's colour in the chart. */}
+                        <span className={SEG}>
                         <button
                           onClick={() => setOpenSinceInvested(!openSinceInvested)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                            openSinceInvested ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(openSinceInvested)}
                         >
                           Since Invested
                         </button>
 
                         <button
                           onClick={() => setOpenShowAvgBuy(!openShowAvgBuy)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                            openShowAvgBuy ? 'bg-green-500 text-white border-green-500' : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(openShowAvgBuy)}
                         >
+                          <span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1.5 align-middle -mt-px" />
                           Avg Buy (Div Adj)
                         </button>
 
                         {/* Shows the all-time high/low markers on the price line. Off by default. */}
                         <button
                           onClick={() => setOpenShowMinMax(!openShowMinMax)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                            openShowMinMax ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(openShowMinMax)}
                           title="Show or hide the highest and lowest price markers on the chart"
                         >
                           Min/Max
                         </button>
+                        </span>
 
                         <div className="border-l border-gray-300 h-6 mx-1" />
 
@@ -21213,7 +21187,7 @@ const PortfolioBacktester = () => {
                                 setOpenInvestedFrom('');
                               }
                             }}
-                            className="px-2 py-1.5 border border-gray-300 rounded text-xs max-w-[130px]"
+                            className={`${FIELD} max-w-[130px]`}
                           >
                             <option value="">— None —</option>
                             {assetLookup
@@ -21228,9 +21202,7 @@ const PortfolioBacktester = () => {
                             value={openInvestedFrom}
                             onChange={(e) => setOpenInvestedFrom(e.target.value)}
                             disabled={!openInvestedInto}
-                            className={`px-2 py-1.5 border rounded text-xs min-w-[130px] ${
-                              openInvestedInto ? 'border-gray-300' : 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-                            }`}
+                            className={`${FIELD} min-w-[130px] disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed`}
                           >
                             {buyDates.map(d => <option key={d} value={d}>{d}</option>)}
                           </select>
@@ -21243,7 +21215,7 @@ const PortfolioBacktester = () => {
                           <select
                             value={openGraphStarts}
                             onChange={(e) => setOpenGraphStarts(e.target.value)}
-                            className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[130px]"
+                            className={`${FIELD} min-w-[130px]`}
                           >
                             <option value="">— All —</option>
                             {graphStartsOptions.map(d => <option key={d} value={d}>{d}</option>)}
@@ -21255,7 +21227,7 @@ const PortfolioBacktester = () => {
                           <select
                             value={openGraphEnds}
                             onChange={(e) => setOpenGraphEnds(e.target.value)}
-                            className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[130px]"
+                            className={`${FIELD} min-w-[130px]`}
                           >
                             <option value="">— All —</option>
                             {graphEndsOptions.map(d => <option key={d} value={d}>{d}</option>)}
@@ -21721,7 +21693,7 @@ const PortfolioBacktester = () => {
                     <div className="flex items-center gap-3 mb-4">
                       <button
                         onClick={() => { setClosedSelectedTicker(''); setClosedIncludedTxns(null); }}
-                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 flex items-center gap-1 max-md:shrink-0 max-md:pl-2"
+                        className={`${BTN_SECOND} max-md:shrink-0 max-md:pl-2`}
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -21939,14 +21911,13 @@ const PortfolioBacktester = () => {
                       {/* Chart controls: toggles and Invested Into / From
                           ("phone-chart-controls": a tidy grid on phones, see globals.css) */}
                       <div className="flex flex-wrap items-end gap-4 mb-4 px-2 phone-chart-controls">
+                        {/* On/off switches in one strip; each is slate while on. The dots are the
+                            Avg Buy (green) and Avg Sell (red) lines' colours in the chart. */}
+                        <span className={SEG}>
                         {/* Since Invested toggle */}
                         <button
                           onClick={() => setClosedSinceInvested(!closedSinceInvested)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                            closedSinceInvested
-                              ? 'bg-slate-800 text-white border-slate-800'
-                              : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(closedSinceInvested)}
                         >
                           Since Invested
                         </button>
@@ -21954,11 +21925,7 @@ const PortfolioBacktester = () => {
                         {/* Until Sold toggle */}
                         <button
                           onClick={() => setClosedUntilSold(!closedUntilSold)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                            closedUntilSold
-                              ? 'bg-slate-800 text-white border-slate-800'
-                              : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(closedUntilSold)}
                         >
                           Until Sold
                         </button>
@@ -21966,11 +21933,7 @@ const PortfolioBacktester = () => {
                         {/* Shows the all-time high/low markers on the price line. Off by default. */}
                         <button
                           onClick={() => setClosedShowMinMax(!closedShowMinMax)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                            closedShowMinMax
-                              ? 'bg-slate-800 text-white border-slate-800'
-                              : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(closedShowMinMax)}
                           title="Show or hide the highest and lowest price markers on the chart"
                         >
                           Min/Max
@@ -21979,26 +21942,21 @@ const PortfolioBacktester = () => {
                         {/* Avg Buy Price toggle — shows/hides the green dashed avg buy line */}
                         <button
                           onClick={() => setClosedShowAvgBuy(!closedShowAvgBuy)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                            closedShowAvgBuy
-                              ? 'bg-green-500 text-white border-green-500'
-                              : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(closedShowAvgBuy)}
                         >
+                          <span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1.5 align-middle -mt-px" />
                           Avg Buy
                         </button>
 
                         {/* Avg Sell Price toggle — shows/hides the red dashed avg sell line */}
                         <button
                           onClick={() => setClosedShowAvgSell(!closedShowAvgSell)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                            closedShowAvgSell
-                              ? 'bg-red-500 text-white border-red-500'
-                              : 'bg-white border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={segBtn(closedShowAvgSell)}
                         >
+                          <span className="inline-block w-2 h-2 rounded-full bg-red-500 mr-1.5 align-middle -mt-px" />
                           Avg Sell
                         </button>
+                        </span>
 
                         <div className="border-l border-gray-300 h-6 mx-1" />
 
@@ -22017,7 +21975,7 @@ const PortfolioBacktester = () => {
                                 setClosedInvestedFrom('');
                               }
                             }}
-                            className="px-2 py-1.5 border border-gray-300 rounded text-xs max-w-[130px]"
+                            className={`${FIELD} max-w-[130px]`}
                           >
                             <option value="">— None —</option>
                             {assetLookup
@@ -22035,9 +21993,7 @@ const PortfolioBacktester = () => {
                             value={closedInvestedFrom}
                             onChange={(e) => setClosedInvestedFrom(e.target.value)}
                             disabled={!closedInvestedInto}
-                            className={`px-2 py-1.5 border rounded text-xs min-w-[130px] ${
-                              closedInvestedInto ? 'border-gray-300' : 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-                            }`}
+                            className={`${FIELD} min-w-[130px] disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed`}
                           >
                             {saleDates.map(d => (
                               <option key={d} value={d}>{d}</option>
@@ -22053,7 +22009,7 @@ const PortfolioBacktester = () => {
                           <select
                             value={closedGraphStarts}
                             onChange={(e) => setClosedGraphStarts(e.target.value)}
-                            className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[130px]"
+                            className={`${FIELD} min-w-[130px]`}
                           >
                             <option value="">— All —</option>
                             {graphStartsOptions.map(d => (
@@ -22068,7 +22024,7 @@ const PortfolioBacktester = () => {
                           <select
                             value={closedGraphEnds}
                             onChange={(e) => setClosedGraphEnds(e.target.value)}
-                            className="px-2 py-1.5 border border-gray-300 rounded text-xs min-w-[130px]"
+                            className={`${FIELD} min-w-[130px]`}
                           >
                             <option value="">— All —</option>
                             {graphEndsOptions.map(d => (
