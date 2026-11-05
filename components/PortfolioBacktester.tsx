@@ -1236,9 +1236,8 @@ type PeriodicReturnsRow = {
   [portfolioName: string]: string | number | undefined;
 };
 
-// The colour world equities are drawn in wherever they appear as a reference. It matches the
-// amber dot already used for the market row in the Monthly statistics table, so "the market"
-// looks the same everywhere on the page.
+// The colour world equities are drawn in wherever they appear as a reference. The market row's
+// dot in the Monthly statistics table uses it too, so "the market" looks the same everywhere.
 const MARKET_LINE_COLOR = '#c8952a'; // CHART_PALETTE.gold (defined further down)
 
 // And the 50/50 blend of the asset with the market. Matches the grey dot on that row of the
@@ -1519,7 +1518,7 @@ const SMA_COLOR = '#ef4444';
 const INFLATION_COLOR = CHART_PALETTE.terracotta; // inflation / CPI lines (as EDO and Monthly already had)
 const TREND_COLOR = CHART_PALETTE.teal;         // the Trend Following strategy, beside Buy & Hold in blue
 // The app's signature warm yellow (the user's favourite colour, 2026-11-05): one of the theme's
-// main colours. Profit on the Portfolio tab; see the memory note before using it elsewhere.
+// main colours, used for profit on the Portfolio tab.
 const THEME_YELLOW = '#F5A623';
 const PROFIT_COLOR = THEME_YELLOW;
 
@@ -1567,6 +1566,11 @@ const FIELD = 'h-8 px-2.5 text-xs border border-gray-300 rounded-lg bg-white max
 const FIELD_SM = 'h-[26px] px-1.5 text-xs border border-gray-300 rounded-md bg-white max-md:h-9';
 const BTN_MAIN = 'h-8 px-4 inline-flex items-center justify-center gap-2 rounded-lg bg-slate-800 text-white text-xs font-semibold hover:bg-slate-700 disabled:opacity-50 max-md:h-11 max-md:text-[15px]';
 const BTN_SECOND = 'h-8 px-3 inline-flex items-center justify-center gap-1.5 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200 transition-colors max-md:h-11 max-md:text-[15px]';
+
+// The Backtest tab's quick date ranges, shortest first. DatePreset is "one of these", so adding a
+// range here is the only change the code needs.
+const DATE_PRESETS = ['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'] as const;
+type DatePreset = (typeof DATE_PRESETS)[number];
 
 // Asset class colors for the breakdown chart and table color dots
 const ASSET_CLASS_COLORS: Record<string, string> = {
@@ -2167,10 +2171,6 @@ const PortfolioBacktester = () => {
   // Closed round trips, rebuilt from the Transactions ledger by lib/positions.ts (the old
   // "Closed"/"Exit" sheet tabs are gone). "Closed tab" below = the Closed half of Positions.
   const [closedData, setClosedData] = useState<ClosedPositionRow[]>([]);
-  // Every ticker you have ever held (open or closed), rebuilt on each data load. The Positions
-  // page shows all of them: its Assets filter was removed on 2026-11-05 (nothing worth hiding
-  // there), so this is no longer a user choice.
-  const [closedSelectedTickers, setClosedSelectedTickers] = useState<string[]>([]);
   // Which asset the user drilled into (empty string = showing summary list)
   const [closedSelectedTicker, setClosedSelectedTicker] = useState<string>('');
   // "Invested Into" comparison: which other asset to compare against
@@ -2578,18 +2578,6 @@ const PortfolioBacktester = () => {
       setDailyData(fetchedDailyData);
       setPresetPortfolios(fetchedPresets);
       setEdoData(fetchedEdo);
-      {
-        // Every position ticker (open and closed). On EVERY load, not only the first: with no
-        // Assets filter on the Positions page any more, a position added to the sheet must
-        // appear after Refresh Data rather than wait for a full page reload.
-        const closedTickers = new Set(effectiveClosed.map((row: ClosedPositionRow) => row.ticker));
-        // Open tickers come from the ledger replay, which correctly keeps a position open
-        // when it was only PARTLY sold. The old rule — "bought and never sold" — dropped
-        // those entirely, which is what hid BCASH, MBHTR and ETHSGD.
-        const openTickers = new Set(model.open.map(o => o.ticker));
-        const allPositionTickers = new Set([...Array.from(closedTickers), ...Array.from(openTickers)]);
-        setClosedSelectedTickers(lookup.filter(a => allPositionTickers.has(a.ticker)).map(a => a.ticker));
-      }
       setIsConnected(true);
 
       if (resetSelections) {
@@ -3041,16 +3029,6 @@ const PortfolioBacktester = () => {
   const getClosedTabLookup = (): AssetLookup[] => {
     const closedTickers = new Set(closedData.map(row => row.ticker));
     return assetLookup.filter(asset => closedTickers.has(asset.ticker));
-  };
-
-  /**
-   * Applies the Closed tab's asset filter.
-   * Returns only the assets that are selected in the Assets dropdown.
-   */
-  const getClosedFilteredLookup = (): AssetLookup[] => {
-    return getClosedTabLookup().filter(asset =>
-      closedSelectedTickers.includes(asset.ticker)
-    );
   };
 
 
@@ -4381,7 +4359,7 @@ const PortfolioBacktester = () => {
    * Keeps the end date unchanged and calculates the new start date.
    * Finds the closest available date in the data if exact date doesn't exist.
    */
-  const setDatePreset = (preset: 'YTD' | '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | 'Max') => {
+  const setDatePreset = (preset: DatePreset) => {
     const start = presetStartDate(preset);
     if (start) setSelectedStartDate(start);
   };
@@ -4389,13 +4367,14 @@ const PortfolioBacktester = () => {
   /**
    * The start date a quick preset (YTD, 1Y … 10Y, Max) would set, without setting it. Used by
    * setDatePreset above, and to light up the preset button that matches the dates on screen.
+   * `limiting` is the shortest asset history; checking all twelve presets passes it in, so that
+   * search runs once rather than once per preset.
    */
-  const presetStartDate = (preset: 'YTD' | '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | 'Max'): string | null => {
+  const presetStartDate = (preset: DatePreset, limiting = getLimitingAsset()): string | null => {
     if (!assetData || assetData.length === 0) return null;
 
     if (preset === 'Max') {
       // Use the limiting asset's first date (shortest history), or the first date in the dataset
-      const limiting = getLimitingAsset();
       return limiting ? limiting.date : assetData[0].date;
     }
 
@@ -4419,7 +4398,6 @@ const PortfolioBacktester = () => {
     }
 
     // Enforce: can't go earlier than the limiting asset's first available date
-    const limiting = getLimitingAsset();
     if (limiting && targetDateStr < limiting.date) {
       targetDateStr = limiting.date;
     }
@@ -4434,9 +4412,10 @@ const PortfolioBacktester = () => {
    * When the shortest asset history cuts several presets to the same start (say 9Y, 10Y and Max
    * all begin at its first month) the longest one wins, since that is what "Max" means.
    */
-  const DATE_PRESETS = ['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'] as const;
-  const activeDatePreset = (): (typeof DATE_PRESETS)[number] | undefined =>
-    [...DATE_PRESETS].reverse().find(p => presetStartDate(p) === selectedDateRange.start);
+  const activeDatePreset = (): DatePreset | undefined => {
+    const limiting = getLimitingAsset();
+    return [...DATE_PRESETS].reverse().find(p => presetStartDate(p, limiting) === selectedDateRange.start);
+  };
 
   /**
    * Updates a specific field of an asset in a portfolio
@@ -9011,22 +8990,23 @@ const PortfolioBacktester = () => {
               <div className="mb-6 p-3 bg-gray-50 rounded-lg">
                 <div className="flex justify-between items-center mb-2">
                   <h2 className="text-sm font-semibold text-gray-700">Parameters</h2>
+                  {(() => { const active = activeDatePreset(); return (<>
                   {/* Quick date range presets (phones: one box that opens a slide-up panel) */}
                   <div className="hidden max-md:flex w-40">
                     <PhoneChoice
                       label="Quick range"
-                      display={activeDatePreset() ?? 'Choose…'}
+                      display={active ?? 'Choose…'}
                       subtitle="Sets start and end date"
                       options={DATE_PRESETS.map(p => ({ value: p, label: p }))}
-                      selected={activeDatePreset()}
-                      onPick={p => setDatePreset(p as Parameters<typeof setDatePreset>[0])}
+                      selected={active}
+                      onPick={p => setDatePreset(p as DatePreset)}
                     />
                   </div>
                   {/* The preset matching the dates on screen is the chosen one (slate); after
                       picking dates by hand none is */}
                   <div className={`flex gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
                     <span className={SEG}>
-                    {(() => { const active = activeDatePreset(); return DATE_PRESETS.map(preset => (
+                    {DATE_PRESETS.map(preset => (
                       <button
                         key={preset}
                         onClick={() => setDatePreset(preset)}
@@ -9034,9 +9014,10 @@ const PortfolioBacktester = () => {
                       >
                         {preset}
                       </button>
-                    )); })()}
+                    ))}
                     </span>
                   </div>
+                  </>); })()}
                 </div>
                 {/* Phones: two to a row (three cut the dates off: "2009-12-…"), and the boxes a
                     little taller and rounder so they are easier to tap ("max-md:" classes) */}
@@ -15321,7 +15302,7 @@ const PortfolioBacktester = () => {
                                   />
                                   <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
                                   <Bar dataKey="return" isAnimationActive={false}>
-                                    {/* Color each bar: black for positive, red for negative */}
+                                    {/* Color each bar: GAIN green for positive, LOSS red for negative */}
                                     {returnsData.map((entry, index) => (
                                       <Cell key={index} fill={entry.return >= 0 ? GAIN : LOSS} />
                                     ))}
@@ -16883,7 +16864,7 @@ const PortfolioBacktester = () => {
                                         content={lossBarLabel((value: number) => `${value.toFixed(1)}%`, { fontSize: '10px', fill: LOSS })}
                                       />
                                     </Bar>
-                                    {/* Trend Following bars - Green */}
+                                    {/* Trend Following bars - teal (TREND_COLOR) */}
                                     <Bar dataKey="Trend Following" fill={TREND_COLOR}>
                                       <LabelList
                                         dataKey="Trend Following"
@@ -18728,8 +18709,7 @@ const PortfolioBacktester = () => {
 
                   {/* ── Daily NAV Drawdowns chart ── */}
                   {(() => {
-                    // Colors matching Returns by Year: PLN=black, USD=red, SGD=yellow
-                    // (CHF = violet: the app's usual CHF terracotta sits too close to this chart's USD red)
+                    // The same fixed currency colours as Returns by Year and everywhere else
                     const DD_COLORS: Record<string, string> = { PLN: CURRENCY_COLORS.PLN, USD: CURRENCY_COLORS.USD, SGD: CURRENCY_COLORS.SGD, CHF: CURRENCY_COLORS.CHF };
 
                     // Re-use the same period-cutoff logic as the Daily NAV chart
@@ -18997,15 +18977,16 @@ const PortfolioBacktester = () => {
                         </h3>
                       );
                     })()}
+                    {(() => { const returnsRows = getReturnsChartData(); return (
                     <ResponsiveContainer width="100%" height={350}>
                       <BarChart
-                        data={getReturnsChartData()}
+                        data={returnsRows}
                         margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
                       >
                         <XAxis dataKey="year" tick={{ fontSize: 11 }} />
                         {/* padding: room under the lowest bar for its loss label (lossBarLabel) */}
                         <YAxis hide domain={['auto', 'auto']}
-                          padding={{ bottom: lossLabelRoom(getReturnsChartData().some(d => ['Return PLN', 'Return USD', 'Return SGD'].some(k => Number(d[k as keyof typeof d]) < 0)), 14) }} />
+                          padding={{ bottom: lossLabelRoom(returnsRows.some(d => ['Return PLN', 'Return USD', 'Return SGD'].some(k => Number(d[k as keyof typeof d]) < 0)), 14) }} />
                         <Tooltip
                           formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                           labelFormatter={(label) => `Year: ${label}`}
@@ -19055,21 +19036,23 @@ const PortfolioBacktester = () => {
                         )}
                       </BarChart>
                     </ResponsiveContainer>
+                    ); })()}
                   </div>
 
                   {/* Chart 4: Growth by Year — grouped bar chart */}
                   {/* Bars shown/hidden based on selectedReturnCurrencies */}
                   <div className="bg-white p-4 rounded-lg shadow mb-4 phone-bar-labels">
                     <h3 className="text-md font-semibold text-gray-700 mb-2">Growth by Year (%)</h3>
+                    {(() => { const growthRows = getGrowthByYearChartData(); return (
                     <ResponsiveContainer width="100%" height={350}>
                       <BarChart
-                        data={getGrowthByYearChartData()}
+                        data={growthRows}
                         margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
                       >
                         <XAxis dataKey="year" tick={{ fontSize: 11 }} />
                         {/* padding: room under the lowest bar for its loss label (lossBarLabel) */}
                         <YAxis hide domain={['auto', 'auto']}
-                          padding={{ bottom: lossLabelRoom(getGrowthByYearChartData().some(d => d['Growth PLN'] < 0 || d['Growth USD'] < 0 || d['Growth SGD'] < 0), 14) }} />
+                          padding={{ bottom: lossLabelRoom(growthRows.some(d => d['Growth PLN'] < 0 || d['Growth USD'] < 0 || d['Growth SGD'] < 0), 14) }} />
                         <Tooltip
                           formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                           labelFormatter={(label) => `Year: ${label}`}
@@ -19119,6 +19102,7 @@ const PortfolioBacktester = () => {
                         )}
                       </BarChart>
                     </ResponsiveContainer>
+                    ); })()}
                   </div>
                 </>
               )}
@@ -19176,9 +19160,14 @@ const PortfolioBacktester = () => {
 
               {/* --- SUMMARY VIEW (when no specific asset or cash balance is drilled into) --- */}
               {!closedSelectedTicker && !openSelectedTicker && !cashSelected && (() => {
-                const filteredAssets = getClosedFilteredLookup();
+                // Every position, open and closed. The Lookup tab decides what can be shown: a ticker
+                // missing from it stays hidden. Open tickers come from the ledger replay, which keeps
+                // a position open when it was only PARTLY sold.
+                const filteredAssets = getClosedTabLookup();
+                const lookupTickers = new Set(assetLookup.map(a => a.ticker));
+                const openTickers = getOpenTickers().filter(t => lookupTickers.has(t));
 
-                if (closedSelectedTickers.length === 0) {
+                if (filteredAssets.length === 0 && openTickers.length === 0) {
                   return (
                     <div className="bg-white p-8 rounded-lg shadow text-center text-gray-500">
                       <p className="text-lg mb-2">No positions yet</p>
@@ -19188,7 +19177,6 @@ const PortfolioBacktester = () => {
                 }
 
                 // --- Build Open Positions summary data ---
-                const openTickers = getOpenTickers().filter(t => closedSelectedTickers.includes(t));
                 const today = new Date().toISOString().split('T')[0];
                 // Helper: find the FX rate for a given date by matching the same month's data row.
                 // Data is month-end, so a mid-month transaction (e.g., Jan 15) should use

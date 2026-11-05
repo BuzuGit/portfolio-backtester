@@ -144,12 +144,6 @@ html {
     gap: 10px 8px;
     align-items: end;
   }
-  .phone-chart-controls > button {
-    grid-column: span 2;
-    height: 100%;
-    padding-left: 4px;
-    padding-right: 4px;
-  }
   /* The on/off switches sit in one grey strip (SEG in the component): it takes the whole row,
      its switches share it equally (three to a line), and a long label wraps onto two lines
      rather than being cut off. */
