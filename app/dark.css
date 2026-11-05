@@ -152,6 +152,9 @@ html.dark nav[aria-label="Pages"] .bg-white { background-color: #ffffff; }
 html.dark nav[aria-label="Pages"] .text-slate-900 { color: #0f172a; }
 html.dark nav[aria-label="Pages"] .text-slate-700 { color: #334155; }
 
+/* The grey strip above the content card while scrolling (globals.css): dark page and border */
+html.dark .page-top-mask { --mask-page: var(--d-page); --mask-line: var(--d-line); }
+
 /* ---------- Charts (Recharts draws SVG) ----------
    Chart colours are written as SVG attributes such as stroke="#000000". A stylesheet rule beats
    an attribute, so these swap them without touching the chart code. The "i" means upper or lower
