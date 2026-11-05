@@ -197,6 +197,11 @@ html.dark svg [stop-color="#2f7a4f" i] { stop-color: #6cc08b; }
 html.dark svg [fill="#b8423a" i] { fill: #ef8a80; }
 html.dark svg [stroke="#b8423a" i] { stroke: #ef8a80; }
 html.dark svg [stop-color="#b8423a" i] { stop-color: #ef8a80; }
+/* Legend swatches, dots and table bars drawn as HTML in the gain / loss colour (Tailwind's green
+   and red ARE GAIN and LOSS, tailwind.config.js) take the same lighter versions, so a legend's
+   dot matches the line it describes */
+html.dark .bg-green-500, html.dark .bg-green-600, html.dark .bg-\[\#2f7a4f\] { background-color: #6cc08b; }
+html.dark .bg-red-500, html.dark .bg-red-600, html.dark .bg-\[\#b8423a\] { background-color: #ef8a80; }
 /* Pale red area under a drawdown line */
 html.dark svg [fill="#efc5c0" i] { fill: rgb(239 138 128 / 0.25); }
 /* Small green / red "pill" labels drawn inside charts (pale fill, dark-green or dark-red text) */

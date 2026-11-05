@@ -1504,6 +1504,14 @@ const CHART_PALETTE = {
 // Dark mode: app/dark.css swaps GAIN and LOSS for lighter versions that read on a dark card.
 const GAIN = '#2f7a4f';
 const LOSS = '#b8423a';
+// Their dark-mode versions: the exact colours app/dark.css gives the charts in dark mode. Anything
+// that sets GAIN / LOSS where dark.css can't reach (an inline HTML background, such as the Markets
+// and Holdings return bars) uses gainLossColor(), so it matches the charts in both modes. (Running
+// GAIN through themedCell instead gave a paler green than the charts.)
+const GAIN_DARK = '#6cc08b';
+const LOSS_DARK = '#ef8a80';
+const gainLossColor = (positive: boolean): string =>
+  isDarkTheme() ? (positive ? GAIN_DARK : LOSS_DARK) : (positive ? GAIN : LOSS);
 const SERIES_COLORS = ['#1e293b', CHART_PALETTE.blue, CHART_PALETTE.teal, CHART_PALETTE.violet, CHART_PALETTE.rose, CHART_PALETTE.wine];
 // The 10-month moving average line, on every chart: red, the one exception to rule 1 (the user's
 // choice, 2026-11-05 — the SMA has always been the red line, and that is how it is recognised)
@@ -1521,7 +1529,9 @@ const PROFIT_COLOR = THEME_YELLOW;
 // tables that pick white or dark text per cell (readableTextOn) use the full range.
 const HEAT_STOPS = ['#b8423a', '#dc8a82', '#f3d0cc', '#f1f2f4', '#cfe6d6', '#86bf98', '#2f7a4f'];
 const heatColorLight = (t: number, maxStrength = 1): string => {
-  const c = Math.max(-1, Math.min(1, t)) * maxStrength;
+  // A value that isn't a number (a NaN from missing data) gets the neutral middle colour, rather
+  // than an out-of-range stop that would throw and take the whole page down with it
+  const c = (Number.isNaN(t) ? 0 : Math.max(-1, Math.min(1, t))) * maxStrength;
   const pos = (c + 1) * 3;                 // 0 … 6 along the stops
   const i = Math.min(5, Math.floor(pos));
   const f = pos - i;                       // how far between stop i and stop i+1
@@ -4389,21 +4399,24 @@ const PortfolioBacktester = () => {
       return limiting ? limiting.date : assetData[0].date;
     }
 
+    // Dates are "YYYY-MM-DD" strings. new Date() reads them as midnight UTC, so every step below
+    // stays in UTC: mixing in the computer's own time zone (getFullYear, a local new Date(y, 0, 1))
+    // made the answer depend on where the browser is — YTD began at the December month-end in
+    // Singapore but skipped January west of London.
     const endDate = new Date(selectedDateRange.end);
-    let targetStartDate: Date;
+    let targetDateStr: string;
 
     if (preset === 'YTD') {
-      // Year to date: Jan 1 of the current year based on end date
-      targetStartDate = new Date(endDate.getFullYear(), 0, 1);
+      // Year to date: from the last day of the previous year, so the first row on or after it is
+      // the year-end price the year's return is measured from
+      targetDateStr = `${endDate.getUTCFullYear() - 1}-12-31`;
     } else {
       // 1Y, 2Y, 3Y, 4Y, 5Y: subtract years from end date
       const years = parseInt(preset);  // "1Y" -> 1, "2Y" -> 2, etc.
-      targetStartDate = new Date(endDate);
-      targetStartDate.setFullYear(endDate.getFullYear() - years);
+      const targetStartDate = new Date(endDate);
+      targetStartDate.setUTCFullYear(endDate.getUTCFullYear() - years);
+      targetDateStr = targetStartDate.toISOString().split('T')[0];
     }
-
-    // Find the closest available date in assetData (on or after target)
-    let targetDateStr = targetStartDate.toISOString().split('T')[0];
 
     // Enforce: can't go earlier than the limiting asset's first available date
     const limiting = getLimitingAsset();
@@ -11388,8 +11401,8 @@ const PortfolioBacktester = () => {
               .filter((v): v is number => v !== null).map(Math.abs));
             // The theme's one gain green and one loss red, exactly as the bar charts on Monthly and
             // Backtest draw them (they used to be a lighter heat-cell shade: two greens for one
-            // meaning). themedCell gives their lighter versions in dark mode.
-            const BAR_UP = themedCell(GAIN), BAR_DOWN = themedCell(LOSS);
+            // meaning). gainLossColor gives the charts' own lighter versions in dark mode.
+            const BAR_UP = gainLossColor(true), BAR_DOWN = gainLossColor(false);
 
             // The sparkline shows the last N years of each row's full history: N years of monthly
             // steps = 12N + 1 month-end points (all of it on "Max").
@@ -12336,7 +12349,7 @@ const PortfolioBacktester = () => {
             const retSpan = (retHi - retLo) || 1;
             const zeroPct = (-retLo / retSpan) * 100;
             // The theme's gain green / loss red, the same as every bar chart (see Markets above)
-            const BAR_UP = themedCell(GAIN), BAR_DOWN = themedCell(LOSS);
+            const BAR_UP = gainLossColor(true), BAR_DOWN = gainLossColor(false);
             // Heat colours for Return % and XIRR, each column on its own scale (as on the Markets pages).
             const cap = (vals: (number | null)[]) => Math.max(1e-9, ...vals.filter((v): v is number => v !== null).map(Math.abs));
             const pctCap = cap(assetRows.map(r => r.retPct));
@@ -13667,12 +13680,15 @@ const PortfolioBacktester = () => {
                                       className={`text-right py-0.5 px-1 font-mono ${howCalculated ? 'cursor-help' : ''} ${
                                         asset.signals[colIdx] === 'SELL' ? 'font-bold' : ''
                                       }`}
-                                      style={{
-                                        backgroundColor: ret !== null ? heatColor(ret / 15, 0.67) : undefined,
-                                        color: ret !== null
-                                          ? ret >= 0 ? '#245f3d' : '#93342e'
-                                          : '#9ca3af'
-                                      }}
+                                      style={(() => {
+                                        if (ret === null) return { color: '#9ca3af' };
+                                        // The one heat scale behind, and whichever of white / near-black
+                                        // text reads better on that colour (as the Markets heat cells do):
+                                        // fixed green / red text on the stronger shades was hard to read,
+                                        // in dark mode especially
+                                        const bg = heatColor(ret / 15, 0.67);
+                                        return { backgroundColor: bg, color: readableTextOn(bg) };
+                                      })()}
                                     >
                                       {ret !== null ? `${ret.toFixed(1)}%` : '-'}
                                     </td>
@@ -16549,16 +16565,17 @@ const PortfolioBacktester = () => {
 
                         {/* Legend */}
                         <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-4">
+                          {/* Swatches in the lines' own colours (Buy & Hold area, TREND_COLOR, red SMA) */}
                           <div className="flex items-center gap-2">
-                            <div className="w-4 h-4 bg-blue-200 border border-blue-400 rounded"></div>
+                            <div className="w-4 h-4 border rounded" style={{ backgroundColor: '#d5e2f0', borderColor: CHART_PALETTE.blue }}></div>
                             <span>Buy & Hold</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <div className="w-4 h-1 bg-green-600 rounded"></div>
+                            <div className="w-4 h-1 rounded" style={{ backgroundColor: TREND_COLOR }}></div>
                             <span>Trend Following</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <div className="w-4 h-0.5 bg-gray-400" style={{ borderTop: '2px dashed #9ca3af' }}></div>
+                            <div className="w-4 h-0.5" style={{ borderTop: `2px dashed ${SMA_COLOR}` }}></div>
                             <span>10m SMA</span>
                           </div>
                           <div className="flex items-center gap-2">
@@ -21345,11 +21362,12 @@ const PortfolioBacktester = () => {
                         {openShowMinMax && (
                           <>
                             <div className="flex items-center gap-1">
-                              <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                              {/* The same colours as the chart's high / low markers */}
+                              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: CHART_PALETTE.blue }}></div>
                               <span>Max price</span>
                             </div>
                             <div className="flex items-center gap-1">
-                              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: CHART_PALETTE.rose }}></div>
                               <span>Min price</span>
                             </div>
                           </>
@@ -22304,11 +22322,12 @@ const PortfolioBacktester = () => {
                         {closedShowMinMax && (
                           <>
                             <div className="flex items-center gap-1">
-                              <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                              {/* The same colours as the chart's high / low markers */}
+                              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: CHART_PALETTE.blue }}></div>
                               <span>Max price</span>
                             </div>
                             <div className="flex items-center gap-1">
-                              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: CHART_PALETTE.rose }}></div>
                               <span>Min price</span>
                             </div>
                           </>
