@@ -1,5 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
+// The theme's colours, each defined once with its light and dark value.
+import './theme.css'
 // Dark mode colours. Every rule in it only applies while <html> has the class "dark",
 // so it changes nothing in light mode. Imported after globals.css so it can override it.
 import './dark.css'
