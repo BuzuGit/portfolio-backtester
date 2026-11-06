@@ -1,0 +1,103 @@
+/*
+  THE APP'S COLOURS, IN ONE PLACE
+
+  Every fixed colour the app draws with lives here as a CSS variable: the first block is light
+  mode, the second block lists the ones that change in dark mode. Think of a variable as a named
+  paint pot. The charts and tables don't say "paint this green #2f7a4f", they say "paint this
+  with the gain pot" (var(--c-gain)), and switching to dark mode simply swaps what is in the pot.
+  Whatever was painted with it changes by itself, however it was painted: a bar, a line, a
+  gradient, a tooltip, a legend dot, a label.
+
+  To add a colour:   add it to the first block (and to the second if dark mode needs another one),
+                     then give it a name in the theme block of components/PortfolioBacktester.tsx.
+  To change a colour: change it here. That is the only place.
+
+  The names in the component (GAIN, LOSS, SLATE...) are just short for var(--c-gain) and so on.
+  Tailwind's green-500/600/700 and red-500/600/700 are these same two pots (tailwind.config.js).
+
+  Two things stay outside on purpose:
+   - The heat scale (heatColor, HEAT_STOPS in the component) works out in-between shades, which
+     needs real numbers rather than a pot's name. themedCell() turns those for dark mode.
+   - The grey pages and text classes ("bg-white", "text-gray-700"...) are translated in app/dark.css.
+*/
+
+:root {
+  /* Gain and loss: the one green and the one red, for gains and losses only */
+  --c-gain: #2f7a4f;
+  --c-loss: #b8423a;
+  --c-gain-deep: #245f3d;        /* text on a pale heat swatch */
+  --c-loss-deep: #93342e;
+  --c-loss-total: #93342e;       /* the totals above the Portfolio tab's bars */
+  --c-gain-pill: #d9ecdf;        /* small "pill" labels inside charts */
+  --c-loss-pill: #f6e0dd;
+  --c-loss-area: #efc5c0;        /* the pale area under a drawdown line */
+
+  /* The app's main colours */
+  --c-slate: #1e293b;            /* first portfolio line, PLN: the app's main dark colour */
+  --c-yellow: #F5A623;           /* the user's favourite: profit on the Portfolio tab */
+  --c-sma: #ef4444;              /* the 10-month SMA is always this red, in both modes */
+  --c-bench-label: #92600a;      /* the small figures on world-equities bars */
+  --c-cash: #94a3b8;             /* the Cash asset class: deliberately the one grey in the set */
+
+  /* The chart palette (CHART_PALETTE in the component) */
+  --c-blue: #2f6fa8;
+  --c-terracotta: #c25a2c;
+  --c-teal: #0d8a78;
+  --c-gold: #c8952a;
+  --c-rose: #c06a94;
+  --c-olive: #557f33;
+  --c-violet: #5b45a8;
+  --c-wine: #8a3f52;
+  --c-wine-label: #8a3f52;       /* text beside a wine or olive marker on a chart */
+  --c-olive-label: #557f33;
+
+  /* Neutrals drawn into charts and tooltips */
+  --c-black: #000000;            /* the main series on Monthly, Positions and the Portfolio bars */
+  --c-ink: #111827;              /* near-black figures and bars */
+  --c-ink-soft: #374151;
+  --c-muted: #6b7280;            /* axis text */
+  --c-muted-label: #666666;      /* the small figures above bars */
+  --c-line: #e5e7eb;             /* grid lines and tooltip borders, from lightest... */
+  --c-line-faint: #f0f0f0;
+  --c-line-mid: #d1d5db;         /* ...axis lines and the faint "other series" lines */
+  --c-weight-bar: #d1d5db;       /* the grey Weight bars behind the % figures on Positions */
+  --c-halo: #ffffff;             /* the outline that lifts a dot off the line under it */
+  --c-card: #ffffff;             /* a custom tooltip's background */
+  --c-on-black: #ffffff;         /* text written on top of --c-black, --c-ink or --c-slate */
+}
+
+html.dark {
+  /* The dark green and red are a little too dark for a near-black card, so they get lighter.
+     Written as three numbers so dark.css and the tints here can use them at any transparency. */
+  --c-gain-rgb: 108 192 139;     /* #6cc08b */
+  --c-loss-rgb: 239 138 128;     /* #ef8a80 */
+  --c-gain: rgb(var(--c-gain-rgb));
+  --c-loss: rgb(var(--c-loss-rgb));
+  --c-gain-deep: var(--c-gain);
+  --c-loss-deep: var(--c-loss);
+  --c-loss-total: #f4b0a9;       /* a soft light red that stands out on the dark card */
+  --c-gain-pill: rgb(var(--c-gain-rgb) / 0.18);
+  --c-loss-pill: rgb(var(--c-loss-rgb) / 0.18);
+  --c-loss-area: rgb(var(--c-loss-rgb) / 0.25);
+
+  --c-bench-label: #fbbf24;
+  --c-wine-label: var(--d-text-500);   /* both hues are too dim to read as text on a dark card */
+  --c-olive-label: var(--d-text-500);
+
+  /* Black and slate would vanish on a dark card, so the main colours become near-white... */
+  --c-slate: var(--d-text-800);
+  --c-black: var(--d-text-800);
+  --c-ink: var(--d-text-800);
+  --c-ink-soft: var(--d-text-700);
+  --c-muted: var(--d-text-500);
+  --c-muted-label: var(--d-text-500);
+  /* ...which means text written on top of them has to turn dark */
+  --c-on-black: var(--d-page);
+
+  --c-line: var(--d-line-strong);
+  --c-line-faint: var(--d-line-strong);
+  --c-line-mid: var(--d-line-strong);
+  --c-weight-bar: var(--d-300);
+  --c-halo: var(--d-card);
+  --c-card: var(--d-card);
+}
