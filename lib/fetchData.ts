@@ -197,6 +197,10 @@ export interface ClosedPositionRow {
   // that total evenly across the holding period. Left undefined by the legacy parser
   // so those views can fall back to smearing.
   incomeEvents?: { date: string; amount: number }[];
+  // Units this round trip lost to fees paid IN UNITS while it was held (see UnitFee).
+  // `sharesSold` is what was left to sell AFTER those fees, so the units originally
+  // bought are sharesSold + the sum of these. Absent or empty for almost every row.
+  unitFees?: UnitFee[];
   // Computed fields (calculated during parsing):
   totalReturn: number;          // finalNetValue - initialCost (profit/loss in currency)
   totalReturnPct: number;       // (totalReturn / initialCost) × 100
@@ -229,7 +233,33 @@ export interface TransactionRow {
   // breakdown groups on this so a broker's holdings and its cash land on one bar.
   // Optional because the legacy parser had no such column.
   fundedFrom?: string;
+  // Units this purchase has since lost to fees paid IN UNITS (see UnitFee). On these
+  // rows `qty` is what was BOUGHT (so amount / qty is the real price paid), and the
+  // units still held are qty minus the sum of these. Absent for almost every row.
+  unitFees?: UnitFee[];
 }
+
+/**
+ * A fee paid by giving up units instead of cash.
+ *
+ * Some platforms (Endowus, from 2026) charge their fee by quietly selling a sliver of
+ * the fund you hold. No cash moves, but you own fewer units afterwards. The ledger
+ * records it as a "Fees" row that names the fund (not "Cash") and carries the number of
+ * units taken. The money you put in is unchanged, so the cost of the holding stays the
+ * same and the fee shows up as a smaller value, the way a fund's own expense ratio does.
+ */
+export interface UnitFee {
+  date: string;    // when the units were taken
+  qty: number;     // how many units left
+  amount: number;  // what they were worth then, in the holding's currency (the fee itself)
+}
+
+/** Sum of the units given up to fees, optionally only those taken on or before `upTo`. */
+export const unitFeeQty = (fees: UnitFee[] | undefined, upTo?: string): number => {
+  let s = 0;
+  if (fees) for (const f of fees) if (upTo === undefined || f.date <= upTo) s += f.qty;
+  return s;
+};
 
 // Daily NAV row from the "Daily" sheet (gid=882618775)
 // Contains one entry per calendar day with portfolio NAV per share in three currencies
@@ -288,6 +318,9 @@ export const LEDGER_SALE     = 'Proceeds from Sale';
 export const LEDGER_DIVIDEND = 'Dividend';
 export const LEDGER_INTEREST = 'Interest';   // coupon on savings bonds — income, like a dividend
 export const LEDGER_INFLOW   = 'Inflow';     // usually cash, but ALSO how some holdings were acquired
+// Usually a cash fee (Asset = "Cash"). When the Asset is a holding instead, it is a fee
+// paid in units of that holding: see UnitFee.
+export const LEDGER_FEES     = 'Fees';
 
 export interface ParsedData {
   data: AssetRow[];           // Array of rows, each with date and asset prices

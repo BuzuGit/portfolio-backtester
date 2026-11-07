@@ -27,6 +27,7 @@
 */
 
 import type { AssetRow, AssetLookup } from './fetchData';
+import { unitFeeQty } from './fetchData';
 import type { OpenPosition } from './positions';
 import type { CashAccountBalance } from './cash';
 
@@ -225,7 +226,11 @@ export const buildHoldings = (args: {
       let dd: HoldingDrawdown | null = null;
       if (price > 0 && pos.lots.length > 0) {
         const ym = (d: string) => d.slice(0, 7);
-        const buys = pos.lots.map(l => ({ ym: ym(l.date), qty: l.qty, cost: l.cost * conv(nat, to, rowOn(l.date)) }));
+        // A lot counts with every unit it BOUGHT, and units later given up to a fee paid in
+        // units (Endowus) drop out only from the month of that fee, so the line steps down
+        // then rather than pretending the smaller count was held all along.
+        const buys = pos.lots.map(l => ({ ym: ym(l.date), qty: l.qty + unitFeeQty(l.unitFees), cost: l.cost * conv(nat, to, rowOn(l.date)) }));
+        const fees = pos.unitFees.map(f => ({ ym: ym(f.date), qty: f.qty }));
         const divs = pos.incomeEvents.map(e => ({ ym: ym(e.date), amount: e.amount * conv(nat, to, rowOn(e.date)) }));
         const firstYm = buys.reduce((m, b) => (b.ym < m ? b.ym : m), buys[0].ym);
         let peakPnl = ret, peakDate = endIdx >= 0 ? String(data[endIdx].date) : '';   // today is a point too
@@ -235,6 +240,7 @@ export const buildHoldings = (args: {
           if (rowYm < firstYm || p === 0) continue;
           let shares = 0, putIn = 0, received = 0;
           for (const b of buys) if (b.ym <= rowYm) { shares += b.qty; putIn += b.cost; }
+          for (const f of fees) if (f.ym <= rowYm) shares -= f.qty;
           for (const d of divs) if (d.ym <= rowYm) received += d.amount;
           const pnl = shares * p * conv(nat, to, row) + received - putIn;
           if (pnl > peakPnl) { peakPnl = pnl; peakDate = String(row.date); }

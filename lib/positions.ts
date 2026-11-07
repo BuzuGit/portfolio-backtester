@@ -12,6 +12,10 @@
   the end is your open position; every (lot, sale) pairing that came off it is a
   completed round trip.
 
+  A third, rarer event is a fee paid in UNITS (Endowus sells a sliver of the fund each
+  quarter instead of charging cash). That shrinks every lot in proportion but leaves its
+  cost alone: you own fewer units for the same money. See isUnitFee.
+
   Why FIFO and not average cost: it is what the spreadsheet already does. Replaying
   the ledger this way reproduces the sheet's own "Cost Basis" column on 60 of the 64
   sale rows that have one, to within 1%. The four that differ are crypto rows where
@@ -19,8 +23,9 @@
 */
 
 import {
-  LedgerRow, LEDGER_PURCHASE, LEDGER_SALE, LEDGER_DIVIDEND, LEDGER_INTEREST, LEDGER_INFLOW,
+  LedgerRow, LEDGER_PURCHASE, LEDGER_SALE, LEDGER_DIVIDEND, LEDGER_INTEREST, LEDGER_INFLOW, LEDGER_FEES,
   TransactionRow, ClosedPositionRow, FlowType, FLOW_PURCHASE, FLOW_SALE, FLOW_DIVIDEND,
+  UnitFee, unitFeeQty,
 } from './fetchData';
 
 /** A holding that still has shares left in the lot queue. */
@@ -40,7 +45,13 @@ export interface OpenPosition {
   // bought. The Positions tab lists these as its purchase rows.
   // `account` is per lot, not per position: BTCSGD was accumulated across Coinhako,
   // BinanceSG, Crypto.com and Gemini, and ETHSGD across two of them.
-  lots: { date: string; qty: number; cost: number; commission: number; commissionBps: number; account: string; fundedFrom: string }[];
+  // `qty` is the units this lot holds NOW, after any fees paid in units; `unitFees` lists
+  // those fees, so qty + their units is what was bought (less anything sold). `cost` is
+  // unaffected by such fees: the money put in did not change.
+  lots: { date: string; qty: number; cost: number; commission: number; commissionBps: number; account: string; fundedFrom: string; unitFees: UnitFee[] }[];
+  // Every fee paid in units by the shares still held, merged by date, oldest first.
+  // Empty for every holding except one whose platform charges this way (DFA on Endowus).
+  unitFees: UnitFee[];
   // The dividend payments the SURVIVING shares actually received, oldest first. A
   // payment made before these particular shares were bought is absent, because those
   // shares earned none of it.
@@ -66,6 +77,9 @@ export interface RoundTrip {
   // paid. Needed so a year-by-year view can ask "what did this contribute in 2023?"
   // and get the truth instead of a lifetime total smeared evenly over the holding.
   incomeEvents: { date: string; amount: number }[];
+  // Fees these shares paid in units while held. `qty` is what was left to sell after
+  // them, and `cost` covers every unit originally bought, so the fee is inside pnl.
+  unitFees: UnitFee[];
   pnl: number;         // proceeds - cost + dividends
   holdingDays: number;
 }
@@ -105,6 +119,17 @@ const isPurchase = (r: LedgerRow): boolean =>
 
 const isSale = (r: LedgerRow): boolean => r.flow === LEDGER_SALE;
 
+/**
+ * A fee paid in units: a "Fees" row that names a holding rather than "Cash" and says how
+ * many units were taken. Endowus charges this way, selling a sliver of the fund every
+ * quarter. The units leave the holding; the cost of the holding does not change.
+ *
+ * Every other Fees row in the ledger is a cash fee with Asset = "Cash", so this matches
+ * nothing else today. Any future holding charged the same way is picked up automatically.
+ */
+const isUnitFee = (r: LedgerRow): boolean =>
+  r.flow === LEDGER_FEES && !!r.asset && r.asset !== 'Cash' && r.qty > 0;
+
 /** Dividends and savings-bond coupons both count as income earned by the shares. */
 const isIncome = (r: LedgerRow): boolean =>
   (r.flow === LEDGER_DIVIDEND || r.flow === LEDGER_INTEREST) && !!r.asset && r.asset !== 'Cash';
@@ -115,8 +140,11 @@ const daysBetween = (a: string, b: string): number =>
 /** One lot sitting in the FIFO queue. */
 interface Lot {
   date: string;
-  qty: number;
-  unitCost: number;
+  qty: number;           // units this lot holds NOW
+  unitCost: number;      // what each unit cost when BOUGHT (fees paid in units don't change it)
+  // Fees this lot has paid by giving up units. The lot's cost covers qty + these units,
+  // so cost = (qty + their sum) x unitCost. Empty for almost every lot.
+  unitFees: UnitFee[];
   commission: number;    // commission paid to buy the shares STILL in this lot
   commissionBps: number; // as quoted on the original purchase
   account: string;       // where these particular shares were bought
@@ -143,7 +171,7 @@ export function buildPositions(ledger: LedgerRow[], allowedTickers: Set<string>)
   // "UST T-Bill" is reused by two different bills that must not be merged.
   const byAsset = new Map<string, { ticker: string; currency: string; rows: LedgerRow[] }>();
   for (const r of ledger) {
-    if (!isPurchase(r) && !isSale(r) && !isIncome(r)) continue;
+    if (!isPurchase(r) && !isSale(r) && !isIncome(r) && !isUnitFee(r)) continue;
     if (!r.asset || r.asset === 'Cash') continue;
     let entry = byAsset.get(r.asset);
     if (!entry) { entry = { ticker: '', currency: r.currency, rows: [] }; byAsset.set(r.asset, entry); }
@@ -189,8 +217,32 @@ export function buildPositions(ledger: LedgerRow[], allowedTickers: Set<string>)
           date: r.date, qty: r.qty, unitCost: r.amount / r.qty,
           commission: r.commission, commissionBps: r.commissionBps, account: r.account,
           fundedFrom: r.from,
-          dividends: 0, incomeEvents: [],
+          dividends: 0, incomeEvents: [], unitFees: [],
         });
+        continue;
+      }
+
+      if (isUnitFee(r)) {
+        // ---- a fee paid in units ----
+        // The platform charges the whole holding, so every lot gives up its fair share,
+        // in proportion to its size. (A sale takes the OLDEST shares first; a fee is not a
+        // sale, so that rule does not apply.) The units leave; the cost stays, because the
+        // money you put in has not changed. The fee shows up as a lower value instead.
+        const held = lots.reduce((s, l) => s + l.qty, 0);
+        if (!qtyUsable || held <= EPS || r.qty > held + Math.max(EPS, held * 1e-9)) {
+          warnings.push({
+            ticker: entry.ticker, asset, date: r.date,
+            reason: !qtyUsable ? 'purchases for this asset have no quantity, so the fee cannot be taken from them'
+              : `fee of ${r.qty} units exceeds the ${held.toFixed(4)} held`,
+          });
+          continue;
+        }
+        for (const l of lots) {
+          const part = l.qty / held;
+          const units = r.qty * part;
+          l.unitFees.push({ date: r.date, qty: units, amount: r.amount * part });
+          l.qty -= units;
+        }
         continue;
       }
 
@@ -224,6 +276,10 @@ export function buildPositions(ledger: LedgerRow[], allowedTickers: Set<string>)
         const buyCommShare = lot.commission * fraction;
         // The sale's own commission, split across however many lots this sale consumes
         const sellCommShare = r.qty > 0 ? r.commission * (take / r.qty) : 0;
+        // Units these shares already gave up to fees paid in units (0 for almost every
+        // lot). They were bought and paid for too, so the cost leaving with this sale
+        // covers them as well: the fee lands in this round trip's profit, where it belongs.
+        const boughtUnits = take + unitFeeQty(lot.unitFees) * fraction;
 
         roundTrips.push({
           ticker: entry.ticker, asset, currency: r.currency,
@@ -231,7 +287,7 @@ export function buildPositions(ledger: LedgerRow[], allowedTickers: Set<string>)
           qty: take,
           // Cost and proceeds are left exactly as the ledger recorded them: commission
           // is already inside both figures, so it is reported alongside, never re-applied.
-          cost: take * lot.unitCost,
+          cost: boughtUnits * lot.unitCost,
           proceeds: take * unitProceeds,
           buyCommission: buyCommShare,
           sellCommission: sellCommShare,
@@ -242,11 +298,14 @@ export function buildPositions(ledger: LedgerRow[], allowedTickers: Set<string>)
           incomeEvents: lot.incomeEvents
             .map(e => ({ date: e.date, amount: e.amount * fraction }))
             .filter(e => Math.abs(e.amount) > 0.005),
-          pnl: take * unitProceeds - take * lot.unitCost + divShare,
+          // ...and their slice of each fee paid in units, likewise
+          unitFees: lot.unitFees.map(f => ({ date: f.date, qty: f.qty * fraction, amount: f.amount * fraction })),
+          pnl: take * unitProceeds - boughtUnits * lot.unitCost + divShare,
           holdingDays: daysBetween(lot.date, r.date),
         });
 
         lot.dividends -= divShare;
+        lot.unitFees = lot.unitFees.map(f => ({ date: f.date, qty: f.qty * (1 - fraction), amount: f.amount * (1 - fraction) }));
         lot.commission -= buyCommShare;
         // Shrink this lot's income history by the same fraction, so what remains is the
         // income belonging to the shares that are still held
@@ -262,15 +321,26 @@ export function buildPositions(ledger: LedgerRow[], allowedTickers: Set<string>)
       open.push({
         ticker: entry.ticker, asset, currency: entry.currency,
         qty,
-        cost: lots.reduce((s, l) => s + l.qty * l.unitCost, 0),
+        // Cost covers the units given up to fees as well: they were paid for too
+        cost: lots.reduce((s, l) => s + (l.qty + unitFeeQty(l.unitFees)) * l.unitCost, 0),
         income: lots.reduce((s, l) => s + l.dividends, 0),
         firstBuyDate, lastBuyDate,
         partiallySold: soldAny,
         lots: lots.map(l => ({
-          date: l.date, qty: l.qty, cost: l.qty * l.unitCost,
+          date: l.date, qty: l.qty, cost: (l.qty + unitFeeQty(l.unitFees)) * l.unitCost,
           commission: l.commission, commissionBps: l.commissionBps, account: l.account,
-          fundedFrom: l.fundedFrom,
+          fundedFrom: l.fundedFrom, unitFees: l.unitFees,
         })),
+        // The fees across all surviving lots, one entry per date
+        unitFees: (() => {
+          const byDate = new Map<string, UnitFee>();
+          for (const l of lots) for (const f of l.unitFees) {
+            const m = byDate.get(f.date);
+            if (m) { m.qty += f.qty; m.amount += f.amount; }
+            else byDate.set(f.date, { date: f.date, qty: f.qty, amount: f.amount });
+          }
+          return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+        })(),
         // Merge the surviving lots' income histories, combining same-day payments
         incomeEvents: (() => {
           const byDate = new Map<string, number>();
@@ -337,13 +407,16 @@ export function toClosedPositionRows(model: PositionsModel): ClosedPositionRow[]
   // Per-ticker totals, which the old sheet repeated on every row of a position
   const boughtByTicker = new Map<string, number>();
   const soldByTicker = new Map<string, number>();
+  // Units bought = units sold or still held + units given up to fees paid in units
   for (const t of model.roundTrips) {
-    boughtByTicker.set(t.ticker, (boughtByTicker.get(t.ticker) || 0) + t.qty);
+    boughtByTicker.set(t.ticker, (boughtByTicker.get(t.ticker) || 0) + t.qty + unitFeeQty(t.unitFees));
     soldByTicker.set(t.ticker, (soldByTicker.get(t.ticker) || 0) + t.qty);
   }
-  for (const o of model.open) boughtByTicker.set(o.ticker, (boughtByTicker.get(o.ticker) || 0) + o.qty);
+  for (const o of model.open) boughtByTicker.set(o.ticker, (boughtByTicker.get(o.ticker) || 0) + o.qty + unitFeeQty(o.unitFees));
 
   return model.roundTrips.map(t => {
+    // The units originally bought for this round trip, before any fees paid in units
+    const boughtUnits = t.qty + unitFeeQty(t.unitFees);
     const years = t.holdingDays / 365.25;
     const finalNetValue = t.proceeds + t.dividends;
     const totalReturnPct = t.cost > 0 ? (t.pnl / t.cost) * 100 : 0;
@@ -361,7 +434,9 @@ export function toClosedPositionRows(model: PositionsModel): ClosedPositionRow[]
       totalSharesBought: boughtByTicker.get(t.ticker) || 0,
       totalSharesSold: soldByTicker.get(t.ticker) || 0,
       sharesSold: t.qty,
-      buyPrice: t.qty > 0 ? t.cost / t.qty : 0,
+      // The price actually paid per unit bought (cost / sharesSold would overstate it
+      // whenever some of those units later went to fees)
+      buyPrice: boughtUnits > 0 ? t.cost / boughtUnits : 0,
       buyCommission: t.buyCommission,
       initialCost: t.cost,
       sellPrice: t.qty > 0 ? t.proceeds / t.qty : 0,
@@ -369,6 +444,7 @@ export function toClosedPositionRows(model: PositionsModel): ClosedPositionRow[]
       valueAfterFee: t.proceeds,
       cumDividend: t.dividends,
       incomeEvents: t.incomeEvents,
+      unitFees: t.unitFees,
       totalTax: 0,
       proceedsFromSale: t.proceeds,
       finalNetValue,
