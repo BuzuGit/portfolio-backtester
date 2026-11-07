@@ -37,7 +37,7 @@ import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, Cartesia
 // Switches off chart animation app-wide: every chart draws instantly (see the file for why/how)
 import '@/lib/noChartAnimation';
 import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun, ChevronDown } from 'lucide-react';
-import { fetchSheetData, SheetUnreachableError, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData } from '@/lib/fetchData';
+import { fetchSheetData, SheetUnreachableError, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData, UnitFee, unitFeeQty } from '@/lib/fetchData';
 import { isPhoneScreen, readSavedSheet, saveSheet } from '@/lib/savedSheet';
 import { BottomSheet, PhoneCheckSheet, PhoneChoice, PhoneSelectSheets, periodOptions } from '@/components/PhoneSheet';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
@@ -251,7 +251,10 @@ const SharesHeldTooltip = ({ active, payload }: { active?: boolean; payload?: { 
  */
 type TradeEvent = {
   date: string;
-  type: 'buy' | 'sell';
+  // 'fee' = a fee paid in UNITS (see UnitFee in lib/fetchData): units leave, cost stays,
+  // nothing is realised. Its price is what the units were worth when taken, and its
+  // amount is that value, i.e. the fee itself.
+  type: 'buy' | 'sell' | 'fee';
   price: number;
   quantity: number;
   commission: number;
@@ -279,6 +282,45 @@ type TradeEvent = {
  * shares are the ones that left), and the cumulative cost falls by what the shares originally
  * COST rather than by what you sold them for — the difference being your realised profit.
  */
+/**
+ * A fee paid in units, applied to a FIFO queue of {shares, price} lots: every lot gives
+ * up its share of the units in proportion to its size, and its per-share price rises so
+ * that its total cost stays exactly the same. You own fewer units for the same money.
+ */
+const applyUnitFeeToLots = (lots: { shares: number; price: number }[], units: number) => {
+  const held = lots.reduce((s, l) => s + l.shares, 0);
+  if (held <= 1e-9) return;
+  const keep = Math.max(0, 1 - units / held);
+  if (keep <= 1e-12) { lots.length = 0; return; }   // the fee took everything
+  for (const l of lots) { l.shares *= keep; l.price /= keep; }
+};
+
+/** Fees paid in units from several lots, merged into one entry per date, oldest first. */
+const mergeUnitFees = (lists: (UnitFee[] | undefined)[]): UnitFee[] => {
+  const byDate = new Map<string, UnitFee>();
+  for (const list of lists) for (const f of list ?? []) {
+    const m = byDate.get(f.date);
+    if (m) { m.qty += f.qty; m.amount += f.amount; }
+    else byDate.set(f.date, { date: f.date, qty: f.qty, amount: f.amount });
+  }
+  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+};
+
+/**
+ * Units a purchase row still holds: what was bought less anything given up to fees paid
+ * in units. Pass `upTo` (YYYY-MM-DD) for the count held on that day instead of today.
+ */
+const heldQty = (t: TransactionRow, upTo?: string): number => t.qty - unitFeeQty(t.unitFees, upTo);
+
+/** A fee paid in units as a Transaction History row; the FIFO pass fills in the rest. */
+const unitFeeToEvent = (f: UnitFee): TradeEvent => ({
+  date: f.date, type: 'fee',
+  price: f.qty > 0 ? f.amount / f.qty : 0,
+  quantity: f.qty, commission: 0, commissionBps: 0, amount: f.amount, costPerShare: 0,
+  cumQuantity: 0, cumAvgPrice: null, cumCost: 0, cumSold: 0, income: 0, cumIncome: 0,
+  pnlBasis: 0, realisedPnl: null, cumRealisedPnl: 0, stillHeld: false,
+});
+
 const applyFifoRunningTotals = (events: TradeEvent[]) => {
   const lots: { shares: number; price: number }[] = [];
   let runningPnl = 0;
@@ -297,6 +339,9 @@ const applyFifoRunningTotals = (events: TradeEvent[]) => {
 
     if (e.type === 'buy') {
       lots.push({ shares: e.quantity, price: e.costPerShare });
+    } else if (e.type === 'fee') {
+      // Units leave, cost stays: Cum. Quantity drops, Cum. Cost doesn't, Cum. Avg Price rises
+      applyUnitFeeToLots(lots, e.quantity);
     } else {
       let toSell = e.quantity;
       while (toSell > 0 && lots.length > 0) {
@@ -356,7 +401,7 @@ const TradeHistoryTable = ({ events }: { events: TradeEvent[] }) => (
             <th className="text-right py-1.5 px-2 bg-gray-50" title="Shares still held after this trade (running position).">Cum. Quantity</th>
             <th className="text-right py-1.5 px-2 bg-gray-50" title="Average cost of the shares still held after this trade, FIFO. A sale can move it, because FIFO retires your oldest lots first.">Cum. Avg Price</th>
             <th className="text-right py-1.5 px-2 bg-gray-50" title="Commission paid, with its size in basis points of the gross trade value (price × quantity). 1 bp = 0.01%.">Commission</th>
-            <th className="text-right py-1.5 px-2 bg-gray-50" title="Buy: total cost including commission. Sell: proceeds after commission.">Cost / Sale Value</th>
+            <th className="text-right py-1.5 px-2 bg-gray-50" title="Buy: total cost including commission. Sell: proceeds after commission. Fee (units): what the units given up were worth, i.e. the fee.">Cost / Sale Value</th>
             <th className="text-right py-1.5 px-2 bg-gray-50" title="What the shares you still hold originally cost. A sale reduces this by the purchase cost of the shares sold, not by the sale proceeds.">Cum. Cost</th>
             <th className="text-right py-1.5 px-2 bg-gray-50" title="Running total of what you have sold, at the prices you actually got (proceeds after commission). Read against Cum. Cost: what you still hold cost you X, and what you let go returned Y.">Cum. Sold</th>
             <th className="text-right py-1.5 px-2 bg-gray-50" title="Dividends and interest collected on the shares you have sold, net of tax. This is ALREADY part of Cum. PnL — it tells you how much of the profit came from being paid to hold rather than from the price moving. Income on shares you still hold is not counted, because nothing is realised until you sell.">Income</th>
@@ -375,17 +420,21 @@ const TradeHistoryTable = ({ events }: { events: TradeEvent[] }) => (
             return (
             <tr
               key={`${e.date}-${e.type}-${idx}`}
-              className={`border-b border-gray-100 ${e.type === 'buy' ? 'bg-green-50' : 'bg-red-50'}`}
+              className={`border-b border-gray-100 ${e.type === 'buy' ? 'bg-green-50' : e.type === 'fee' ? 'bg-gray-50' : 'bg-red-50'}`}
             >
               <td className={`py-1.5 px-2 font-mono${box}${boxL}`}>{e.date}</td>
-              <td className={`py-1.5 px-2 font-medium ${e.type === 'buy' ? 'text-green-700' : 'text-red-700'}${box}`}>
-                {e.type === 'buy' ? 'Buy' : 'Sell'}
+              <td
+                className={`py-1.5 px-2 font-medium ${e.type === 'buy' ? 'text-green-700' : e.type === 'fee' ? 'text-gray-500' : 'text-red-700'}${box}`}
+                title={e.type === 'fee' ? 'A fee paid by giving up units instead of cash. Units leave, the cost stays, so the average cost per unit rises. Nothing is realised.' : undefined}
+              >
+                {e.type === 'buy' ? 'Buy' : e.type === 'fee' ? 'Fee (units)' : 'Sell'}
               </td>
               <td className={`text-right py-1.5 px-2 font-mono${box}`}>
                 {formatPrice(e.price)}
               </td>
               <td className={`text-right py-1.5 px-2${box}`}>
-                {e.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                {/* A fee's units are shown as leaving, the way they reduce Cum. Quantity */}
+                {e.type === 'fee' ? '−' : ''}{e.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
               </td>
               <td className={`text-right py-1.5 px-2 font-medium${box}`}>
                 {e.cumQuantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}
@@ -400,7 +449,10 @@ const TradeHistoryTable = ({ events }: { events: TradeEvent[] }) => (
                 <span className="text-gray-500"> ({e.commissionBps.toFixed(0)}bps)</span>
               </td>
               <td className={`text-right py-1.5 px-2 font-mono font-medium${box}`}>
-                {e.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                {/* A fee is small, so it keeps its cents; buys and sells round to whole units */}
+                {e.type === 'fee'
+                  ? e.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                  : e.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
               </td>
               <td className={`text-right py-1.5 px-2 font-mono font-medium${box}`}>
                 {e.cumCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -3207,6 +3259,9 @@ const PortfolioBacktester = () => {
    */
   const roundTripToEvents = (t: ClosedPositionRow): TradeEvent[] => {
     const events: TradeEvent[] = [];
+    // Units bought: what was sold plus anything given up to fees paid in units on the way
+    // (no fees for almost every row, so this is just sharesSold)
+    const boughtUnits = t.sharesSold + unitFeeQty(t.unitFees);
     {
       // The purchase leg. initialCost already includes the buy commission.
       // Gross traded value, derived from the CASH rather than from price × quantity. The two
@@ -3218,13 +3273,13 @@ const PortfolioBacktester = () => {
         date: t.invDate,
         type: 'buy',
         price: t.buyPrice,
-        quantity: t.sharesSold,
+        quantity: boughtUnits,
         commission: t.buyCommission,
         commissionBps: buyGross > 0 ? (t.buyCommission / buyGross) * 10000 : 0,
         amount: t.initialCost,
         // Derived from initialCost rather than the buyPrice column on purpose — it includes the
         // commission, and it stays right even if a price cell in the sheet is mistyped.
-        costPerShare: t.sharesSold > 0 ? t.initialCost / t.sharesSold : t.buyPrice,
+        costPerShare: boughtUnits > 0 ? t.initialCost / boughtUnits : t.buyPrice,
         cumQuantity: 0,
         cumAvgPrice: null,
         cumCost: 0,
@@ -3236,6 +3291,8 @@ const PortfolioBacktester = () => {
         cumRealisedPnl: 0,
         stillHeld: false,  // this lot was bought AND sold, so none of it remains
       });
+      // (Fees these shares paid in units are added by the caller, merged by date across
+      // every round trip, so one quarterly fee is one row rather than one per lot.)
       // The sale leg. valueAfterFee is the proceeds with the sell commission already deducted.
       const sellGross = t.valueAfterFee + t.sellCommission;   // proceeds before the fee came off
       events.push({
@@ -3289,14 +3346,21 @@ const PortfolioBacktester = () => {
     events.sort((a, b) => {
       const byDate = a.date.localeCompare(b.date);
       if (byDate !== 0) return byDate;
-      if (a.type !== b.type) return a.type === 'buy' ? -1 : 1;
+      // Same day: buys, then fees paid in units, then sells
+      const rank = { buy: 0, fee: 1, sell: 2 };
+      if (a.type !== b.type) return rank[a.type] - rank[b.type];
       if (a.type === 'buy') return Number(a.stillHeld) - Number(b.stillHeld);
       return 0;
     });
 
   /** Trade history for a CLOSED position: every round trip, split back into real events. */
   const getClosedTradeEvents = (ticker: string): TradeEvent[] => {
-    const events = getFilteredClosedTransactions(ticker).flatMap(roundTripToEvents);
+    const trips = getFilteredClosedTransactions(ticker);
+    const events = [
+      ...trips.flatMap(roundTripToEvents),
+      // Fees paid in units along the way, one row per date (none for almost every asset)
+      ...mergeUnitFees(trips.map(t => t.unitFees)).map(unitFeeToEvent),
+    ];
     sortTradeEvents(events);
     applyFifoRunningTotals(events);
     return events;
@@ -3317,11 +3381,16 @@ const PortfolioBacktester = () => {
   const getOpenTradeEvents = (ticker: string): TradeEvent[] => {
     // Past completed trades in this same asset — all of them. The open position's transaction
     // checkboxes filter your CURRENT holdings, not your history.
-    const historical = closedData.filter(r => r.ticker === ticker).flatMap(roundTripToEvents);
+    const closedTrips = closedData.filter(r => r.ticker === ticker);
+    const historical = closedTrips.flatMap(roundTripToEvents);
+    const openPurchases = getFilteredOpenPurchases(ticker);
+    // Fees paid in units, by sold and still-held shares alike, one row per date
+    const fees = mergeUnitFees([...closedTrips.map(r => r.unitFees), ...openPurchases.map(t => t.unitFees)]).map(unitFeeToEvent);
 
     // Purchases still open. The transactions sheet has no price column, so derive it: `amount`
     // is the all-in cost, so stripping the commission back out gives the per-share price paid.
-    const current: TradeEvent[] = getFilteredOpenPurchases(ticker).map(t => ({
+    // `qty` here is what was BOUGHT; any units later given up to fees are the fee rows.
+    const current: TradeEvent[] = openPurchases.map(t => ({
       date: t.date,
       type: 'buy' as const,
       price: t.qty > 0 ? (t.amount - t.commAbs) / t.qty : 0,
@@ -3342,7 +3411,7 @@ const PortfolioBacktester = () => {
       stillHeld: true,   // never sold — this is what you are holding right now
     }));
 
-    const events = [...historical, ...current];
+    const events = [...historical, ...current, ...fees];
     sortTradeEvents(events);
     applyFifoRunningTotals(events);
     return events;
@@ -3399,19 +3468,21 @@ const PortfolioBacktester = () => {
     // Events are: buys (invDate) and sells (divDate), sorted chronologically.
     // Between events, the average stays flat (horizontal line).
 
-    type CostEvent = { date: string; ym: string; type: 'buy' | 'sell'; shares: number; price: number };
+    type CostEvent = { date: string; ym: string; type: 'buy' | 'sell' | 'fee'; shares: number; price: number };
     const costEvents: CostEvent[] = [];
     for (const t of transactions) {
       const buyD = new Date(t.invDate);
       const sellD = new Date(t.divDate);
+      // Units bought = sold + any given up to fees paid in units (almost always just sold)
+      const boughtUnits = t.sharesSold + unitFeeQty(t.unitFees);
       // Use initialCost / shares as the per-share cost (includes buy commission).
       // If commission data is missing, initialCost = buyPrice × shares, so this still works.
-      const costPerShare = t.sharesSold > 0 ? t.initialCost / t.sharesSold : t.buyPrice;
+      const costPerShare = boughtUnits > 0 ? t.initialCost / boughtUnits : t.buyPrice;
       costEvents.push({
         date: t.invDate,
         ym: toYM(buyD),
         type: 'buy',
-        shares: t.sharesSold,
+        shares: boughtUnits,
         price: costPerShare,
       });
       costEvents.push({
@@ -3422,8 +3493,14 @@ const PortfolioBacktester = () => {
         price: 0, // sell price doesn't affect cost basis
       });
     }
-    // Sort chronologically; if same date, process buys before sells
-    costEvents.sort((a, b) => a.date.localeCompare(b.date) || (a.type === 'buy' ? -1 : 1));
+    // Fees paid in units, one per date: shares leave, cost stays
+    for (const f of mergeUnitFees(transactions.map(t => t.unitFees))) {
+      costEvents.push({ date: f.date, ym: toYM(new Date(f.date)), type: 'fee', shares: f.qty, price: 0 });
+    }
+    // Sort chronologically; if same date, process buys first, then fees, then sells.
+    // (Written so buy/sell pairs tie-break exactly as they always have.)
+    costEvents.sort((a, b) => a.date.localeCompare(b.date)
+      || (a.type === 'buy' ? -1 : b.type === 'buy' ? 1 : a.type === 'fee' && b.type === 'sell' ? -1 : 1));
 
     // FIFO queue: each lot is {shares, price}
     const fifoLots: { shares: number; price: number }[] = [];
@@ -3443,6 +3520,8 @@ const PortfolioBacktester = () => {
       if (evt.type === 'buy') {
         // Add a new lot to the back of the queue
         fifoLots.push({ shares: evt.shares, price: evt.price });
+      } else if (evt.type === 'fee') {
+        applyUnitFeeToLots(fifoLots, evt.shares);
       } else {
         // Sell: remove shares from the FRONT of the queue (FIFO)
         let toSell = evt.shares;
@@ -3611,17 +3690,19 @@ const PortfolioBacktester = () => {
     if (transactions.length === 0) return [];
 
     // Collect all buy and sell events from the checked transactions
-    type CapitalEvent = { date: string; ym: string; type: 'buy' | 'sell'; shares: number; price: number };
+    type CapitalEvent = { date: string; ym: string; type: 'buy' | 'sell' | 'fee'; shares: number; price: number };
     const events: CapitalEvent[] = [];
     for (const t of transactions) {
       const buyD = new Date(t.invDate);
       const sellD = new Date(t.divDate);
-      const costPerShare = t.sharesSold > 0 ? t.initialCost / t.sharesSold : t.buyPrice;
+      // Units bought = sold + any given up to fees paid in units (almost always just sold)
+      const boughtUnits = t.sharesSold + unitFeeQty(t.unitFees);
+      const costPerShare = boughtUnits > 0 ? t.initialCost / boughtUnits : t.buyPrice;
       events.push({
         date: t.invDate,
         ym: toYM(buyD),
         type: 'buy',
-        shares: t.sharesSold,
+        shares: boughtUnits,
         price: costPerShare,
       });
       events.push({
@@ -3632,8 +3713,14 @@ const PortfolioBacktester = () => {
         price: 0,
       });
     }
-    // Sort: chronological, buys before sells on same date
-    events.sort((a, b) => a.date.localeCompare(b.date) || (a.type === 'buy' ? -1 : 1));
+    // Fees paid in units, one per date: shares leave, cost stays
+    for (const f of mergeUnitFees(transactions.map(t => t.unitFees))) {
+      events.push({ date: f.date, ym: toYM(new Date(f.date)), type: 'fee', shares: f.qty, price: 0 });
+    }
+    // Sort: chronological; same date = buys, then fees, then sells.
+    // (Written so buy/sell pairs tie-break exactly as they always have.)
+    events.sort((a, b) => a.date.localeCompare(b.date)
+      || (a.type === 'buy' ? -1 : b.type === 'buy' ? 1 : a.type === 'fee' && b.type === 'sell' ? -1 : 1));
 
     // FIFO lot queue — same pattern as avg buy price, but we also track total cost basis
     const lots: { shares: number; price: number }[] = [];
@@ -3662,6 +3749,8 @@ const PortfolioBacktester = () => {
 
       if (evt.type === 'buy') {
         lots.push({ shares: evt.shares, price: evt.price });
+      } else if (evt.type === 'fee') {
+        applyUnitFeeToLots(lots, evt.shares);
       } else {
         // FIFO: remove oldest lots first
         let toSell = evt.shares;
@@ -3841,7 +3930,10 @@ const PortfolioBacktester = () => {
     const pos = positionsModel?.open.find(o => o.ticker === ticker);
     if (!pos) return [];   // not open, or the ledger hasn't loaded yet
     return pos.lots.map(l => ({
-      date: l.date, fx: pos.currency, qty: l.qty,
+      // What was BOUGHT (less anything sold), so amount / qty stays the real price paid.
+      // Units later given up to fees paid in units travel alongside in `unitFees`; use
+      // heldQty() for the units still held. For almost every lot the two are equal.
+      date: l.date, fx: pos.currency, qty: l.qty + unitFeeQty(l.unitFees), unitFees: l.unitFees,
       commAbs: l.commission, commBps: l.commissionBps,
       amount: l.cost, asset: pos.asset, flow: FLOW_PURCHASE, ticker,
       // Each lot keeps the account it was actually bought in — ETHSGD spans
@@ -3909,8 +4001,8 @@ const PortfolioBacktester = () => {
     const dividends = getOpenDividends(ticker);
     if (purchases.length === 0) return null;
 
-    // Total shares = sum of all purchase quantities
-    const totalShares = purchases.reduce((sum, t) => sum + t.qty, 0);
+    // Total shares = units still held: purchases less any units given up to fees
+    const totalShares = purchases.reduce((sum, t) => sum + heldQty(t), 0);
     // Total invested = sum of all purchase amounts (total cost including commission)
     const totalInvested = purchases.reduce((sum, t) => sum + t.amount, 0);
     // Total dividends received
@@ -3988,10 +4080,12 @@ const PortfolioBacktester = () => {
     const firstBuyYM = firstEverBuy ? toYM(new Date(firstEverBuy.date)) : '';
 
     // Build events: purchases increase cost+shares, dividends reduce effective cost
-    type OpenCostEvent = { date: string; ym: string; type: 'buy' | 'div'; shares: number; amount: number };
+    // A fee paid in units removes shares but no cost, so the average per share rises.
+    type OpenCostEvent = { date: string; ym: string; type: 'buy' | 'div' | 'fee'; shares: number; amount: number };
     const costEvents: OpenCostEvent[] = [
       ...purchases.map(t => ({ date: t.date, ym: toYM(new Date(t.date)), type: 'buy' as const, shares: t.qty, amount: t.amount })),
       ...dividends.map(t => ({ date: t.date, ym: toYM(new Date(t.date)), type: 'div' as const, shares: 0, amount: t.amount })),
+      ...mergeUnitFees(purchases.map(t => t.unitFees)).map(f => ({ date: f.date, ym: toYM(new Date(f.date)), type: 'fee' as const, shares: f.qty, amount: 0 })),
     ].sort((a, b) => a.date.localeCompare(b.date));
 
     // Track cumulative cost, dividends, and shares to compute dividend-adjusted avg buy
@@ -4004,6 +4098,8 @@ const PortfolioBacktester = () => {
       if (evt.type === 'buy') {
         cumCost += evt.amount;
         cumShares += evt.shares;
+      } else if (evt.type === 'fee') {
+        cumShares -= evt.shares;   // units gone, cost unchanged
       } else {
         // Dividends reduce the effective cost basis
         cumDividends += evt.amount;
@@ -4107,12 +4203,19 @@ const PortfolioBacktester = () => {
     const dividends = getOpenDividends(ticker);
 
     // Build buy events sorted by date
-    const buyEvents = purchases.map(t => ({
-      date: t.date,
-      ym: toYM(new Date(t.date)),
-      shares: t.qty,
-      cost: t.amount,
-    })).sort((a, b) => a.date.localeCompare(b.date));
+    // Fees paid in units ride along as negative shares with no cost: from their month on,
+    // the holding is worth less while the money put in stays the same.
+    const buyEvents = [
+      ...purchases.map(t => ({
+        date: t.date,
+        ym: toYM(new Date(t.date)),
+        shares: t.qty,
+        cost: t.amount,
+      })),
+      ...mergeUnitFees(purchases.map(t => t.unitFees)).map(f => ({
+        date: f.date, ym: toYM(new Date(f.date)), shares: -f.qty, cost: 0,
+      })),
+    ].sort((a, b) => a.date.localeCompare(b.date));
 
     // Build dividend events by month (cumulative)
     const divEvents = dividends.map(t => ({
@@ -7456,6 +7559,13 @@ const PortfolioBacktester = () => {
       const C = { sh: 0, costN: 0, costC: 0 };                      // bought in year, still held
       const D = { sh: 0, costN: 0, costC: 0, procN: 0, procC: 0 };  // bought & sold in year
       let incN = 0, incC = 0;                                       // income (dividends/interest)
+      // Units that shares held from the start of the year gave up to fees paid in units
+      // during it (Endowus). They were worth pPrev each on 1 Jan and are gone by 31 Dec,
+      // so they cost the year exactly that. Shares BOUGHT this year need no such line:
+      // their cost is already counted in full and only the survivors are valued at the end.
+      const F = { sh: 0 };
+      // Fee cut-offs: a fee taken by 31 Dec has happened in this year's picture
+      const yStartIso = `${year - 1}-12-31`, yEndIso = `${year}-12-31`;
 
       // --- Open lots (still held, buy-only) ---
       for (const lot of openLots) {
@@ -7465,10 +7575,13 @@ const PortfolioBacktester = () => {
         if (buyYear > year) continue; // not bought yet
         const perShare = lot.qty > 0 ? lot.amount / lot.qty : 0;
         if (!consistent(perShare, toYM(buyD))) continue; // guarded → Other
+        // Shares count as held on 31 Dec of this year: what was bought, less any units given
+        // up to fees by then (equal to lot.qty for almost every lot)
         if (buyYear < year) {
-          A.sh += lot.qty;
+          A.sh += heldQty(lot, yEndIso);
+          F.sh += unitFeeQty(lot.unitFees, yEndIso) - unitFeeQty(lot.unitFees, yStartIso);
         } else {
-          C.sh += lot.qty;
+          C.sh += heldQty(lot, yEndIso);
           C.costN += lot.amount;
           C.costC += lot.amount * getConversionRate(rowForYM(toYM(buyD)) || thisYearEndRow!, native, currency);
         }
@@ -7486,14 +7599,19 @@ const PortfolioBacktester = () => {
 
         // Capital contribution to year Y (only if the lot was alive in Y and passes the guard).
         if (ok && !(sellYear < year || buyYear > year)) {
+          // Units this lot still gave up to fees paid in units AFTER 31 Dec of this year: it
+          // held them on that date, on top of what it finally sold (0 for almost every lot)
+          const feeUnitsAfterYear = unitFeeQty(c.unitFees) - unitFeeQty(c.unitFees, yEndIso);
+          // ...and the ones it gave up during this year, if it was held from the start
+          if (buyYear < year) F.sh += unitFeeQty(c.unitFees, yEndIso) - unitFeeQty(c.unitFees, yStartIso);
           if (buyYear < year && sellYear > year) {
-            A.sh += c.sharesSold;                                     // held all year
+            A.sh += c.sharesSold + feeUnitsAfterYear;                 // held all year
           } else if (buyYear < year && sellYear === year) {
             B.sh += c.sharesSold;                                     // opening, sold this year
             B.procN += c.valueAfterFee;
             B.procC += c.valueAfterFee * getConversionRate(rowForYM(toYM(sellD)) || thisYearEndRow!, native, currency);
           } else if (buyYear === year && sellYear > year) {
-            C.sh += c.sharesSold;                                     // bought this year, still held
+            C.sh += c.sharesSold + feeUnitsAfterYear;                 // bought this year, still held
             C.costN += c.initialCost;
             C.costC += c.initialCost * getConversionRate(rowForYM(toYM(buyD)) || thisYearEndRow!, native, currency);
           } else if (buyYear === year && sellYear === year) {
@@ -7591,6 +7709,15 @@ const PortfolioBacktester = () => {
         segments.push(mkSeg(`Bought & sold ${year}`, D.sh, D.costN / D.sh, 'buy', D.procN / D.sh, 'sold',
           D.costN, D.procN,
           D.procN - D.costN, D.procC - D.costC, bN, bC, D.costN > 0 ? D.costC / D.costN : fxEnd));
+      }
+      if (F.sh > 1e-9) {
+        // Fees paid in units by shares held since 1 Jan: worth pPrev each then, gone now.
+        // Their start value counts in the capital base, like any other share held on 1 Jan.
+        const bN = F.sh * pPrev, bC = F.sh * pPrev * fxPrev;
+        baseNativeTot += bN; baseConvTot += bC;
+        segments.push(mkSeg('Fees paid in units', F.sh, pPrev, `Dec ${year - 1}`, null, 'fee',
+          F.sh * pPrev, 0,
+          -bN, -bC, bN, bC, fxPrev));
       }
       if (Math.abs(incN) > 0.005 || Math.abs(incC) > 0.005) {
         // Income has no capital base of its own (it's a yield on the holding), so
@@ -19253,7 +19380,8 @@ const PortfolioBacktester = () => {
                   const dividends = getOpenDividends(ticker);
                   const assetInfo = assetLookup.find(a => a.ticker === ticker);
                   const nativeCurrency = assetInfo?.currency || 'PLN';
-                  const totalShares = purchases.reduce((sum, t) => sum + t.qty, 0);
+                  // Units still held (purchases less any units given up to fees)
+                  const totalShares = purchases.reduce((sum, t) => sum + heldQty(t), 0);
                   const totalInvested = purchases.reduce((sum, t) => sum + t.amount, 0);
                   const totalDividends = dividends.reduce((sum, t) => sum + t.amount, 0);
                   const currentPrice = getCurrentPrice(ticker);
@@ -20832,12 +20960,16 @@ const PortfolioBacktester = () => {
                 const todayStr = new Date().toISOString().split('T')[0];
 
                 // Build merged chronological list of purchases and dividends for the table
+                // Fees paid in units (Endowus) get their own row, so the Shares column still adds
+                // up: units bought, less units given up, equals the Summary's units held.
                 type DisplayRow =
                   | { type: 'purchase'; index: number; data: TransactionRow }
-                  | { type: 'dividend'; data: TransactionRow };
+                  | { type: 'dividend'; data: TransactionRow }
+                  | { type: 'fee'; data: UnitFee };
                 const displayRows: DisplayRow[] = [
                   ...allPurchases.map((t, i) => ({ type: 'purchase' as const, index: i, data: t })),
                   ...allDividends.map(t => ({ type: 'dividend' as const, data: t })),
+                  ...mergeUnitFees(allPurchases.map(t => t.unitFees)).map(f => ({ type: 'fee' as const, data: f })),
                 ].sort((a, b) => a.data.date.localeCompare(b.data.date));
 
                 // Buy dates for the "Invested From" dropdown
@@ -21007,6 +21139,31 @@ const PortfolioBacktester = () => {
                                   </tr>
                                 );
                               }
+                              if (row.type === 'fee') {
+                                // Fee paid in units — the units that left and what they were worth.
+                                // Not a purchase, so no checkbox and no return figures of its own:
+                                // its cost already shows as the smaller Current Value of the purchase.
+                                const f = row.data;
+                                return (
+                                  <tr key={`fee-${rowIdx}`} className="border-b border-gray-50 bg-gray-50">
+                                    <td className="py-1.5 px-2"></td>
+                                    <td
+                                      className="py-1.5 px-2 text-gray-500 font-medium whitespace-nowrap"
+                                      title="A fee paid by giving up units instead of cash. Units leave, the cost stays, so the holding is worth a little less."
+                                    >
+                                      Fee (units)
+                                    </td>
+                                    <td className="py-1.5 px-2 font-mono whitespace-nowrap">{f.date}</td>
+                                    <td className="py-1.5 px-2"></td>
+                                    <td className="text-right py-1.5 px-2 text-gray-500">−{f.qty.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                                    {/* The price the units went at, in the Buy Price column */}
+                                    <td className="text-right py-1.5 px-2 font-mono text-gray-500">{formatPrice(f.qty > 0 ? f.amount / f.qty : 0)}</td>
+                                    <td colSpan={7} className="py-1.5 px-2 text-gray-500 whitespace-nowrap">
+                                      fee of {f.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}, paid by selling units
+                                    </td>
+                                  </tr>
+                                );
+                              }
                               // Purchase row — compute valuation stats
                               const t = row.data;
                               const purchaseIdx = row.index;
@@ -21014,7 +21171,9 @@ const PortfolioBacktester = () => {
                               const holdDays = Math.round((Date.now() - new Date(t.date).getTime()) / 86400000);
                               const holdYears = holdDays / 365.25;
                               const buyPrice = t.qty > 0 ? (t.amount - t.commAbs) / t.qty : 0;
-                              const currentVal = t.qty * currentPrice;
+                              // Valued on the units still held: Shares shows what was bought, and
+                              // any units since given up to fees are the Fee rows below it
+                              const currentVal = heldQty(t) * currentPrice;
                               const totalReturn = currentVal - t.amount;
                               const returnPct = t.amount > 0 ? (totalReturn / t.amount) * 100 : 0;
                               // Held less than a year: the plain Return % instead of annualising it
