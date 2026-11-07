@@ -1540,6 +1540,8 @@ const LINE_MID = 'var(--c-line-mid)';     // axis lines, and the faint "other se
 const WEIGHT_BAR = 'var(--c-weight-bar)'; // the grey Weight bars behind the % figures on Positions
 const HALO = 'var(--c-halo)';             // the outline that lifts a dot off the line under it
 const CARD = 'var(--c-card)';             // a custom tooltip's background
+const CARD_GLASS = 'var(--c-card-glass)'; // a see-through box over a chart
+const CELL_TEXT = 'var(--c-cell-text)';   // dark figures on a heat cell, light in dark mode
 
 // The one heat scale: 7 colours from deep red (worst) through neutral grey (about zero) to deep
 // green (best). `t` runs from -1 to +1. Tables whose numbers are written in the page's normal
@@ -1604,9 +1606,10 @@ const ASSET_CLASS_COLORS: Record<string, string> = {
 
 // One colour per currency, on EVERY page (theme rule 3): Positions' by-currency chart, the
 // Portfolio tab's yearly bars and drawdowns, the currency toggles. PLN, the home currency, takes
-// the app's main dark slate. None of them is red or green, so a currency never reads as a loss.
+// the app's main dark slate. USD is the green-teal and SGD the blue (the user's choice, 2026-11-07).
+// None of them is the gain green or the loss red, so a currency never reads as a gain or a loss.
 const CURRENCY_COLORS: Record<string, string> = {
-  PLN: SLATE, USD: CHART_PALETTE.blue, SGD: CHART_PALETTE.teal,
+  PLN: SLATE, USD: CHART_PALETTE.teal, SGD: CHART_PALETTE.blue,
   EUR: CHART_PALETTE.violet, CHF: CHART_PALETTE.rose,
   'M&C': CHART_PALETTE.gold, // matches the Metals & Crypto asset class color
 };
@@ -11289,7 +11292,7 @@ const PortfolioBacktester = () => {
                                 <tr key={asset.ticker} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
                                   {/* Bar Chart Column */}
                                   <td className="py-1 px-1">
-                                    <div className="relative h-4 w-full bg-gray-100 rounded overflow-hidden">
+                                    <div className="relative h-4 w-full rounded overflow-hidden">
                                       {/* Center line */}
                                       <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-300"></div>
                                       {/* Bar - positioned from center */}
@@ -17119,7 +17122,7 @@ const PortfolioBacktester = () => {
                                   style={{
                                     backgroundColor: isValid ? getCorrelationColor(value) : themedCell('#f3f4f6'),
                                     // Make text darker for better readability on colored backgrounds
-                                    color: isValid ? '#1f2937' : '#9ca3af',
+                                    color: isValid ? CELL_TEXT : '#9ca3af',
                                   }}
                                   title={isValid ? `${rowTicker} vs ${colTicker}: ${value.toFixed(4)}` : `${rowTicker} vs ${colTicker}: insufficient data`}
                                 >
@@ -18600,7 +18603,7 @@ const PortfolioBacktester = () => {
                                 same figures go in a grid under it instead. */}
                             <div className="max-md:hidden" style={{
                               position: 'absolute', top: 24, left: 48, zIndex: 10,
-                              background: 'rgba(255,255,255,0.92)', border: `1px solid ${LINE}`,
+                              background: CARD_GLASS, border: `1px solid ${LINE}`,
                               borderRadius: 5, padding: '5px 10px', fontSize: 11, pointerEvents: 'none', lineHeight: 1.75,
                             }}>
                               <table style={{ borderCollapse: 'collapse' }}>
@@ -19146,15 +19149,17 @@ const PortfolioBacktester = () => {
                   Currency: buttons on desktop AND phones — only four choices, so they fit on a
                   phone's width and a slide-up panel would just be an extra tap. "Native" = no
                   conversion, each position in its own currency. */}
-              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mb-4">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mb-4 max-md:gap-x-2">
                 <div className="flex items-center gap-1">
-                  <span className="text-xs text-gray-500 mr-1" title="Convert all position values to this currency for comparison">Currency:</span>
+                  <span className="text-xs text-gray-500 mr-1 max-md:hidden" title="Convert all position values to this currency for comparison">Currency:</span>
                   <span className={SEG}>
                     {CURRENCY_OPTIONS.map(opt => (
                       <button
                         key={opt.value}
                         onClick={() => setPositionsCurrency(opt.value)}
-                        className={segBtn(positionsCurrency === opt.value)}
+                        // Phones: a little less padding, so this row and Group M&C fit on one line
+                        // even on a 360px-wide phone
+                        className={`${segBtn(positionsCurrency === opt.value)} max-md:!px-2.5`}
                         title={opt.value === '' ? 'No conversion: each position in its own currency' : `Convert invested / value / PnL to ${opt.label}`}
                       >{opt.value === '' ? 'Native' : opt.label}</button>
                     ))}
@@ -19173,7 +19178,7 @@ const PortfolioBacktester = () => {
                     setOpenAssetClassFilter(null);
                     setOpenCurrencyFilter(null);
                   }}
-                  className={segBtn(groupMetalsCrypto)}
+                  className={`${segBtn(groupMetalsCrypto)} max-md:!px-2`}
                   title={groupMetalsCrypto
                     ? 'Showing the Lookup tab\'s PortfolioClass (blank = Asset Class); Metals & Crypto also get their own currency bar — click for the standard Asset Class'
                     : 'Showing the standard Asset Class from the Lookup tab — click to use PortfolioClass (e.g. Metals & Crypto)'}

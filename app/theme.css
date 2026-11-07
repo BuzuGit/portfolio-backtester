@@ -63,6 +63,8 @@
   --c-weight-bar: #d1d5db;       /* the grey Weight bars behind the % figures on Positions */
   --c-halo: #ffffff;             /* the outline that lifts a dot off the line under it */
   --c-card: #ffffff;             /* a custom tooltip's background */
+  --c-card-glass: rgb(255 255 255 / 0.92); /* a see-through box over a chart (Daily NAV figures) */
+  --c-cell-text: #1f2937;        /* dark figures written on a heat cell (Correlations) */
   --c-on-black: #ffffff;         /* text written on top of --c-black, --c-ink or --c-slate */
 }
 
@@ -84,10 +86,11 @@ html.dark {
   --c-wine-label: var(--d-text-500);   /* both hues are too dim to read as text on a dark card */
   --c-olive-label: var(--d-text-500);
 
-  /* Black and slate would vanish on a dark card, so the main colours become near-white... */
-  --c-slate: var(--d-text-800);
-  --c-black: var(--d-text-800);
-  --c-ink: var(--d-text-800);
+  /* Black and slate would vanish on a dark card, so the main colours become a soft light grey:
+     clear against the card, but not the near-white that glares at night... */
+  --c-slate: #a7aeb8;
+  --c-black: #a7aeb8;
+  --c-ink: #a7aeb8;
   --c-ink-soft: var(--d-text-700);
   --c-muted: var(--d-text-500);
   --c-muted-label: var(--d-text-500);
@@ -100,4 +103,6 @@ html.dark {
   --c-weight-bar: var(--d-300);
   --c-halo: var(--d-card);
   --c-card: var(--d-card);
+  --c-card-glass: rgb(23 26 31 / 0.92); /* the dark card colour, --d-card */
+  --c-cell-text: var(--d-text-800);     /* heat cells are dark in dark mode, so their figures go light */
 }
