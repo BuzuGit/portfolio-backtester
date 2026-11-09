@@ -21585,7 +21585,9 @@ const PortfolioBacktester = () => {
                       {tradeEvents.length > 0 && (
                         <>
                           <TradeHistoryTable events={tradeEvents} />
-                          {tradeEvents.some(e => !e.stillHeld) && (
+                          {/* Only real closed trades earn this caption. A fee row has no outline
+                              either, but it isn't a closed trade. */}
+                          {tradeEvents.some(e => e.type !== 'fee' && !e.stillHeld) && (
                             <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 px-2">
                               <span className="inline-block w-4 h-3 bg-green-50 border border-black"></span>
                               <span>Outlined rows are shares you still hold; the rest are closed trades in this asset.</span>
