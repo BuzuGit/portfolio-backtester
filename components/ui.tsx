@@ -8,6 +8,7 @@
 */
 import React, { useSyncExternalStore } from 'react';
 import { ResponsiveContainer as RechartsResponsiveContainer } from 'recharts';
+import { isPhoneScreen } from '@/lib/savedSheet';
 
 // ---------------------------------------------------------------------------
 // CHART PALETTE (Positions tab)
@@ -224,3 +225,146 @@ export function ResponsiveContainer({ keepHeightSideways, height, ...rest }:
 // dark sidebar, just under the grey strip that covers those 16px (.page-top-mask in
 // globals.css). Phones keep it at the very top.
 export const PINNED_FILTERS = 'sticky top-0 md:top-4 z-40 bg-white pt-2 pb-1';
+
+// Asset class colors for the breakdown chart and table color dots
+export const ASSET_CLASS_COLORS: Record<string, string> = {
+  'Fixed Income': CHART_PALETTE.olive, 'Equities': CHART_PALETTE.wine,
+  'Crypto': CHART_PALETTE.rose, 'Alternatives': CHART_PALETTE.violet,
+  'Metals & Crypto': CHART_PALETTE.gold, // gold-ish to represent the physical + crypto nature
+  // Cash is deliberately the one grey in the set. It is not an investment competing with the
+  // others for attention, and a muted slice reads as "not at work yet" at a glance.
+  'Cash': 'var(--c-cash)',
+};
+
+// One colour per currency, on EVERY page (theme rule 3): Positions' by-currency chart, the
+// Portfolio tab's yearly bars and drawdowns, the currency toggles. PLN, the home currency, takes
+// the app's main dark slate. USD is the green-teal and SGD the blue (the user's choice, 2026-11-07).
+// None of them is the gain green or the loss red, so a currency never reads as a gain or a loss.
+export const CURRENCY_COLORS: Record<string, string> = {
+  PLN: SLATE, USD: CHART_PALETTE.teal, SGD: CHART_PALETTE.blue,
+  EUR: CHART_PALETTE.violet, CHF: CHART_PALETTE.rose,
+  'M&C': CHART_PALETTE.gold, // matches the Metals & Crypto asset class color
+};
+
+// Return Map (Best To Worst tab): one fixed colour per asset, so the same asset is easy to spot
+// in every year column. The 8-colour CHART_PALETTE is too small for ~30 assets, so this is a
+// separate grid: 10 hues × 3 shades (medium, dark, light) + 2 greys = 32 colours. Checked with a
+// perceptual colour-difference test: the closest pair still differs by ΔE 14.9 (above ~10 reads as
+// clearly different). With more than 32 assets on the map, colours start repeating.
+export const RETURN_MAP_ASSET_COLORS = [
+  '#a02222', '#a06122', '#a08b22', '#61a022', '#22a061', '#22a0a0', '#226ba0', '#2237a0', '#6122a0', '#a02276',
+  '#631d1d', '#63401d', '#63571d', '#40631d', '#1d6340', '#1d6363', '#1d4663', '#1d2863', '#401d63', '#631d4b',
+  '#d45454', '#d49454', '#d4bf54', '#94d454', '#54d494', '#54d4d4', '#549fd4', '#5469d4', '#9454d4', '#d454a9',
+  '#5c6b73', '#9aa5ad',
+];
+
+/**
+ * Picks white or near-black text for a coloured cell — whichever has the higher contrast ratio
+ * on that background, using the WCAG accessibility formula (the eye sees green as much brighter
+ * than blue, so a plain RGB average would get this wrong).
+ */
+export const readableTextOn = (color: string): string => {
+  // The sums need real numbers, so a theme colour (var(--c-teal)) is first looked up in
+  // the page. Before the page exists (the server's first pass) there is nothing to look it up in,
+  // but this table only ever appears after the data has loaded in the browser.
+  const hex = color.startsWith('var(') && typeof document !== 'undefined'
+    ? getComputedStyle(document.documentElement).getPropertyValue(color.slice(4, -1)).trim()
+    : color;
+  const n = parseInt(hex.slice(1), 16);
+  const linear = (c: number) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  // Relative luminance: 0 = black, 1 = white
+  const lum = 0.2126 * linear((n >> 16) & 255) + 0.7152 * linear((n >> 8) & 255) + 0.0722 * linear(n & 255);
+  // Contrast vs white, and vs the #1f2937 text colour (luminance ≈ 0.02)
+  return 1.05 / (lum + 0.05) >= (lum + 0.05) / 0.07 ? '#ffffff' : '#1f2937';
+};
+
+/**
+ * Is dark mode on right now? The "dark" class on <html> is the one source of truth: app/layout.tsx
+ * sets it before the first paint, and the button at the top of the left panel flips it.
+ */
+export const isDarkTheme = (): boolean =>
+  typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+
+/**
+ * Phones only: colour the phone's own bars above and below the page (clock/battery strip, browser
+ * bar, Android's bottom bar) to match the mode, so dark mode isn't framed by white strips. Sets
+ * every copy of each tag, because React adds a second status-bar tag while the page starts up.
+ * The tags are first set by phoneBarColours in app/layout.tsx; desktop skips this entirely.
+ */
+export const setPhoneBarColours = (dark: boolean) => {
+  if (!isPhoneScreen()) return;
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', dark ? '#0e1014' : '#f1f2f4'));
+  document.querySelectorAll('meta[name="apple-mobile-web-app-status-bar-style"]').forEach(m => m.setAttribute('content', dark ? 'black' : 'default'));
+};
+
+/**
+ * Heatmap cell colour, adjusted for dark mode. The heatmaps run from white (nothing to see) to a
+ * strong colour (look here), and their colours are computed in code, so app/dark.css can't reach
+ * them. In dark mode this keeps the hue and turns the lightness upside down, like a photo negative
+ * that keeps its colours: the white end becomes near-black (blends into the dark card) and the
+ * strong end stays strong, so "brighter = bigger" still holds. In light mode the colour comes back
+ * untouched. Accepts "#rgb", "#rrggbb", "rgb(r, g, b)" or "hsl(h, s%, l%)"; returns "#rrggbb".
+ */
+export const themedCell = (color: string): string => {
+  if (!isDarkTheme()) return color;
+  const nums = (color.match(/-?[\d.]+/g) ?? []).map(Number);
+  // Work in hue / saturation / lightness (H in degrees, S and L from 0 to 1)
+  let H = 0, S = 0, L = 0;
+  if (color.startsWith('hsl')) {
+    // Already in that form: read it straight off
+    [H, S, L] = [nums[0], nums[1] / 100, nums[2] / 100];
+  } else {
+    let r: number, g: number, b: number;
+    if (color.startsWith('#')) {
+      // "#fff" is shorthand for "#ffffff": each digit doubled
+      const hex = color.length === 4 ? color.slice(1).split('').map(c => c + c).join('') : color.slice(1);
+      const n = parseInt(hex, 16);
+      [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    } else if (color.startsWith('rgb')) {
+      [r, g, b] = nums;
+    } else {
+      return color; // a colour format we don't know: leave it alone
+    }
+    // rgb → hsl (standard formula)
+    const [R, G, B] = [r / 255, g / 255, b / 255];
+    const max = Math.max(R, G, B), min = Math.min(R, G, B);
+    const d = max - min;
+    L = (max + min) / 2;
+    S = d === 0 ? 0 : d / (1 - Math.abs(2 * L - 1));
+    if (d !== 0) {
+      if (max === R) H = 60 * (((G - B) / d) % 6);
+      else if (max === G) H = 60 * ((B - R) / d + 2);
+      else H = 60 * ((R - G) / d + 4);
+    }
+  }
+  // Flip the lightness: white (1) → 0.11, about the dark card colour; mid tones stay mid.
+  // Slightly less saturated, because full-strength colour glares on a dark page.
+  const [r2, g2, b2] = hslToRgb((H + 360) % 360, S * 0.8, 0.11 + (1 - L) * 0.85);
+  return `#${[r2, g2, b2].map(c => Math.round(c).toString(16).padStart(2, '0')).join('')}`;
+};
+
+/** hsl → [r, g, b] (0–255), the standard formula. H in degrees, S and L from 0 to 1. */
+export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => 255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))));
+  return [f(0), f(8), f(4)];
+}
+
+
+/** The one heat scale (heatColorLight, with the theme at the top of the file), dark-mode aware. */
+export const heatColor = (t: number, maxStrength = 1): string => themedCell(heatColorLight(t, maxStrength));
+
+/**
+ * Return Map "Return" highlight and the Markets / Holdings heat cells: pale for returns near zero,
+ * deep green for big gains, deep red for big losses. Anything beyond ±40% gets the deepest shade so
+ * one outlier doesn't wash out the rest. (Their cells pick white or dark text per colour.)
+ */
+export const returnHeatColor = (ret: number): string => heatColor(ret / 40);
+
+/**
+ * Correlation (-1 to +1) on the one heat scale:
+ * +1 (move together, little diversification) → red; 0 (independent) → neutral grey;
+ * -1 (move opposite, great diversification) → green.
+ */
+export const getCorrelationColor = (value: number): string => heatColor(-value, 0.67);
