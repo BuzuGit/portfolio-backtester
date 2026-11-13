@@ -159,8 +159,9 @@ export default function AnnualReturnsTab({
           </>)}
 
         {/* Phones: the Years tick list as a slide-up panel (its drop-down list is hidden there).
-            Here rather than next to the Years button, which is inside AssetFilterControls:
-            that is rebuilt on every tick, which would replay the panel's slide-in each time. */}
+            Here rather than next to the Years button, which is inside AssetFilterControls: that
+            bar used to be rebuilt on every tick, which replayed the panel's slide-in each time.
+            It no longer is (it has its own file now), but this spot works just as well. */}
         {yearsDropdownOpen && isPhoneScreen() && (
           <PhoneCheckSheet
             title="Years"
