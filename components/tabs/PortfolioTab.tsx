@@ -35,28 +35,7 @@ import {
   type BubbleDef, type RechartsCustomizedProps,
 } from '@/components/charts';
 
-/** One year's profit split by asset (the main screen's getYearlyProfitBreakdown). */
-export type YearlyProfitBreakdown = {
-  assets: {
-    ticker: string; name: string; nativeCurrency: string;
-    totalNative: number; totalConverted: number; totalFx: number;
-    retNative: number | null; retConverted: number | null;   // whole-asset % return (this year)
-    startValue: number; endValue: number;                    // native position value at each boundary
-    segments: {
-      label: string;
-      shares: number | null;      // null for the income line
-      startPrice: number | null; startTag: string;
-      endPrice: number | null;   endTag: string;
-      startValue: number | null; endValue: number | null;    // native position value (endValue − startValue = profitNative)
-      profitNative: number; profitConverted: number;
-      fxEffect: number;                         // FX slice of the converted profit
-      retNative: number | null;                 // % return in native currency
-      retConverted: number | null;              // % return in selected currency
-    }[];
-  }[];
-  other: number;
-  total: number;
-};
+import type { YearlyProfitBreakdown } from '@/lib/profitBreakdown';   // one year's profit split by asset
 
 type NavCurrency = 'PLN' | 'USD' | 'SGD' | 'CHF';
 type NavPeriod = '1Y' | '3Y' | '5Y' | 'Max';
