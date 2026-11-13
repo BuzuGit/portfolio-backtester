@@ -33,42 +33,45 @@ left-hand menu, all fed by one Google Sheet:
 Think of this app like a restaurant:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    YOUR BROWSER                          │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │              Next.js App                          │    │
-│  │  ┌─────────┐    ┌─────────────────────────────┐  │    │
-│  │  │  page   │───▶│   PortfolioBacktester       │  │    │
-│  │  │  .tsx   │    │   Component                 │  │    │
-│  │  └─────────┘    │                             │  │    │
-│  │                 │  ┌─────────┐  ┌──────────┐  │  │    │
-│  │                 │  │ Charts  │  │ Tables   │  │  │    │
-│  │                 │  │(Recharts)│  │          │  │  │    │
-│  │                 │  └─────────┘  └──────────┘  │  │    │
-│  │                 └─────────────────────────────┘  │    │
-│  │                           │                       │    │
-│  │                           ▼                       │    │
-│  │        ┌─────────────────────┐  ┌─────────────┐  │    │
-│  │        │   fetchData.ts      │─▶│positions.ts │  │    │
-│  │        │   (Data Fetching)   │  │(FIFO replay)│  │    │
-│  │        └─────────────────────┘  └─────────────┘  │    │
-│  └─────────────────────────────────────────────────┘    │
-│                           │                              │
-└───────────────────────────│──────────────────────────────┘
-                            │
-                            ▼
-              ┌─────────────────────────────┐
-              │      Google Sheets          │
-              │   (Your Published CSV)      │
-              └─────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                          YOUR BROWSER                             │
+│                                                                   │
+│   PortfolioBacktester.tsx  ── the "front of house" ─────────────┐ │
+│   remembers every choice you make, loads the data, runs the     │ │
+│   menu, and hands each page what it needs                       │ │
+│        │                                                        │ │
+│        ▼                                                        │ │
+│   components/tabs/  ── one file per page (the "dining rooms") ──┤ │
+│   BacktestSetup · BacktestResults · MarketsTab · HoldingsTab    │ │
+│   EdoTab · PortfolioTab · PositionsTab · MonthlyTab · Annual…   │ │
+│        │ draw with                         │ calculate with     │ │
+│        ▼                                   ▼                    │ │
+│   components/ui.tsx, charts.tsx,       lib/  ── the "kitchen" ──┘ │
+│   options.ts, AssetFilterControls      backtest · stats · trend   │
+│   (colours, buttons, chart helpers)    correlation · xirr ·       │
+│                                        positions · cash · edo … │
+│                                        (pure maths, with tests)   │
+│                                              │                    │
+│                                        fetchData.ts               │
+└──────────────────────────────────────────────│────────────────────┘
+                                               ▼
+                                 ┌─────────────────────────────┐
+                                 │      Google Sheets          │
+                                 │   (Your Published CSV)      │
+                                 └─────────────────────────────┘
 ```
 
 **The Flow:**
 1. User opens the app
 2. App automatically fetches data from Google Sheets (7 tabs, in parallel)
 3. `positions.ts` replays the transaction ledger to work out what is held and what was sold
-4. User configures portfolios and runs backtest
-5. App calculates returns and displays results
+4. The main screen keeps every choice you make (currency, period, selected asset…) and passes the
+   data and those choices to whichever page is open
+5. The page asks the `lib/` files to do the arithmetic, and draws the answer
+
+**The restaurant, in one sentence:** the kitchen (`lib/`) cooks and never sees a customer; the
+dining rooms (`components/tabs/`) serve and never cook; the front of house (the main screen)
+remembers who ordered what, so walking from one room to another doesn't lose your order.
 
 **A note on where the numbers come from.** There are two very different kinds of data here, and
 mixing them up is the source of most confusion:
@@ -94,16 +97,43 @@ portfolio-backtester/
 │   └── globals.css              # Global styles (Tailwind imports)
 │
 ├── components/
-│   └── PortfolioBacktester.tsx  # THE MAIN EVENT - all the backtest logic
+│   ├── PortfolioBacktester.tsx  # The main screen: every setting, data loading, the menu (~3,200 lines)
+│   ├── tabs/                    # ONE FILE PER PAGE
+│   │   ├── BacktestSetup.tsx    #   the portfolio cards and Run button
+│   │   ├── BacktestResults.tsx  #   everything under the Run button
+│   │   ├── MarketsTab.tsx       #   Markets: Returns / Stats / Country
+│   │   ├── HoldingsTab.tsx      #   Markets: Holdings
+│   │   ├── EdoTab.tsx           #   Markets: EDO bonds
+│   │   ├── PortfolioTab.tsx     #   your real portfolio
+│   │   ├── PositionsTab.tsx     #   open and closed positions, cash
+│   │   ├── MonthlyTab.tsx       #   the monthly grid and asset detail
+│   │   ├── AnnualReturnsTab.tsx, BestToWorstTab.tsx, GraphsTab.tsx,
+│   │   └── TrendFollowingTab.tsx, CorrelationsTab.tsx
+│   ├── ui.tsx                   # The design system: colours, buttons, heat scale, formatPrice, hints
+│   ├── charts.tsx               # Chart helpers shared by the pages (ticks, bubbles, axis scales…)
+│   ├── options.ts               # Fixed choices: date presets, currencies, CPI series
+│   ├── positionsParts.tsx       # Positions' building blocks: trade table, FIFO totals, sorting
+│   ├── AssetFilterControls.tsx  # The shared Assets / Class / Currency / Subcategory bar
+│   └── PhoneSheet.tsx           # The slide-up panels phones use for every choice
 │
-├── lib/
+├── lib/                         # THE KITCHEN: pure calculations, most with a .test.mjs beside them
 │   ├── fetchData.ts             # Handles fetching & parsing CSV from Google
+│   ├── stats.ts                 # THE definition of CAGR, volatility, Sharpe and drawdown
+│   ├── backtest.ts              # The backtest engine, statistics, withdrawals, FX conversion
+│   ├── trend.ts                 # Trend Following vs Buy & Hold
+│   ├── correlation.ts           # Pearson correlation, rolling windows, the matrix
+│   ├── assetStats.ts            # Per-asset figures for the Annual / Ranking pages
+│   ├── xirr.ts                  # Money-weighted annual return
+│   ├── portfolioYears.ts        # Your portfolio's yearly figures, in any currency
+│   ├── profitBreakdown.ts       # One year's profit split by asset
+│   ├── yearsRates.ts            # FX rates stored on the Years sheet
 │   ├── positions.ts             # Replays the transaction ledger into positions
 │   ├── cash.ts                  # Reads the same ledger as double-entry: cash balances
 │   ├── markets.ts               # The Markets tab's return matrix, stats and Country page
 │   ├── holdings.ts              # The Markets tab's Holdings page: what you own, in one currency
 │   └── edo.ts                   # Polish EDO savings bonds: turns the EDO tab into an asset
 │
+├── .eslintrc.json               # The code checker's rules (see "Running the App Locally")
 ├── package.json                 # Project dependencies (like a shopping list)
 ├── next.config.js               # Next.js settings
 ├── tailwind.config.js           # Tailwind CSS settings
@@ -113,13 +143,23 @@ portfolio-backtester/
 
 ### Key Files Explained
 
-**`components/PortfolioBacktester.tsx`** - This is the heart of the app. It's a large component (~21,500 lines) that breaks down into clear sections:
-- State management (tracking what data we have, user selections)
-- Data loading (fetching from Google Sheets)
-- Portfolio management (adding/removing assets)
-- Backtest calculations (the math that simulates investing)
-- Closed positions analysis (XIRR, comparison charts, dashboard stats)
-- UI rendering (displaying forms, charts, tables across the 10 pages listed at the top of this guide)
+**`components/PortfolioBacktester.tsx`** - The main screen (~3,200 lines; it was ~23,000 until
+November 2026, see Lesson 34). What it still does:
+- Remembers every choice you make (state), so a choice survives switching pages
+- Loads the data from Google Sheets and rebuilds positions and cash from the ledger
+- Runs the menu, the phone memory and the effects that tie pages together
+- Hands each page in `components/tabs/` the data and choices it needs
+
+**`components/tabs/*.tsx`** - One file per page. A page draws; it doesn't own your choices (the
+main screen passes them in) and it doesn't do heavy maths (it asks `lib/`). So when you want to
+change the Monthly page, you open `MonthlyTab.tsx` and nothing else.
+
+**`lib/stats.ts`** - The one place CAGR, volatility, Sharpe and drawdown are defined. Every page
+uses it, which is why the same word means the same number everywhere (see the Decision Log).
+
+**`lib/backtest.ts`** - The backtest engine: shares, rebalancing, currency conversion, financing
+costs on leveraged legs, the wipe-out guard; plus the statistics row, monthly table and withdrawals.
+The chart line and the Rebalancing table both come from its one `simulatePortfolio`.
 
 **`lib/positions.ts`** - Replays the Transactions ledger to work out what you still hold, what you
 sold, and which dividend belongs to which shares (FIFO lot matching). Both the Positions tab and the
@@ -466,8 +506,52 @@ Annualising asks "if this carried on for a full year, what would it be?" For a h
 that question blows small moves up into silly numbers: DFA Global SCV was down 5.8% after ten
 weeks, which annualises to **−32% a year**. Nobody should make a decision on that number. Below a
 year the honest figure is simply what happened. The rule lives in one place for XIRR
-(`calculateXIRR`), so every table and tile that shows XIRR follows it automatically; hovering any
+(`lib/xirr.ts`), so every table and tile that shows XIRR follows it automatically; hovering any
 XIRR or CAGR heading explains it.
+
+**Extended (Nov 2026) to every statistics table.** An audit found the Backtest, Trend Following,
+Portfolio and Daily NAV statistics still annualised short periods: a YTD backtest showed "CAGR
+6.25%" for a 5.70% gain. Now all of them get CAGR from `lib/stats.ts`, which applies the rule, and:
+
+- **"Under a year" means under 360 days**, not 365.25. A "1Y" window is usually 365 days, and month-end
+  prices can land on the last trading day a few days early; a strict cut-off would have treated real
+  one-year periods as short ones.
+- **Sharpe shows a dash under a year.** Sharpe divides an annual return by annual volatility; with a
+  plain return on top it would be mixing two time scales.
+- **Sharpe assumes a 0% risk-free rate**, except on Trend Following, where it subtracts the cash rate
+  you set on that tab (because that tab's strategy actually earns it). Every Sharpe heading says which.
+
+### Why one file per page, but your choices stay in the main screen
+
+**Decision (Nov 2026):** split the 23,000-line component into a file per page, but keep every
+setting (currency, period, selected asset…) in the main screen and pass it down.
+
+A page file disappears when you leave the page (React "unmounts" it) and is rebuilt when you come
+back. If a page kept its own choices, leaving the Monthly tab would forget which asset you were
+looking at. So pages *receive* their choices instead of *owning* them. The cost is wordiness: the
+Positions page takes about 70 inputs. The type checker verifies every one, so a missing or
+misspelled input fails before anything ships.
+
+### Why the calculations live in `lib/`, with tests
+
+**Decision (Nov 2026):** every calculation that doesn't need the screen (backtest, statistics,
+trend following, correlations, XIRR, the yearly breakdown) lives in `lib/`, takes its inputs
+explicitly, and has a test file beside it.
+
+A calculation buried inside a screen can only be checked by clicking around. Out on its own it can
+be run against hand-worked examples in a fraction of a second, every time anything is published.
+Example tests read like a finance textbook: "1,000 growing to 1,210 over two years is 10% a year",
+"a 300%/−200% portfolio whose long leg falls 40% is wiped out and stays at zero".
+
+### Why the code checker can block a publish
+
+**Decision (Nov 2026):** `npm test` runs ESLint with **zero warnings allowed**, then the tests; the
+publish script runs `npm test` first, and Vercel runs the checker on every build.
+
+The checker's most valuable rule is about "remembered" calculations (`useMemo`): it lists every
+input a remembered result depends on. On its very first run it found the Profit Breakdown missing
+one input. It only worked because that input happened to change at the same moment as another one.
+Warnings that are allowed to pile up stop being read, so the bar is zero.
 
 ### Why use 'use client' for the main component?
 
@@ -1156,6 +1240,94 @@ The habit worth keeping is the method, not the speed-up: when you can't see a pe
 **build a test big enough to see it**, measure, change one thing, and measure again — and check the
 answers didn't change while you were at it.
 
+### 34. The 23,000-Line File
+
+By November 2026 the whole app lived in one file of 22,971 lines: the calculations, the charts,
+127 separate pieces of remembered state and every page. It worked, but it was like running a
+company out of one spreadsheet tab. Any edit risked something unrelated, every click redrew all
+23,000 lines, and the same CAGR formula had been typed by hand into eight places, which had
+quietly drifted apart (that's how short periods came to be annualised on some pages and not
+others).
+
+It was split in fifteen small steps over one day, one page or one group of calculations per step,
+each published on its own. The order mattered: **calculations first** (so they could be tested
+before anything moved around them), **shared pieces second** (colours, buttons, chart helpers, so
+every page file could use them), **pages last**. The file is now ~3,200 lines. Nothing on screen
+changed, and the next lesson is how that was proven rather than hoped.
+
+### 35. Proving a Move Changed Nothing
+
+"I only moved code" is a promise, not a proof. Two techniques turned it into proof:
+
+1. **Old code against new code, on thousands of random inputs.** For each calculation, the old
+   version was pulled straight out of git history, wrapped up so it could run on its own, and fed
+   the same random portfolios as the new version: mixed currencies, leverage, financing costs,
+   missing prices, every rebalance setting. Then every number was compared **bit for bit**. The
+   comparison itself was tested too: nudge one input by one part in a trillion and it must
+   complain (it reported 456,849 differences). A check that can't fail proves nothing.
+
+2. **The whole screen, before and after.** For each page: record its text, the exact shape of every
+   chart line, every colour, style, CSS class and hover text, in several states (different
+   periods, currencies, an opened detail page); switch the code back to the old version; record
+   again; compare. Then confirm the "old" recording really ran old code, by looking inside what the
+   browser loaded. It's easy to compare the new version with itself by accident.
+
+Across the whole split: hundreds of comparisons, all identical, at desktop and at phone width. The
+only differences ever found were a 0.005-pixel wobble in one chart label's position (the browser
+measuring text width) and one figure that depends on the time of day (next lesson).
+
+### 36. The Data Moved While I Was Measuring
+
+The first before/after comparison of a page failed: MSCI EM read 50.13 in one recording and 50.08
+in the other. The code was innocent. The Google Sheet pulls live prices, and they moved in the
+minutes between the two recordings.
+
+The fix was to **freeze the data**: capture one copy of all seven sheets, then feed that same copy
+to both versions through the app's own Refresh Data button. A comparison is only fair when
+everything except the thing you're testing is held still.
+
+There's a subtler version of the same trap: the Holdings page measures XIRR up to *this minute*.
+A Bitcoin ETF sitting right on a rounding boundary showed +1.7% in one recording and +1.6% ten
+minutes later. The direction was even right: the same gain spread over slightly more time is a
+slightly lower annual rate. When a number legitimately depends on the clock, expect it to wobble
+and check that the wobble makes sense, instead of chasing it.
+
+### 37. The Component That Was Born Again on Every Click
+
+The shared filter bar (Assets / Class / Currency / Subcategory) was written *inside* the main
+component. In React that has a nasty consequence: each time the main screen redraws, the filter bar
+is technically a brand-new kind of thing, so React throws the old one away and builds it from
+scratch. Open lists could reset, and a phone's slide-up panel replayed its entrance animation on
+every tap. One page even had a comment working around it.
+
+Moving it to its own file fixed it. The proof was a small trick: tag the bar on the page, click
+something unrelated, and see whether the tagged bar is still there. In the old version it was
+gone (replaced by a twin); in the new one it survived. **Rule: never define a component inside
+another component.**
+
+### 38. When the Test Fails, Check the Test
+
+Two of the new tests failed on their first run, and both times the code was right and the test
+was wrong. Investing 1,000, then another 1,000 a year later, and ending with 2,300 after two years
+isn't "around 5% a year"; it's about 9.7%, because the second 1,000 was only invested for one year.
+And a straight-line price rise (100, 101, 102…) isn't the mirror image of a straight-line fall: its
+*percentage* returns shrink as the price grows.
+
+A failing test is a disagreement between two pieces of thinking. Work out by hand which one is
+right before touching either.
+
+### 39. When a Tool's Output Looks Wrong, Start Again
+
+Moving thousands of lines by hand invites typos, so the moves were done by small scripts that
+check each block's first and last line before cutting. Even so, one script misjudged where two
+short functions ended (they were written in a compact style it didn't expect) and swallowed the
+function after them, which had to stay. The overlap was spotted in the script's own report before
+anything was published.
+
+The tempting fix was to patch the damage. The right one was to **restore the file from git, fix
+the script, and redo the step**, and to make the script refuse to run if any two pieces overlap.
+Patching a broken result leaves you unsure what else broke; redoing from a clean start doesn't.
+
 ## How Good Engineers Think
 
 ### 1. Separation of Concerns
@@ -1167,7 +1339,7 @@ Notice how `fetchData.ts` ONLY handles fetching data. It doesn't know about port
 
 ### 2. Types as Documentation
 
-The TypeScript interfaces at the top of the component (`Portfolio`, `BacktestResult`, etc.) serve as living documentation. Anyone can look at them to understand the data shapes.
+The TypeScript interfaces (`Portfolio`, `BacktestResult` in `lib/backtest.ts`; each page's `…Props` listing exactly what it receives) serve as living documentation. Anyone can look at them to understand the data shapes.
 
 ### 3. Comments Explain "Why", Not "What"
 
@@ -1215,9 +1387,28 @@ npx tsc --noEmit
 It reads every file and reports anything that doesn't add up — a misspelled property, a number
 used where text was expected — without producing any output files. Silence means it passed.
 
-Note there is **no linter configured** in this project. `npm run lint` exists but ESLint has
-never been set up, so running it just offers to configure it from scratch. Until someone does,
-`tsc` is the only automatic check, and everything else is verified by driving the running app.
+Then the full safety net (Nov 2026):
+
+```bash
+npm test
+```
+
+It runs the code checker (ESLint, with zero warnings allowed) and then every test in `lib/`. The
+publish script runs it before anything is committed, so a failing test or a new warning stops a
+publish. Two more checks are worth knowing:
+
+```bash
+npm run check:prices
+```
+
+confirms every share price on screen goes through the one `formatPrice` rule, and
+
+```bash
+npm run build
+```
+
+builds the site exactly as Vercel will (don't run it while `npm run dev` is running: both write to
+the same `.next` folder).
 
 ---
 
@@ -1256,7 +1447,11 @@ That's it! Vercel automatically:
 
 **Native (currency view):** each holding shown in the currency it is priced in, with no conversion. Anything that adds holdings together is still in one currency (USD on Holdings), because you can't add dollars to Singapore dollars.
 
-**Sharpe Ratio:** Return divided by volatility. Higher is better - means more return per unit of risk.
+**Sharpe Ratio:** Return (CAGR) divided by volatility. Higher is better - means more return per unit of risk. In this app it assumes a 0% risk-free rate, except on Trend Following (which subtracts the cash rate you set there), and shows "—" for periods under a year.
+
+**Unit test:** a small program that runs one piece of the app with known inputs and checks the answer, e.g. "1,000 growing to 1,210 over two years is 10% a year". The ones here live beside the code they check (`lib/*.test.mjs`) and run on every publish.
+
+**Linter (ESLint):** a tool that reads code looking for patterns that are usually mistakes, the way a spell-checker flags "teh". This project's is set so that any warning stops a publish.
 
 **Volatility:** How much returns bounce around. High volatility = wild swings. Low volatility = steady growth.
 
