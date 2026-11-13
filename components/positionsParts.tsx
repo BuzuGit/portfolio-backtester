@@ -6,7 +6,7 @@
   for word from the one big PortfolioBacktester.tsx.
 */
 import React from 'react';
-import { unitFeeQty, type TransactionRow, type UnitFee } from '@/lib/fetchData';
+import { unitFeeQty, type UnitFee } from '@/lib/fetchData';
 import { formatPrice } from '@/components/ui';
 
 /** One row of the Price History data, as far as the Shares Held tooltip cares about it. */
@@ -133,11 +133,10 @@ export const mergeUnitFees = (lists: (UnitFee[] | undefined)[]): UnitFee[] => {
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 };
 
-/**
- * Units a purchase row still holds: what was bought less anything given up to fees paid
- * in units. Pass `upTo` (YYYY-MM-DD) for the count held on that day instead of today.
- */
-export const heldQty = (t: TransactionRow, upTo?: string): number => t.qty - unitFeeQty(t.unitFees, upTo);
+// heldQty (units a purchase still holds after fees paid in units) lives in lib/fetchData.ts,
+// beside unitFeeQty, so the calculation files can use it too. Re-exported here for the tabs.
+export { heldQty } from '@/lib/fetchData';
+import { heldQty } from '@/lib/fetchData';
 
 /** A fee paid in units as a Transaction History row; the FIFO pass fills in the rest. */
 export const unitFeeToEvent = (f: UnitFee): TradeEvent => ({

@@ -12,7 +12,7 @@
   but all happening automatically in the browser!
 */
 
-import { parseEdoSheet, withEdoColumn, withEdoSeriesColumns, EDO_TICKER, type EdoData } from './edo';
+import { parseEdoSheet, withEdoColumn, withEdoSeriesColumns, EDO_TICKER, type EdoData } from './edo.ts';
 
 // The base URL for your published Google Sheet
 const SHEET_BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM3Qq52UZwmQyRQrG_YER6-RNnagk2GG9Os65kFPtkNTpNtZywaoMEV8w_xDDuu0eRdEoPWgn/pub';
@@ -261,6 +261,12 @@ export const unitFeeQty = (fees: UnitFee[] | undefined, upTo?: string): number =
   return s;
 };
 
+/**
+ * Units a purchase row still holds: what was bought less anything given up to fees paid
+ * in units. Pass `upTo` (YYYY-MM-DD) for the count held on that day instead of today.
+ */
+export const heldQty = (t: TransactionRow, upTo?: string): number => t.qty - unitFeeQty(t.unitFees, upTo);
+
 // Daily NAV row from the "Daily" sheet (gid=882618775)
 // Contains one entry per calendar day with portfolio NAV per share in three currencies
 // and a cumulative inflation index (base 100 at 2019-12-16) for each currency.
@@ -478,8 +484,12 @@ const SHEET_ATTEMPTS = 3;
  * calm "Offline" line and the second as an error (PortfolioBacktester.tsx, loadDataFromSheet).
  */
 export class SheetUnreachableError extends Error {
-  constructor(message: string, readonly noAnswer: boolean) {
+  // Written out in full (not as `readonly noAnswer` in the constructor's parameters) because Node's
+  // quick TypeScript mode, which runs the lib/ tests, does not support that shorthand.
+  readonly noAnswer: boolean;
+  constructor(message: string, noAnswer: boolean) {
     super(message);
+    this.noAnswer = noAnswer;
     this.name = 'SheetUnreachableError';
   }
 }
