@@ -9,6 +9,7 @@
 import React, { useSyncExternalStore } from 'react';
 import { ResponsiveContainer as RechartsResponsiveContainer } from 'recharts';
 import { isPhoneScreen } from '@/lib/savedSheet';
+import type { AssetsAnnualReturns } from '@/lib/assetStats';
 
 // ---------------------------------------------------------------------------
 // CHART PALETTE (Positions tab)
@@ -446,3 +447,61 @@ export const PHONE_SCROLL_ROW = 'max-md:overflow-x-auto max-md:max-w-full';
 // How much history the Monthly tab's charts show. Named once, so the button row, the
 // state and getMonthlyChartData's lookup table can never drift apart.
 export type MonthlyChartPeriod = '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | '15Y' | 'max';
+
+/**
+ * Generates tooltip text for a specific asset/year cell.
+ * Shows the calculation details so users understand how the return was computed.
+ *
+ * Example output: "2023: $100.00 (Dec 30, 2022) → $110.00 (Dec 29, 2023) = +10.00%"
+ */
+export const getReturnTooltip = (ticker: string, year: number, annualReturns: AssetsAnnualReturns): string => {
+  const data = annualReturns[ticker]?.[year];
+  if (!data) return 'No data available';
+
+  // Format dates to show month, day, and year (e.g., "Dec 30, 2022")
+  const formatDate = (dateStr: string): string => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  // Format the return with a + or - sign
+  const returnSign = data.return >= 0 ? '+' : '';
+  const returnStr = `${returnSign}${data.return.toFixed(2)}%`;
+
+  return `${year}: $${formatPrice(data.startPrice)} (${formatDate(data.startDate)}) → $${formatPrice(data.endPrice)} (${formatDate(data.endDate)}) = ${returnStr}`;
+};
+
+/**
+ * Generates tooltip text for period return columns (1Y, 2Y, etc.)
+ */
+export const getPeriodReturnTooltip = (data: { startDate: string; startPrice: number; endDate: string; endPrice: number; return: number }): string => {
+  const formatDate = (dateStr: string): string => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+  const returnSign = data.return >= 0 ? '+' : '';
+  return `${formatDate(data.startDate)} ($${formatPrice(data.startPrice)}) → ${formatDate(data.endDate)} ($${formatPrice(data.endPrice)}) = ${returnSign}${data.return.toFixed(2)}%`;
+};
+
+/**
+ * Heatmap colour for a value's position in a min–max range (used by the Annual prices table):
+ * lowest = red, middle = neutral grey, highest = green, on the theme's one heat scale
+ * (heatColor). These cells keep the page's normal dark text, so the scale stops at its
+ * middle shades (0.67) to stay readable.
+ */
+export const getHeatmapColor = (value: number, min: number, max: number): string => {
+  if (min === max) return heatColor(0);
+  const position = (value - min) / (max - min);   // 0 = min, 1 = max
+  return heatColor(position * 2 - 1, 0.67);
+};
+
+/**
+ * Price heatmap: lowest red → middle neutral → highest green, per row, on the one heat scale.
+ * Used for all price tables (Monthly prices, Annual prices, detail view prices). Only the
+ * background colour changes; the text keeps the page's normal colour.
+ */
+export const getPriceHeatmap = (value: number, min: number, max: number): string => {
+  if (min === max) return heatColor(0);
+  const pos = (value - min) / (max - min); // 0 = min, 1 = max
+  return heatColor(pos * 2 - 1, 0.67);
+};
