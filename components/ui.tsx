@@ -11,6 +11,12 @@ import { ResponsiveContainer as RechartsResponsiveContainer } from 'recharts';
 import { isPhoneScreen } from '@/lib/savedSheet';
 import type { AssetsAnnualReturns } from '@/lib/assetStats';
 
+// "Group Metals & Crypto" feature (Positions tab): while on, assets take the class in the Lookup
+// tab's PortfolioClass column (gold, silver and crypto: "Metals & Crypto"), and those also get a
+// separate "M&C" pseudo-currency in the By Currency bar chart so they don't inflate fiat buckets.
+export const METALS_CRYPTO_LABEL = 'Metals & Crypto'; // display label for the grouped asset class
+export const METALS_CRYPTO_CCY   = 'M&C';             // pseudo-currency code shown in the bar chart
+
 // ---------------------------------------------------------------------------
 // CHART PALETTE (Positions tab)
 // ---------------------------------------------------------------------------
