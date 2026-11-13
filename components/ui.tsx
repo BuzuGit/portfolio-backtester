@@ -368,3 +368,81 @@ export const returnHeatColor = (ret: number): string => heatColor(ret / 40);
  * -1 (move opposite, great diversification) → green.
  */
 export const getCorrelationColor = (value: number): string => heatColor(-value, 0.67);
+
+/**
+ * ============================================================
+ * THE one way to print a PER-SHARE ASSET PRICE, app-wide.
+ * ============================================================
+ *
+ * Precision slides with magnitude, so every price carries roughly the same number
+ * of MEANINGFUL digits instead of the same number of decimal places:
+ *
+ *      below 2      → 3 decimals   0.776,  1.355
+ *      2 – 99       → 2 decimals   4.28,   43.77
+ *      100 – 999    → 1 decimal    507.0
+ *      1000 and up  → 0 decimals   114,056
+ *
+ * WHY IT SLIDES: two decimals is right for a share priced in tens, but on a 0.85
+ * holding it throws real information away — 0.844 and 0.851 both collapse to "0.85",
+ * so a 1% move looks like no move at all. At the other end, ".00" on a five-figure
+ * crypto price is noise that just makes a dense grid wider.
+ *
+ * WHY THE FIRST STEP IS AT 2 AND NOT 1: nothing magic about either, but a chunk of
+ * the portfolio (Singapore REITs, some bond ETFs) trades in the 0.5–1.9 band, and
+ * cutting at 1 left exactly those holdings on two decimals. 2 covers the band.
+ *
+ * Formats via toLocaleString, so prices of 1000+ keep their thousands separator.
+ *
+ * Judged on MAGNITUDE, so a negative behaves like its positive twin.
+ *
+ * SCOPE: per-share PRICES only. Portfolio values, invested capital, P&L, commissions
+ * and cash balances are money totals with their own formatting — they are not prices
+ * and must not be routed through here.
+ */
+export const priceDecimals = (n: number): number => {
+  const magnitude = Math.abs(n);
+  if (magnitude < 2) return 3;
+  if (magnitude < 100) return 2;
+  if (magnitude < 1000) return 1;
+  return 0;
+};
+
+/**
+ * The four number formatters formatPrice needs, built once and reused.
+ *
+ * WHY NOT JUST toLocaleString: that call builds a fresh Intl.NumberFormat every time,
+ * which costs ~20µs — about 230x what the old toFixed cost. Cheap once, but the
+ * Monthly tab's price grid is ~370 cells and repaints on every hover, so it was
+ * paying roughly 7ms per render purely to format numbers. Reusing the formatter is
+ * ~40x faster and produces byte-identical output (verified against toLocaleString
+ * over 300k random and edge-case values, negatives and NaN included).
+ *
+ * Keyed by decimal count, of which priceDecimals only ever returns four.
+ */
+export const PRICE_FORMATTERS = new Map<number, Intl.NumberFormat>();
+
+/** A per-share asset price as display text. See priceDecimals above for the rule. */
+export const formatPrice = (price: number): string => {
+  const decimals = priceDecimals(price);
+  let formatter = PRICE_FORMATTERS.get(decimals);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+    PRICE_FORMATTERS.set(decimals, formatter);
+  }
+  return formatter.format(price);
+};
+
+// PHONES ONLY (every "max-md:" class applies below 768px of width and nowhere else, so none of
+// the phone fixes below can change the desktop or laptop layout).
+// A row of small option buttons (Currency, Period...) wider than a phone screen used to push past
+// the right edge, and then the browser zooms the WHOLE page out, or lets it slide sideways, to
+// show it. On a phone such a row instead scrolls sideways on its own, like a strip of chips,
+// and the rest of the page stays put.
+export const PHONE_SCROLL_ROW = 'max-md:overflow-x-auto max-md:max-w-full';
+
+// How much history the Monthly tab's charts show. Named once, so the button row, the
+// state and getMonthlyChartData's lookup table can never drift apart.
+export type MonthlyChartPeriod = '1Y' | '2Y' | '3Y' | '4Y' | '5Y' | '6Y' | '7Y' | '8Y' | '9Y' | '10Y' | '15Y' | 'max';

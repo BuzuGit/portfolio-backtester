@@ -3,8 +3,8 @@
 
   WHY THIS EXISTS
   ---------------
-  Asset prices are printed by exactly one helper, `formatPrice` at the top of
-  components/PortfolioBacktester.tsx:
+  Asset prices are printed by exactly one helper, `formatPrice` in the shared design
+  system, components/ui.tsx:
 
       below 2   -> 3 decimals      2-99      -> 2 decimals
       100-999   -> 1 decimal       1000+     -> 0 decimals, with separators
