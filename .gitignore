@@ -27,8 +27,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-.vercel
-.env*.local
-
 # Claude Code local permissions: machine-specific, may contain local paths and links. Never commit.
 .claude/settings.local.json
