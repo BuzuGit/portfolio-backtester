@@ -2501,6 +2501,8 @@ const PortfolioBacktester = () => {
       }
       window.history.replaceState(null, '', '/');
     }
+    // Runs once, when the app opens. NAV_VIEWS is a fixed list, so leaving it out changes nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     // Skip the very first run: it happens before the restore above has taken effect, so it would
@@ -2583,7 +2585,10 @@ const PortfolioBacktester = () => {
       const included = closedIncludedTxns === null ? total : closedIncludedTxns.size;
       closedSelectAllRef.current.indeterminate = included > 0 && included < total;
     }
-  }, [closedIncludedTxns, closedSelectedTicker]);
+    // closedData is what getClosedTransactions reads: listed so the box also updates after
+    // Refresh Data. (The function itself is defined further down, so it can't be listed here.)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closedIncludedTxns, closedSelectedTicker, closedData]);
 
   // Same indeterminate checkbox management for the Open positions detail view
   useEffect(() => {
@@ -2592,7 +2597,10 @@ const PortfolioBacktester = () => {
       const included = openIncludedTxns === null ? total : openIncludedTxns.size;
       openSelectAllRef.current.indeterminate = included > 0 && included < total;
     }
-  }, [openIncludedTxns, openSelectedTicker]);
+    // positionsModel is what getOpenPurchases reads: listed so the box also updates after
+    // Refresh Data. (The function itself is defined further down, so it can't be listed here.)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openIncludedTxns, openSelectedTicker, positionsModel]);
 
   // ----------------------------------------
   // AUTO-LOAD DATA ON MOUNT
@@ -2610,6 +2618,8 @@ const PortfolioBacktester = () => {
     if (hasLoadedRef.current) return;
     hasLoadedRef.current = true;
     loadDataFromSheet();
+    // Deliberately runs once, on opening (see above); Refresh Data calls it again by hand.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ----------------------------------------
@@ -5751,7 +5761,8 @@ const PortfolioBacktester = () => {
   };
 
   // Memoized annual returns — only recalculated when assetData or assetLookup changes,
-  // NOT when toggling between Returns/Prices view or changing other UI state
+  // NOT when toggling between Returns/Prices view or changing other UI state.
+  // Checked 2026-11-13: these three are everything the function reads (edoData via windowPrices).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const memoizedAnnualReturns = useMemo(() => calculateAssetsAnnualReturns(), [assetData, assetLookup, edoData]);
 
@@ -5790,7 +5801,8 @@ const PortfolioBacktester = () => {
   // (Just the re-priced numbers: lib/markets.ts scales the column, no rows are copied.)
   const edoReanchor = useMemo(
     () => (edoData
-      ? (ticker: string, startDate: string, rows: AssetRow[]) => (isStartDependent(ticker) ? edoChainOnRows(rows, edoData, startDate) : null)
+      // (isStartDependent(ticker) spelled out: edoData is already known to be loaded here)
+      ? (ticker: string, startDate: string, rows: AssetRow[]) => (ticker === EDO_TICKER ? edoChainOnRows(rows, edoData, startDate) : null)
       : undefined),
     [edoData],
   );
@@ -5802,7 +5814,6 @@ const PortfolioBacktester = () => {
   );
   // Markets "Holdings" page: open positions + cash in one currency. Only worked out while that
   // page is on screen; the arithmetic is in lib/holdings.ts.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const holdingsModel = useMemo(
     () => (activeView === 'markets' && marketsIsHoldings && assetData && positionsModel
       ? buildHoldings({
@@ -7732,8 +7743,10 @@ const PortfolioBacktester = () => {
     () => (resolvedBreakdownYear == null
       ? { assets: [] as ReturnType<typeof getYearlyProfitBreakdown>['assets'], other: 0, total: 0 }
       : getYearlyProfitBreakdown(resolvedBreakdownYear, portfolioCurrency)),
+    // Everything the function reads (checked 2026-11-13). positionsModel was missing: it feeds
+    // the open purchases and dividends, and only worked because it changes alongside transactionData.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [resolvedBreakdownYear, portfolioCurrency, yearsData, assetData, transactionData, closedData, assetLookup],
+    [resolvedBreakdownYear, portfolioCurrency, yearsData, assetData, transactionData, closedData, assetLookup, positionsModel],
   );
 
   /**
@@ -8465,6 +8478,9 @@ const PortfolioBacktester = () => {
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
       }
+      // The checker calls this dependency pointless because AssetFilterControls is defined inside
+      // the main component (it is rebuilt on every render). Kept until it moves into its own file.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [openFilterDropdown]);
 
     // Get the unique values for each dropdown

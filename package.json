@@ -6,24 +6,26 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "next lint --max-warnings 0",
     "check:prices": "node scripts/check-price-format.mjs",
-    "test": "node --test \"lib/*.test.mjs\""
+    "test": "npm run lint && node --test \"lib/*.test.mjs\""
   },
   "dependencies": {
+    "lucide-react": "^0.363.0",
     "next": "^14.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "recharts": "^2.12.0",
-    "lucide-react": "^0.363.0"
+    "recharts": "^2.12.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
-    "typescript": "^5.3.0",
-    "tailwindcss": "^3.4.0",
+    "autoprefixer": "^10.4.0",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.35",
     "postcss": "^8.4.0",
-    "autoprefixer": "^10.4.0"
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.3.0"
   }
 }

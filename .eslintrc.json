@@ -1,0 +1,10 @@
+{
+  // Next.js's recommended rules, including the React "hooks" checks that catch figures which
+  // don't recalculate when their inputs change.
+  "extends": "next/core-web-vitals",
+  "rules": {
+    // Off: it flags chart label/tick helpers that hand Recharts a drawing function. Those are not
+    // React components, so a "display name" (a label for React's developer tools) means nothing there.
+    "react/display-name": "off"
+  }
+}
