@@ -33,7 +33,7 @@
 */
 
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
-import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, ScatterChart, Scatter, PieChart, Pie } from 'recharts';
+import { LineChart, Line, BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ComposedChart, Area, ReferenceDot, ReferenceLine, AreaChart, Customized, PieChart, Pie } from 'recharts';
 // Switches off chart animation app-wide: every chart draws instantly (see the file for why/how)
 import '@/lib/noChartAnimation';
 import { RefreshCw, Plus, Trash2, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun, ChevronDown } from 'lucide-react';
@@ -55,14 +55,17 @@ import {
   type BacktestResult, type MonthlyReturns, type RebalancingRow,
 } from '@/lib/backtest';
 import TrendFollowingTab from '@/components/tabs/TrendFollowingTab';
-import { getPairedMonthlyReturns, getRollingCorrelationData, pearsonCorrelation, correlationMatrix } from '@/lib/correlation';
+import { getPairedMonthlyReturns, getRollingCorrelationData, pearsonCorrelation } from '@/lib/correlation';
+import CorrelationsTab from '@/components/tabs/CorrelationsTab';
 import { toYM, MONTH_ABBR } from '@/lib/dates';
 // The shared design system: colours, heat scale, button/field looks, chart helpers, tooltip texts
 import {
   CHART_PALETTE, GAIN, LOSS, GAIN_DEEP, LOSS_DEEP, LOSS_TOTAL, GAIN_PILL, LOSS_PILL, BENCH_LABEL,
   WINE_LABEL, OLIVE_LABEL, SLATE, SERIES_COLORS, SMA_COLOR, INFLATION_COLOR, PROFIT_COLOR,
   BLACK, INK, INK_SOFT, ON_BLACK, MUTED, MUTED_LABEL, LINE, LINE_FAINT, LINE_MID, WEIGHT_BAR, HALO, CARD,
-  CARD_GLASS, CELL_TEXT, heatColorLight, SEG, segBtn, FIELD, FIELD_SM, BTN_MAIN, BTN_SECOND,
+  CARD_GLASS, SEG, segBtn, FIELD, FIELD_SM, BTN_MAIN, BTN_SECOND,
+  ASSET_CLASS_COLORS, CURRENCY_COLORS, RETURN_MAP_ASSET_COLORS, readableTextOn, isDarkTheme,
+  setPhoneBarColours, themedCell, heatColor, returnHeatColor,
   lossBarLabel, lossLabelRoom, XIRR_HINT, CAGR_LOT_HINT, CAGR_HINT, SHARPE_HINT,
   ResponsiveContainer, PINNED_FILTERS,
 } from '@/components/ui';
@@ -1395,141 +1398,6 @@ function niceLogAxisScale(
 const DATE_PRESETS = ['YTD', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y', '10Y', 'Max'] as const;
 type DatePreset = (typeof DATE_PRESETS)[number];
 
-// Asset class colors for the breakdown chart and table color dots
-const ASSET_CLASS_COLORS: Record<string, string> = {
-  'Fixed Income': CHART_PALETTE.olive, 'Equities': CHART_PALETTE.wine,
-  'Crypto': CHART_PALETTE.rose, 'Alternatives': CHART_PALETTE.violet,
-  'Metals & Crypto': CHART_PALETTE.gold, // gold-ish to represent the physical + crypto nature
-  // Cash is deliberately the one grey in the set. It is not an investment competing with the
-  // others for attention, and a muted slice reads as "not at work yet" at a glance.
-  'Cash': 'var(--c-cash)',
-};
-
-// One colour per currency, on EVERY page (theme rule 3): Positions' by-currency chart, the
-// Portfolio tab's yearly bars and drawdowns, the currency toggles. PLN, the home currency, takes
-// the app's main dark slate. USD is the green-teal and SGD the blue (the user's choice, 2026-11-07).
-// None of them is the gain green or the loss red, so a currency never reads as a gain or a loss.
-const CURRENCY_COLORS: Record<string, string> = {
-  PLN: SLATE, USD: CHART_PALETTE.teal, SGD: CHART_PALETTE.blue,
-  EUR: CHART_PALETTE.violet, CHF: CHART_PALETTE.rose,
-  'M&C': CHART_PALETTE.gold, // matches the Metals & Crypto asset class color
-};
-
-// Return Map (Best To Worst tab): one fixed colour per asset, so the same asset is easy to spot
-// in every year column. The 8-colour CHART_PALETTE is too small for ~30 assets, so this is a
-// separate grid: 10 hues × 3 shades (medium, dark, light) + 2 greys = 32 colours. Checked with a
-// perceptual colour-difference test: the closest pair still differs by ΔE 14.9 (above ~10 reads as
-// clearly different). With more than 32 assets on the map, colours start repeating.
-const RETURN_MAP_ASSET_COLORS = [
-  '#a02222', '#a06122', '#a08b22', '#61a022', '#22a061', '#22a0a0', '#226ba0', '#2237a0', '#6122a0', '#a02276',
-  '#631d1d', '#63401d', '#63571d', '#40631d', '#1d6340', '#1d6363', '#1d4663', '#1d2863', '#401d63', '#631d4b',
-  '#d45454', '#d49454', '#d4bf54', '#94d454', '#54d494', '#54d4d4', '#549fd4', '#5469d4', '#9454d4', '#d454a9',
-  '#5c6b73', '#9aa5ad',
-];
-
-/**
- * Picks white or near-black text for a coloured cell — whichever has the higher contrast ratio
- * on that background, using the WCAG accessibility formula (the eye sees green as much brighter
- * than blue, so a plain RGB average would get this wrong).
- */
-const readableTextOn = (color: string): string => {
-  // The sums need real numbers, so a theme colour (var(--c-teal)) is first looked up in
-  // the page. Before the page exists (the server's first pass) there is nothing to look it up in,
-  // but this table only ever appears after the data has loaded in the browser.
-  const hex = color.startsWith('var(') && typeof document !== 'undefined'
-    ? getComputedStyle(document.documentElement).getPropertyValue(color.slice(4, -1)).trim()
-    : color;
-  const n = parseInt(hex.slice(1), 16);
-  const linear = (c: number) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
-  // Relative luminance: 0 = black, 1 = white
-  const lum = 0.2126 * linear((n >> 16) & 255) + 0.7152 * linear((n >> 8) & 255) + 0.0722 * linear(n & 255);
-  // Contrast vs white, and vs the #1f2937 text colour (luminance ≈ 0.02)
-  return 1.05 / (lum + 0.05) >= (lum + 0.05) / 0.07 ? '#ffffff' : '#1f2937';
-};
-
-/**
- * Is dark mode on right now? The "dark" class on <html> is the one source of truth: app/layout.tsx
- * sets it before the first paint, and the button at the top of the left panel flips it.
- */
-const isDarkTheme = (): boolean =>
-  typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
-
-/**
- * Phones only: colour the phone's own bars above and below the page (clock/battery strip, browser
- * bar, Android's bottom bar) to match the mode, so dark mode isn't framed by white strips. Sets
- * every copy of each tag, because React adds a second status-bar tag while the page starts up.
- * The tags are first set by phoneBarColours in app/layout.tsx; desktop skips this entirely.
- */
-const setPhoneBarColours = (dark: boolean) => {
-  if (!isPhoneScreen()) return;
-  document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', dark ? '#0e1014' : '#f1f2f4'));
-  document.querySelectorAll('meta[name="apple-mobile-web-app-status-bar-style"]').forEach(m => m.setAttribute('content', dark ? 'black' : 'default'));
-};
-
-/**
- * Heatmap cell colour, adjusted for dark mode. The heatmaps run from white (nothing to see) to a
- * strong colour (look here), and their colours are computed in code, so app/dark.css can't reach
- * them. In dark mode this keeps the hue and turns the lightness upside down, like a photo negative
- * that keeps its colours: the white end becomes near-black (blends into the dark card) and the
- * strong end stays strong, so "brighter = bigger" still holds. In light mode the colour comes back
- * untouched. Accepts "#rgb", "#rrggbb", "rgb(r, g, b)" or "hsl(h, s%, l%)"; returns "#rrggbb".
- */
-const themedCell = (color: string): string => {
-  if (!isDarkTheme()) return color;
-  const nums = (color.match(/-?[\d.]+/g) ?? []).map(Number);
-  // Work in hue / saturation / lightness (H in degrees, S and L from 0 to 1)
-  let H = 0, S = 0, L = 0;
-  if (color.startsWith('hsl')) {
-    // Already in that form: read it straight off
-    [H, S, L] = [nums[0], nums[1] / 100, nums[2] / 100];
-  } else {
-    let r: number, g: number, b: number;
-    if (color.startsWith('#')) {
-      // "#fff" is shorthand for "#ffffff": each digit doubled
-      const hex = color.length === 4 ? color.slice(1).split('').map(c => c + c).join('') : color.slice(1);
-      const n = parseInt(hex, 16);
-      [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-    } else if (color.startsWith('rgb')) {
-      [r, g, b] = nums;
-    } else {
-      return color; // a colour format we don't know: leave it alone
-    }
-    // rgb → hsl (standard formula)
-    const [R, G, B] = [r / 255, g / 255, b / 255];
-    const max = Math.max(R, G, B), min = Math.min(R, G, B);
-    const d = max - min;
-    L = (max + min) / 2;
-    S = d === 0 ? 0 : d / (1 - Math.abs(2 * L - 1));
-    if (d !== 0) {
-      if (max === R) H = 60 * (((G - B) / d) % 6);
-      else if (max === G) H = 60 * ((B - R) / d + 2);
-      else H = 60 * ((R - G) / d + 4);
-    }
-  }
-  // Flip the lightness: white (1) → 0.11, about the dark card colour; mid tones stay mid.
-  // Slightly less saturated, because full-strength colour glares on a dark page.
-  const [r2, g2, b2] = hslToRgb((H + 360) % 360, S * 0.8, 0.11 + (1 - L) * 0.85);
-  return `#${[r2, g2, b2].map(c => Math.round(c).toString(16).padStart(2, '0')).join('')}`;
-};
-
-/** hsl → [r, g, b] (0–255), the standard formula. H in degrees, S and L from 0 to 1. */
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
-  const k = (n: number) => (n + h / 30) % 12;
-  const a = s * Math.min(l, 1 - l);
-  const f = (n: number) => 255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))));
-  return [f(0), f(8), f(4)];
-}
-
-
-/** The one heat scale (heatColorLight, with the theme at the top of the file), dark-mode aware. */
-const heatColor = (t: number, maxStrength = 1): string => themedCell(heatColorLight(t, maxStrength));
-
-/**
- * Return Map "Return" highlight and the Markets / Holdings heat cells: pale for returns near zero,
- * deep green for big gains, deep red for big losses. Anything beyond ±40% gets the deepest shade so
- * one outlier doesn't wash out the rest. (Their cells pick white or dark text per colour.)
- */
-const returnHeatColor = (ret: number): string => heatColor(ret / 40);
 
 // "Group Metals & Crypto" feature (Positions tab): while on, assets take the class in the Lookup
 // tab's PortfolioClass column (gold, silver and crypto: "Metals & Crypto"), and those also get a
@@ -5955,16 +5823,6 @@ const PortfolioBacktester = () => {
     return heatColor(pos * 2 - 1, 0.67);
   };
 
-  /**
-   * Correlation (-1 to +1) on the one heat scale:
-   * +1 (move together, little diversification) → red; 0 (independent) → neutral grey;
-   * -1 (move opposite, great diversification) → green.
-   */
-  const getCorrelationColor = (value: number): string => heatColor(-value, 0.67);
-
-  /** The Correlations tab's matrix: the assets passing the filters, over the last N years (lib/correlation.ts). */
-  const calculateCorrelationMatrix = (periodYears: number): { tickers: string[]; matrix: number[][] } =>
-    (assetData ? correlationMatrix(assetData, getFilteredAssetLookup().map(a => a.ticker), periodYears) : { tickers: [], matrix: [] });
 
   // ============================================
   // PORTFOLIO TAB HELPER FUNCTIONS
@@ -14779,301 +14637,11 @@ const PortfolioBacktester = () => {
           {/* A correlation of -1 means they move in opposite directions (great for diversification). */}
           {/* 0 means no relationship at all. */}
           {isConnected && assetData && activeView === 'correlationMatrix' && (
-            <div className="mt-2">
-
-              {/* Reuse the same asset/class/currency filter controls as other tabs, with Correlation Period added inline */}
-              {/* (wrapped so it stays pinned while scrolling) */}
-              <div className={PINNED_FILTERS}>
-              <AssetFilterControls>
-                {/* Correlation Period dropdown — styled to match the other filter buttons */}
-                <div className="relative">
-                  <div className="h-8 px-3 text-xs border border-gray-300 bg-white rounded-lg flex items-center gap-2 max-md:h-10 max-md:text-sm">
-                    <span className="font-medium">Period:</span>
-                    <select
-                      value={correlationPeriod}
-                      onChange={(e) => setCorrelationPeriod(Number(e.target.value))}
-                      className="bg-transparent text-gray-600 outline-none cursor-pointer"
-                    >
-                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(y => (
-                        <option key={y} value={y}>{y}Y</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </AssetFilterControls>
-              </div>
-
-              {/* Render the correlation matrix table */}
-              {(() => {
-                const { tickers, matrix } = calculateCorrelationMatrix(correlationPeriod);
-
-                if (tickers.length === 0) {
-                  return (
-                    <div className="bg-yellow-50 p-4 rounded-lg text-yellow-800">
-                      No assets to display. Please adjust your filters or load data.
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="overflow-auto max-h-[75vh]">
-                    <table className="text-xs border-collapse">
-                      <thead>
-                        <tr>
-                          {/* Empty top-left corner cell - sticky both top and left (highest z-index) */}
-                          <th className="py-1 px-2 sticky top-0 left-0 z-30 border border-gray-200 min-w-[60px] bg-gray-100"></th>
-                          {/* Column headers — one per ticker, each sticky top */}
-                          {tickers.map(ticker => (
-                            <th
-                              key={ticker}
-                              className="py-1 px-2 sticky top-0 z-20 border border-gray-200 text-center font-semibold min-w-[55px] bg-gray-100"
-                              title={assetLookup.find(a => a.ticker === ticker)?.name || ticker}
-                            >
-                              {ticker}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {tickers.map((rowTicker, i) => (
-                          <tr key={rowTicker}>
-                            {/* Row header — sticky on the left with solid background */}
-                            <td
-                              className="py-1 px-2 sticky left-0 z-10 border border-gray-200 font-semibold bg-gray-100"
-                              title={assetLookup.find(a => a.ticker === rowTicker)?.name || rowTicker}
-                            >
-                              {rowTicker}
-                            </td>
-                            {/* Correlation values for this row */}
-                            {tickers.map((colTicker, j) => {
-                              const value = matrix[i][j];
-                              const isValid = !isNaN(value);
-                              return (
-                                <td
-                                  key={colTicker}
-                                  className="py-1 px-2 text-center border border-gray-200 font-mono"
-                                  style={{
-                                    backgroundColor: isValid ? getCorrelationColor(value) : themedCell('#f3f4f6'),
-                                    // Make text darker for better readability on colored backgrounds
-                                    color: isValid ? CELL_TEXT : '#9ca3af',
-                                  }}
-                                  title={isValid ? `${rowTicker} vs ${colTicker}: ${value.toFixed(4)}` : `${rowTicker} vs ${colTicker}: insufficient data`}
-                                >
-                                  {isValid ? value.toFixed(2) : '—'}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    </div>
-
-                    {/* Color legend */}
-                    <div className="mt-4 flex items-center gap-2 text-xs text-gray-600">
-                      <span className="font-medium">Legend:</span>
-                      <div className="flex items-center gap-1">
-                        <div className="w-4 h-4 rounded" style={{ backgroundColor: getCorrelationColor(-1) }}></div>
-                        <span>-1 (opposite)</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <div className="w-4 h-4 rounded" style={{ backgroundColor: getCorrelationColor(0) }}></div>
-                        <span>0 (no relation)</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <div className="w-4 h-4 rounded" style={{ backgroundColor: getCorrelationColor(1) }}></div>
-                        <span>+1 (move together)</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* ============================================ */}
-              {/* RISK / RETURN SCATTER PLOT                   */}
-              {/* X axis = Volatility, Y axis = CAGR           */}
-              {/* Only assets with full history for the period */}
-              {/* ============================================ */}
-              {(() => {
-                const filteredAssets = getFilteredAssetLookup();
-                const monthsNeeded = correlationPeriod * 12;
-                // Slice the last N years of data (+1 row so we can compute the first monthly return)
-                const slicedData = assetData.slice(-(monthsNeeded + 1));
-
-                // Color palette for the dots — cycles if there are more than 20 assets
-                const DOT_COLORS = RETURN_MAP_ASSET_COLORS;
-
-                const scatterData: { ticker: string; name: string; x: number; y: number; color: string }[] = [];
-                let colorIdx = 0;
-
-                for (const asset of filteredAssets) {
-                  const ticker = asset.ticker;
-
-                  // Require valid price at both ends of the slice — this enforces the "enough history" rule:
-                  // if the asset didn't exist N years ago its first-row price will be 0/missing and it gets skipped
-                  const firstPrice = Number(slicedData[0]?.[ticker]);
-                  const lastPrice  = Number(slicedData[slicedData.length - 1]?.[ticker]);
-                  if (!firstPrice || firstPrice <= 0 || !lastPrice || lastPrice <= 0) continue;
-
-                  // CAGR for the period: ((endPrice / startPrice) ^ (1/years) - 1) × 100
-                  const cagr = (Math.pow(lastPrice / firstPrice, 1 / correlationPeriod) - 1) * 100;
-
-                  // Annualised volatility: std dev of monthly returns × sqrt(12) × 100
-                  const monthlyReturns: number[] = [];
-                  for (let i = 1; i < slicedData.length; i++) {
-                    const p    = Number(slicedData[i][ticker]);
-                    const prev = Number(slicedData[i - 1][ticker]);
-                    if (p > 0 && prev > 0) monthlyReturns.push((p - prev) / prev);
-                  }
-                  if (monthlyReturns.length < 3) continue;
-
-                  const mean     = monthlyReturns.reduce((s, r) => s + r, 0) / monthlyReturns.length;
-                  const variance = monthlyReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / monthlyReturns.length;
-                  const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;
-
-                  scatterData.push({
-                    ticker,
-                    name: asset.name,
-                    x: parseFloat(volatility.toFixed(2)),
-                    y: parseFloat(cagr.toFixed(2)),
-                    color: DOT_COLORS[colorIdx % DOT_COLORS.length],
-                  });
-                  colorIdx++;
-                }
-
-                if (scatterData.length === 0) return null;
-
-                // Compute axis domains with padding so dots and labels have room
-                const xs = scatterData.map(d => d.x);
-                const ys = scatterData.map(d => d.y);
-                const xPad = Math.max(3, (Math.max(...xs) - Math.min(...xs)) * 0.15);
-                const yPad = Math.max(3, (Math.max(...ys) - Math.min(...ys)) * 0.15);
-                const xMin = Math.max(0, parseFloat((Math.min(...xs) - xPad).toFixed(1)));
-                const xMax = parseFloat((Math.max(...xs) + xPad).toFixed(1));
-                const yMin = parseFloat((Math.min(...ys) - yPad).toFixed(1));
-                const yMax = parseFloat((Math.max(...ys) + yPad).toFixed(1));
-
-                // Generate explicit Y ticks that always land exactly on 0.
-                // Recharts auto-ticks don't guarantee a tick at 0, which causes the
-                // zero ReferenceLine to visually mis-align with any nearby tick label.
-                const yRange = yMax - yMin;
-                const rawInterval = yRange / 5;
-                const mag = Math.pow(10, Math.floor(Math.log10(Math.abs(rawInterval) || 1)));
-                const norm = rawInterval / mag;
-                const tickInterval = norm <= 2 ? 2 * mag : norm <= 5 ? 5 * mag : 10 * mag;
-                const yTickStart = Math.ceil(yMin / tickInterval) * tickInterval;
-                const yTicks: number[] = [];
-                for (let t = yTickStart; t <= yMax + tickInterval * 0.01; t += tickInterval) {
-                  yTicks.push(Math.round(t * 1000) / 1000); // strip floating-point noise
-                }
-                // Force 0 into the tick list if it falls within the domain
-                if (yMin <= 0 && 0 <= yMax && !yTicks.some(t => t === 0)) {
-                  yTicks.push(0);
-                  yTicks.sort((a, b) => a - b);
-                }
-
-                return (
-                  <div className="bg-white p-4 rounded-lg shadow mt-4">
-                    <h3 className="text-base font-semibold text-gray-700 mb-1">
-                      Risk / Return ({correlationPeriod}Y) — Annualised Return vs. Volatility
-                    </h3>
-                    <p className="text-xs text-gray-500 mb-4">
-                      Only assets with {correlationPeriod}+ years of price history are shown.
-                    </p>
-                    <ResponsiveContainer width="100%" height={440}>
-                      <ScatterChart margin={{ top: 20, right: 100, bottom: 50, left: 20 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={LINE_FAINT} />
-                        <XAxis
-                          type="number"
-                          dataKey="x"
-                          name="Volatility"
-                          domain={[xMin, xMax]}
-                          tickFormatter={(v: number) => `${v.toFixed(0)}%`}
-                          label={{
-                            value: `STANDARD DEVIATION (${correlationPeriod}Y)`,
-                            position: 'insideBottom',
-                            offset: -15,
-                            style: { fontSize: 10, fill: MUTED, letterSpacing: '0.05em' },
-                          }}
-                          tick={{ fontSize: 11, fill: MUTED }}
-                        />
-                        <YAxis
-                          type="number"
-                          dataKey="y"
-                          name="Return"
-                          domain={[yMin, yMax]}
-                          ticks={yTicks}
-                          tickFormatter={(v: number) => `${Math.round(v)}%`}
-                          label={{
-                            value: `ANNLZD ${correlationPeriod}Y TR (M)`,
-                            angle: -90,
-                            position: 'insideLeft',
-                            offset: 15,
-                            style: { fontSize: 10, fill: MUTED, letterSpacing: '0.05em' },
-                          }}
-                          tick={{ fontSize: 11, fill: MUTED }}
-                        />
-                        <Tooltip
-                          cursor={{ strokeDasharray: '3 3' }}
-                          content={(props: any) => {
-                            if (!props.active || !props.payload?.length) return null;
-                            const d = props.payload[0].payload;
-                            return (
-                              <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 6, padding: '8px 12px', fontSize: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.1)', maxWidth: 240 }}>
-                                <div style={{ fontWeight: 700, marginBottom: 4, color: d.color }}>{d.ticker}</div>
-                                <div style={{ color: INK_SOFT, marginBottom: 2 }}>{d.name}</div>
-                                <div style={{ color: MUTED }}>
-                                  <span>Return ({correlationPeriod}Y CAGR): </span>
-                                  <strong style={{ color: INK }}>{d.y.toFixed(2)}%</strong>
-                                </div>
-                                <div style={{ color: MUTED }}>
-                                  <span>Volatility ({correlationPeriod}Y): </span>
-                                  <strong style={{ color: INK }}>{d.x.toFixed(2)}%</strong>
-                                </div>
-                              </div>
-                            );
-                          }}
-                        />
-                        {/* Dashed red zero line — only shown when at least one asset has negative return */}
-                        {scatterData.some(d => d.y < 0) && (
-                          <ReferenceLine y={0} stroke={LOSS} strokeDasharray="6 3" strokeWidth={1.5} />
-                        )}
-                        <Scatter
-                          data={scatterData}
-                          shape={(props: any) => {
-                            const { cx, cy, payload } = props;
-                            return (
-                              <g key={payload.ticker}>
-                                <circle
-                                  cx={cx}
-                                  cy={cy}
-                                  r={8}
-                                  fill={payload.color}
-                                  opacity={0.85}
-                                  stroke="white"
-                                  strokeWidth={1.5}
-                                />
-                                <text
-                                  x={cx + 12}
-                                  y={cy + 4}
-                                  fontSize={11}
-                                  fill={INK_SOFT}
-                                  fontFamily="sans-serif"
-                                  fontWeight={500}
-                                >
-                                  {payload.ticker}
-                                </text>
-                              </g>
-                            );
-                          }}
-                        />
-                      </ScatterChart>
-                    </ResponsiveContainer>
-                  </div>
-                );
-              })()}
-            </div>
+            <CorrelationsTab
+              assetData={assetData} assetLookup={assetLookup} filteredAssets={getFilteredAssetLookup()}
+              correlationPeriod={correlationPeriod} setCorrelationPeriod={setCorrelationPeriod}
+              renderFilters={periodControl => <AssetFilterControls>{periodControl}</AssetFilterControls>}
+            />
           )}
 
           {/* ============================================ */}
