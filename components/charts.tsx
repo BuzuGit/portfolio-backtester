@@ -12,6 +12,7 @@ import { MONTH_ABBR, toYM } from '@/lib/dates';
 import { BLACK, INK, MUTED, ON_BLACK, SLATE, type MonthlyChartPeriod } from '@/components/ui';
 import type { AssetRow } from '@/lib/fetchData';
 import { getConversionRate } from '@/lib/backtest';
+import { isAnnualisable } from '@/lib/stats';
 
 /** The settings monthlyChartData takes after the price table and the currency lookup. */
 export type MonthlyChartArgs = Parameters<typeof monthlyChartData> extends [unknown, unknown, ...infer Rest] ? Rest : never;
@@ -815,8 +816,9 @@ export const monthlyChartData = (
   const startDate = new Date(visibleData[0].date);
   const endDate = new Date(visibleData[visibleData.length - 1].date);
   const years = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-  // CAGR only makes sense over a period > 0 years; for very short spans just show total return
-  const cagr = years >= 1 && hasReturnBase
+  // CAGR only for a year or more (the app's one rule, lib/stats.ts: 360+ days, so a 365-day
+  // "1Y" window counts); for shorter spans the total return is shown instead
+  const cagr = isAnnualisable(years) && hasReturnBase
     ? (Math.pow(endPrice / startPrice, 1 / years) - 1) * 100
     : null;
 

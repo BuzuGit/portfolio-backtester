@@ -143,8 +143,8 @@ export const getRollingCorrelationData = (
  * 3. For each pair, the Pearson correlation over the months where BOTH have a return:
  *    r = Σ((x - x̄)(y - ȳ)) / √(Σ(x - x̄)² × Σ(y - ȳ)²)
  *
- * Unlike pearsonCorrelation() above, a pair with a perfectly flat side shows 0 (not blank), and
- * fewer than 3 shared months gives NaN, as the matrix always has. Each pair is worked out once
+ * Each pair uses pearsonCorrelation() above, with the matrix's own conventions: a perfectly flat
+ * side shows 0 (not blank), and fewer than 3 shared months gives NaN, as the matrix always has. Each pair is worked out once
  * and mirrored: correlation is symmetric, and the arithmetic gives the identical number either way.
  *
  * @param rows - the price table
@@ -174,34 +174,20 @@ export const correlationMatrix = (rows: AssetRow[], tickers: string[], periodYea
     returns[ticker] = monthlyReturns;
   }
 
-  // Correlation of one pair, over the months where BOTH assets have valid data
+  // Correlation of one pair, over the months where BOTH assets have valid data. The arithmetic is
+  // pearsonCorrelation above; only the matrix's two conventions are added here:
+  //   fewer than 3 shared months -> NaN (shown as a dash), a perfectly flat side -> 0.
   const pairCorrelation = (xReturns: number[], yReturns: number[]): number => {
-    const pairs: { x: number; y: number }[] = [];
+    const xs: number[] = [];
+    const ys: number[] = [];
     for (let k = 0; k < Math.min(xReturns.length, yReturns.length); k++) {
       if (!isNaN(xReturns[k]) && !isNaN(yReturns[k])) {
-        pairs.push({ x: xReturns[k], y: yReturns[k] });
+        xs.push(xReturns[k]);
+        ys.push(yReturns[k]);
       }
     }
-    // Need at least 3 data points for a meaningful correlation
-    if (pairs.length < 3) return NaN;
-
-    const xMean = pairs.reduce((sum, p) => sum + p.x, 0) / pairs.length;
-    const yMean = pairs.reduce((sum, p) => sum + p.y, 0) / pairs.length;
-
-    let numerator = 0;   // Σ((x - x̄)(y - ȳ))
-    let denomX = 0;      // Σ(x - x̄)²
-    let denomY = 0;      // Σ(y - ȳ)²
-    for (const pair of pairs) {
-      const dx = pair.x - xMean;
-      const dy = pair.y - yMean;
-      numerator += dx * dy;
-      denomX += dx * dx;
-      denomY += dy * dy;
-    }
-
-    const denominator = Math.sqrt(denomX * denomY);
-    // Avoid division by zero (happens if one asset has zero variance)
-    return denominator === 0 ? 0 : numerator / denominator;
+    if (xs.length < 3) return NaN;
+    return pearsonCorrelation(xs, ys) ?? 0;
   };
 
   // Build the NxN matrix: 1 on the diagonal (an asset always moves with itself), each pair once

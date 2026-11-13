@@ -31,6 +31,7 @@
 */
 
 import type { AssetRow, AssetLookup } from './fetchData';
+import { isAnnualisable } from './stats';
 
 // 'Native' = no conversion: each asset's returns stay in its own currency (S&P 500 in USD,
 // WIG20 in PLN...), i.e. what a local investor in that asset experienced.
@@ -102,7 +103,8 @@ const statsFor = (series: { date: string; v: number }[]): PeriodStats | null => 
   const first = series[0], last = series[series.length - 1];
   const months = series.length - 1;
   const years = (new Date(last.date).getTime() - new Date(first.date).getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-  const longEnough = months >= 12 && years > 0;
+  // Long enough to annualise: the app's one "under a year" rule (lib/stats.ts, under 360 days)
+  const longEnough = isAnnualisable(years);
   const cagr = longEnough ? (Math.pow(last.v / first.v, 1 / years) - 1) * 100 : null;
   const rets = series.slice(1).map((s, i) => s.v / series[i].v - 1);
   const mean = rets.reduce((a, b) => a + b, 0) / rets.length;

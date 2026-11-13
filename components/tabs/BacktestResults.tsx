@@ -56,6 +56,10 @@ export default function BacktestResults({
   deltaPortfolioB, setDeltaPortfolioB, selectedDetailPortfolio, setSelectedDetailPortfolio,
   selectedRebalancingPortfolio, setSelectedRebalancingPortfolio,
 }: BacktestResultsProps) {
+  // The start date the shown results were RUN with (every portfolio in a run shares it), so the
+  // annual and periodic charts below stay in step with the results even if the Start Date control
+  // has been changed since and Run not pressed again.
+  const runStart = backtestResults[0]?.settings.start ?? selectedDateRange.start;
   return (
     <div className="mt-6">
       <h2 className="text-xl font-semibold text-gray-800 mb-4">Results</h2>
@@ -119,7 +123,7 @@ export default function BacktestResults({
             {(() => {
             // Worked out once for the whole table rather than per row, since the
             // helper walks every portfolio's yearly returns each time it is called.
-            const bestWorst = getBestWorstYears(backtestResults, selectedDateRange.start);
+            const bestWorst = getBestWorstYears(backtestResults, runStart);
             return backtestResults.map((result, idx) => (
               <tr key={idx} className="border-b border-gray-100">
                 <td className="py-2 px-2 font-medium" style={{ color: result.portfolio.color }}>
@@ -254,7 +258,7 @@ export default function BacktestResults({
         {(() => {
           const rolling = ROLLING_RETURN_YEARS.find(r => r.period === backtestReturnsPeriod);
           const streak = STREAK_VIEWS.find(s => s.period === backtestReturnsPeriod);
-          const rows = getPeriodicReturnsChartData(backtestResults, selectedDateRange.start, backtestReturnsPeriod);
+          const rows = getPeriodicReturnsChartData(backtestResults, runStart, backtestReturnsPeriod);
           // ONE portfolio gets the Monthly tab's look exactly — black bars, red when
           // negative. TWO OR MORE keep their own colours, because telling the portfolios
           // apart is the entire point of this chart and one colour per sign would erase it.
@@ -493,7 +497,7 @@ export default function BacktestResults({
         // view, exactly the Δ column of the table. Nothing is recomputed.
         const periodRows = (sameTwice || deltaStreak)
           ? []
-          : getPeriodicReturnsChartData(backtestResults, selectedDateRange.start, backtestReturnsPeriod);
+          : getPeriodicReturnsChartData(backtestResults, runStart, backtestReturnsPeriod);
         // One bar of this chart: the gap, plus both sides' own returns and (on a
         // rolling view) the window the gap was measured over, for the tooltip.
         type DeltaBar = { label: string; range?: string; delta: number; aVal: number; bVal: number };
@@ -813,7 +817,7 @@ export default function BacktestResults({
             chart uses, so the table and the bars can never drift apart — including the
             rule that drops a December start year (only one data point, would show 0%). */}
         {(() => {
-          const annualRows = getAnnualReturnsChartData(backtestResults, selectedDateRange.start);
+          const annualRows = getAnnualReturnsChartData(backtestResults, runStart);
           if (annualRows.length === 0) return null;
           // The chart runs oldest -> newest left to right; the table puts the newest year
           // on top, matching the Returns tables further down the page.
@@ -917,7 +921,7 @@ export default function BacktestResults({
 
         // Determine if we should skip the start year (when start month is December)
         // Same logic as the bar chart - December start years only have one data point
-        const startDateObj = new Date(selectedDateRange.start);
+        const startDateObj = new Date(runStart);
         const startMonth = startDateObj.getMonth(); // 0-11, December = 11
         const startYear = startDateObj.getFullYear().toString();
         const skipStartYear = startMonth === 11; // December

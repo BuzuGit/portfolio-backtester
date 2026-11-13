@@ -30,12 +30,62 @@ export interface CorrelationsTabProps {
 export default function CorrelationsTab({
   assetData, assetLookup, filteredAssets, correlationPeriod, setCorrelationPeriod, renderFilters,
 }: CorrelationsTabProps) {
-  // The matrix, worked out again only when the data, the filtered assets or the period change
-  const tickerKey = filteredAssets.map(a => a.ticker).join('|');
+  // The matrix, worked out again only when the data, the filtered assets or the period change.
+  // (filteredAssets keeps the same identity until a filter changes: the main screen remembers it.)
   const { tickers, matrix } = useMemo(
-    () => correlationMatrix(assetData, tickerKey ? tickerKey.split('|') : [], correlationPeriod),
-    [assetData, tickerKey, correlationPeriod],
+    () => correlationMatrix(assetData, filteredAssets.map(a => a.ticker), correlationPeriod),
+    [assetData, filteredAssets, correlationPeriod],
   );
+
+  // The Risk / Return scatter's points: each filtered asset's CAGR and volatility over the period.
+  // Remembered like the matrix, so clicks elsewhere don't re-walk the price table for every asset.
+  const scatterData = useMemo(() => {
+    const monthsNeeded = correlationPeriod * 12;
+    // Slice the last N years of data (+1 row so we can compute the first monthly return)
+    const slicedData = assetData.slice(-(monthsNeeded + 1));
+
+    // Color palette for the dots — cycles if there are more than 20 assets
+    const DOT_COLORS = RETURN_MAP_ASSET_COLORS;
+
+    const points: { ticker: string; name: string; x: number; y: number; color: string }[] = [];
+    let colorIdx = 0;
+
+    for (const asset of filteredAssets) {
+      const ticker = asset.ticker;
+
+      // Require valid price at both ends of the slice — this enforces the "enough history" rule:
+      // if the asset didn't exist N years ago its first-row price will be 0/missing and it gets skipped
+      const firstPrice = Number(slicedData[0]?.[ticker]);
+      const lastPrice  = Number(slicedData[slicedData.length - 1]?.[ticker]);
+      if (!firstPrice || firstPrice <= 0 || !lastPrice || lastPrice <= 0) continue;
+
+      // CAGR for the period: ((endPrice / startPrice) ^ (1/years) - 1) × 100
+      const cagr = (Math.pow(lastPrice / firstPrice, 1 / correlationPeriod) - 1) * 100;
+
+      // Annualised volatility: std dev of monthly returns × sqrt(12) × 100
+      const monthlyReturns: number[] = [];
+      for (let i = 1; i < slicedData.length; i++) {
+        const p    = Number(slicedData[i][ticker]);
+        const prev = Number(slicedData[i - 1][ticker]);
+        if (p > 0 && prev > 0) monthlyReturns.push((p - prev) / prev);
+      }
+      if (monthlyReturns.length < 3) continue;
+
+      const mean     = monthlyReturns.reduce((s, r) => s + r, 0) / monthlyReturns.length;
+      const variance = monthlyReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / monthlyReturns.length;
+      const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;
+
+      points.push({
+        ticker,
+        name: asset.name,
+        x: parseFloat(volatility.toFixed(2)),
+        y: parseFloat(cagr.toFixed(2)),
+        color: DOT_COLORS[colorIdx % DOT_COLORS.length],
+      });
+      colorIdx++;
+    }
+    return points;
+  }, [assetData, filteredAssets, correlationPeriod]);
 
   return (
     <div className="mt-2">
@@ -153,51 +203,7 @@ export default function CorrelationsTab({
       {/* Only assets with full history for the period */}
       {/* ============================================ */}
       {(() => {
-        const monthsNeeded = correlationPeriod * 12;
-        // Slice the last N years of data (+1 row so we can compute the first monthly return)
-        const slicedData = assetData.slice(-(monthsNeeded + 1));
-
-        // Color palette for the dots — cycles if there are more than 20 assets
-        const DOT_COLORS = RETURN_MAP_ASSET_COLORS;
-
-        const scatterData: { ticker: string; name: string; x: number; y: number; color: string }[] = [];
-        let colorIdx = 0;
-
-        for (const asset of filteredAssets) {
-          const ticker = asset.ticker;
-
-          // Require valid price at both ends of the slice — this enforces the "enough history" rule:
-          // if the asset didn't exist N years ago its first-row price will be 0/missing and it gets skipped
-          const firstPrice = Number(slicedData[0]?.[ticker]);
-          const lastPrice  = Number(slicedData[slicedData.length - 1]?.[ticker]);
-          if (!firstPrice || firstPrice <= 0 || !lastPrice || lastPrice <= 0) continue;
-
-          // CAGR for the period: ((endPrice / startPrice) ^ (1/years) - 1) × 100
-          const cagr = (Math.pow(lastPrice / firstPrice, 1 / correlationPeriod) - 1) * 100;
-
-          // Annualised volatility: std dev of monthly returns × sqrt(12) × 100
-          const monthlyReturns: number[] = [];
-          for (let i = 1; i < slicedData.length; i++) {
-            const p    = Number(slicedData[i][ticker]);
-            const prev = Number(slicedData[i - 1][ticker]);
-            if (p > 0 && prev > 0) monthlyReturns.push((p - prev) / prev);
-          }
-          if (monthlyReturns.length < 3) continue;
-
-          const mean     = monthlyReturns.reduce((s, r) => s + r, 0) / monthlyReturns.length;
-          const variance = monthlyReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / monthlyReturns.length;
-          const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;
-
-          scatterData.push({
-            ticker,
-            name: asset.name,
-            x: parseFloat(volatility.toFixed(2)),
-            y: parseFloat(cagr.toFixed(2)),
-            color: DOT_COLORS[colorIdx % DOT_COLORS.length],
-          });
-          colorIdx++;
-        }
-
+        // (scatterData is worked out once per data / filter / period change, above)
         if (scatterData.length === 0) return null;
 
         // Compute axis domains with padding so dots and labels have room

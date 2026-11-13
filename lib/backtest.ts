@@ -83,6 +83,11 @@ export interface BacktestResult {
   returns: ReturnPoint[];
   stats: PortfolioStats;
   wipedOutDate?: string | null;  // Date a leveraged portfolio hit zero equity, or null if it survived
+  // What the run used, kept so everything shown under the results (the Rebalancing table, the
+  // annual and periodic charts) describes THIS run, even after the controls above are changed
+  // and before Run is pressed again.
+  settings: BacktestSettings;
+  data: AssetRow[];
 }
 
 /** Monthly returns organised by year. */

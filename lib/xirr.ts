@@ -2,6 +2,8 @@
   XIRR: the money-weighted annual return of a set of dated cash flows (as Excel's XIRR).
   Moved word for word from the main screen file; tests in lib/xirr.test.mjs.
 */
+// The ".ts" ending lets Node run this file's tests directly
+import { isAnnualisable } from './stats.ts';
 
 /**
  * XIRR (Extended Internal Rate of Return) — same concept as Excel's XIRR formula.
@@ -26,8 +28,9 @@ export const calculateXIRR = (cashFlows: { date: Date; amount: number }[]): numb
   // today's value, plus dividends) vs everything paid in — the same figure as the PnL %.
   // Measured from the first flow to the last: first buy -> today (open) or -> the sale (closed).
   // Every caller is on the Positions tab or the Markets Holdings page, so this applies to all.
+  // "Under a year" is the app's one rule, isAnnualisable in lib/stats.ts (under 360 days).
   const spanMs = Math.max(...cashFlows.map(cf => cf.date.getTime())) - Math.min(...cashFlows.map(cf => cf.date.getTime()));
-  if (spanMs < MS_PER_YEAR) {
+  if (!isAnnualisable(spanMs / MS_PER_YEAR)) {
     const paidIn = cashFlows.reduce((s, cf) => s + (cf.amount < 0 ? -cf.amount : 0), 0);
     const gotBack = cashFlows.reduce((s, cf) => s + (cf.amount > 0 ? cf.amount : 0), 0);
     return paidIn > 0 ? ((gotBack - paidIn) / paidIn) * 100 : null;
