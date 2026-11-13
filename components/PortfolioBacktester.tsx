@@ -44,6 +44,9 @@ import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersF
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
 import { buildReturnMatrix, buildCountryMatrix, summariseMatrix, currencyBasketMove, snapshotCategories, formatFxRate, MARKETS_PERIODS, MARKETS_COUNTRY, STATS_YEARS, COUNTRY_CURRENCIES, COUNTRY_NAMES, MarketsCurrency, MarketsPeriod, MarketRow, ValueWorking } from '@/lib/markets';
 import { buildHoldings, portfolioClassOf, MARKETS_HOLDINGS, HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, HoldingsCurrency, HoldingRow } from '@/lib/holdings';
+// The one place CAGR / volatility / Sharpe / drawdown are defined, so every tab agrees.
+// Sharpe is imported as `sharpeFor` because many functions here already have a local `sharpeRatio`.
+import { yearsBetween, isAnnualisable, cagrPct, periodReturns, annualisedVolPct, sharpeRatio as sharpeFor, drawdownsPct, maxDrawdownPct, longestUnderwater } from '@/lib/stats';
 import { EdoData, EDO_TICKER, EDO_CPI_TICKER, EDO_TAX_RATE, MARKETS_EDO, edoWindowReturn, withEdoColumn, edoChainOnRows, edoAfterTax, monthKeyOf, monthEndIso, daysBetween, todayIso } from '@/lib/edo';
 
 // ============================================
@@ -969,12 +972,12 @@ interface SignalChange {
 // Statistics for Buy & Hold vs Trend Following comparison
 interface TrendStats {
   finalAmount: number;       // Final value of $1 invested
-  cagr: number;              // Compound Annual Growth Rate %
+  cagr: number;              // Compound Annual Growth Rate % (plain total return under a year)
   totalReturn: number;       // Total return %
   stdDev: number;            // Annualized standard deviation %
   maxDrawdown: number;       // Maximum drawdown % (negative)
   currentDrawdown: number;   // Current drawdown % (negative or zero)
-  sharpeRatio: number;       // (CAGR - risk-free rate) / StdDev
+  sharpeRatio: number | null; // (CAGR - risk-free rate) / StdDev; null under a year
 }
 
 // Monthly returns for Trend Following analysis
@@ -1823,6 +1826,15 @@ const XIRR_HINT = 'XIRR: money-weighted return per year, each purchase, dividend
 // Same rule for the per-purchase CAGR columns in the Positions detail tables.
 const CAGR_LOT_HINT = 'CAGR: this purchase\'s return per year.\n'
   + 'Held less than a year: the plain Return % instead (not annualised).';
+// Same rule again for the statistics tables (Backtest, Annual Returns, Portfolio, Trend Following),
+// whose figures all come from lib/stats.ts.
+const CAGR_HINT = 'CAGR: compound return per year.\n'
+  + 'Periods under a year: the plain total return instead (not annualised).';
+const SHARPE_HINT = 'Sharpe = CAGR ÷ Vol, assuming a 0% risk-free rate.\n'
+  + 'Periods under a year: — (there is no annual return to divide).';
+// Trend Following is the one place a risk-free rate is subtracted: the cash rate set on that tab.
+const SHARPE_HINT_RF = 'Sharpe = (CAGR − the risk-free rate set above) ÷ Std Dev.\n'
+  + 'Periods under a year: — (there is no annual return to divide).';
 
 // Currency symbols for display formatting
 const CURRENCY_SYMBOLS: { [key: string]: string } = {
@@ -5156,67 +5168,36 @@ const PortfolioBacktester = () => {
     // Total return percentage
     const totalReturn = ((endValue - startValue) / startValue) * 100;
 
-    // Calculate time period in years
-    const startDate = new Date(returns[0].date);
-    const endDate = new Date(returns[returns.length - 1].date);
-    const years = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    // Time period in years
+    const years = yearsBetween(returns[0].date, returns[returns.length - 1].date);
 
-    // CAGR: Compound Annual Growth Rate
-    // Formula: (EndValue/StartValue)^(1/years) - 1
-    const cagr = years > 0 ? (Math.pow(endValue / startValue, 1 / years) - 1) * 100 : 0;
+    // CAGR: Compound Annual Growth Rate (lib/stats). Under a year it is the plain total return.
+    const cagr = cagrPct(startValue, endValue, years);
 
-    // Calculate periodic returns for volatility.
-    // The `> 0` guard matters only for wiped-out leveraged portfolios: once the value is frozen at
-    // zero, dividing by it would give Infinity/NaN and poison every statistic below. Skipping those
-    // dead months leaves the stats describing the portfolio's actual life. For any portfolio that
-    // never hits zero (i.e. every portfolio before this feature existed) nothing changes.
-    const periodicReturns: number[] = [];
-    for (let i = 1; i < returns.length; i++) {
-      if (returns[i - 1].value > 0) {
-        periodicReturns.push((returns[i].value - returns[i - 1].value) / returns[i - 1].value);
-      }
-    }
-
-    // Volatility: standard deviation of returns, annualized
-    const mean = periodicReturns.length > 0 ? periodicReturns.reduce((sum, r) => sum + r, 0) / periodicReturns.length : 0;
-    const variance = periodicReturns.length > 0 ? periodicReturns.map(r => Math.pow(r - mean, 2)).reduce((sum, sq) => sum + sq, 0) / periodicReturns.length : 0;
-    const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;  // Annualized (assuming monthly data)
+    // Volatility: standard deviation of the monthly returns, annualised (× √12).
+    // periodReturns skips months that start from zero, which only happens to a wiped-out
+    // leveraged portfolio: dividing by zero would poison every statistic below.
+    const volatility = annualisedVolPct(periodReturns(returns.map(r => r.value)), 12);
 
     // Maximum drawdown: worst peak-to-trough decline
-    const maxDrawdown = Math.min(...returns.map(r => r.drawdown));
+    const drawdowns = returns.map(r => r.drawdown);
+    const maxDrawdown = Math.min(...drawdowns);
 
     // Longest drawdown duration: how many months the portfolio stayed underwater (below its all-time high)
-    let longestDDMonths = 0;
-    let currentDDMonths = 0;
-    for (let i = 0; i < returns.length; i++) {
-      if (returns[i].drawdown < 0) {
-        // Portfolio is underwater — count this month
-        currentDDMonths++;
-      } else {
-        // Portfolio recovered to a new high — check if this streak was the longest
-        if (currentDDMonths > longestDDMonths) {
-          longestDDMonths = currentDDMonths;
-        }
-        currentDDMonths = 0;
-      }
-    }
-    // Check if we ended while still underwater (the final streak might be the longest)
-    if (currentDDMonths > longestDDMonths) {
-      longestDDMonths = currentDDMonths;
-    }
+    const longestDDMonths = longestUnderwater(drawdowns);
 
     // Current drawdown
     const currentDrawdown = returns[returns.length - 1].drawdown;
 
-    // Sharpe Ratio: risk-adjusted return (simplified, assuming 0% risk-free rate)
-    const sharpeRatio = volatility > 0 ? cagr / volatility : 0;
+    // Sharpe Ratio: CAGR ÷ volatility, assuming a 0% risk-free rate. null (a dash) under a year.
+    const sharpeRatio = sharpeFor(cagr, volatility, years);
 
     return {
       name: portfolio.name,
       totalReturn: totalReturn.toFixed(2),
       cagr: cagr.toFixed(2),
       volatility: volatility.toFixed(2),
-      sharpeRatio: sharpeRatio.toFixed(2),
+      sharpeRatio: sharpeRatio === null ? '—' : sharpeRatio.toFixed(2),
       maxDrawdown: maxDrawdown.toFixed(2),
       longestDrawdown: formatPeriod(longestDDMonths),
       currentDrawdown: currentDrawdown.toFixed(2),
@@ -6246,8 +6227,8 @@ const PortfolioBacktester = () => {
    */
   const calculateCAGR = (startPrice: number, endPrice: number, months: number): number => {
     if (startPrice <= 0 || months <= 0) return 0;
-    const years = months / 12;
-    return (Math.pow(endPrice / startPrice, 1 / years) - 1) * 100;
+    // lib/stats: under 12 months this is the plain total return, not annualised
+    return cagrPct(startPrice, endPrice, months / 12);
   };
 
   /**
@@ -6282,41 +6263,12 @@ const PortfolioBacktester = () => {
     // Need at least 2 data points to calculate returns
     if (prices.length < 2) return null;
 
-    // Calculate monthly returns: (currentPrice - previousPrice) / previousPrice
-    const monthlyReturns: number[] = [];
-    for (let i = 1; i < prices.length; i++) {
-      monthlyReturns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
-    }
+    // Volatility: annualised standard deviation of the monthly returns (lib/stats, as Backtest)
+    const volatility = annualisedVolPct(periodReturns(prices), 12);
 
-    // Volatility: annualized standard deviation of monthly returns
-    // Same formula as Backtest Statistics: sqrt(variance) * sqrt(12) * 100
-    const mean = monthlyReturns.reduce((sum, r) => sum + r, 0) / monthlyReturns.length;
-    const variance = monthlyReturns.map(r => Math.pow(r - mean, 2)).reduce((sum, sq) => sum + sq, 0) / monthlyReturns.length;
-    const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;
-
-    // Maximum drawdown and longest drawdown duration in a single pass
-    // MaxDD: worst peak-to-trough decline (same as Backtest Statistics)
-    // Longest DD: consecutive months underwater below peak (same as Backtest Statistics)
-    let peak = prices[0];
-    let maxDrawdown = 0;
-    let longestDDMonths = 0;
-    let currentDDMonths = 0;
-    for (const price of prices) {
-      if (price >= peak) {
-        // At or above peak - update peak and check if this DD streak was longest
-        peak = price;
-        if (currentDDMonths > longestDDMonths) longestDDMonths = currentDDMonths;
-        currentDDMonths = 0;
-      } else {
-        // Below peak - track drawdown depth and count months underwater
-        const drawdown = ((price - peak) / peak) * 100;
-        if (drawdown < maxDrawdown) maxDrawdown = drawdown;
-        currentDDMonths++;
-      }
-    }
-    // Check if we ended while still underwater
-    if (currentDDMonths > longestDDMonths) longestDDMonths = currentDDMonths;
-    return { volatility, maxDrawdown, longestDDMonths };
+    // Max drawdown (worst peak-to-trough fall) and longest run of months below a previous peak
+    const drawdowns = drawdownsPct(prices);
+    return { volatility, maxDrawdown: maxDrawdownPct(drawdowns), longestDDMonths: longestUnderwater(drawdowns) };
   };
 
   /**
@@ -8278,43 +8230,26 @@ const PortfolioBacktester = () => {
     // Total return
     const totalReturn = ((endValue - startValue) / startValue) * 100;
 
-    // Calculate years
-    const startDate = new Date(dates[0]);
-    const endDate = new Date(dates[dates.length - 1]);
-    const years = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    // Years covered
+    const years = yearsBetween(dates[0], dates[dates.length - 1]);
 
-    // CAGR
-    const cagr = years > 0 ? (Math.pow(endValue / startValue, 1 / years) - 1) * 100 : 0;
+    // CAGR (lib/stats): under a year it is the plain total return
+    const cagr = cagrPct(startValue, endValue, years);
 
-    // Calculate monthly returns for standard deviation
-    const monthlyReturns: number[] = [];
-    for (let i = 1; i < equityCurve.length; i++) {
-      monthlyReturns.push((equityCurve[i] - equityCurve[i - 1]) / equityCurve[i - 1]);
-    }
-
-    // Standard deviation (annualized)
-    const mean = monthlyReturns.reduce((sum, r) => sum + r, 0) / monthlyReturns.length;
-    const variance = monthlyReturns.map(r => Math.pow(r - mean, 2)).reduce((sum, sq) => sum + sq, 0) / monthlyReturns.length;
-    const stdDev = Math.sqrt(variance) * Math.sqrt(12) * 100;  // Annualized
+    // Standard deviation of the monthly returns, annualised (× √12)
+    const stdDev = annualisedVolPct(periodReturns(equityCurve), 12);
 
     // Drawdowns
-    let peak = 0;
-    let maxDrawdown = 0;
-    for (const value of equityCurve) {
-      if (value > peak) {
-        peak = value;
-      }
-      const drawdown = ((value - peak) / peak) * 100;
-      if (drawdown < maxDrawdown) {
-        maxDrawdown = drawdown;
-      }
-    }
+    const drawdowns = drawdownsPct(equityCurve);
+    const maxDrawdown = maxDrawdownPct(drawdowns);
 
     // Current drawdown
-    const currentDrawdown = ((endValue - peak) / peak) * 100;
+    const currentDrawdown = drawdowns[drawdowns.length - 1];
 
-    // Sharpe Ratio: (CAGR - risk-free rate) / StdDev
-    const sharpeRatio = stdDev > 0 ? (cagr - riskFreeRate * 100) / stdDev : 0;
+    // Sharpe Ratio: (CAGR - risk-free rate) / StdDev. This is the only Sharpe in the app that
+    // subtracts a risk-free rate: the cash rate the strategy earns is an input on this tab.
+    // null (a dash) under a year.
+    const sharpeRatio = sharpeFor(cagr, stdDev, years, riskFreeRate * 100);
 
     return {
       finalAmount: endValue,
@@ -9563,9 +9498,9 @@ const PortfolioBacktester = () => {
                     <tr className="border-b-2 border-gray-200">
                       <th className="text-left py-2 px-2">Portfolio</th>
                       <th className="text-right py-2 px-2">Return</th>
-                      <th className="text-right py-2 px-2">CAGR</th>
+                      <th className="text-right py-2 px-2 cursor-help" title={CAGR_HINT}>CAGR</th>
                       <th className="text-right py-2 px-2">Vol</th>
-                      <th className="text-right py-2 px-2">Sharpe</th>
+                      <th className="text-right py-2 px-2 cursor-help" title={SHARPE_HINT}>Sharpe</th>
                       <th className="text-right py-2 px-2">Max DD</th>
                       <th className="text-right py-2 px-2">Longest DD</th>
                       <th className="text-right py-2 px-2">Curr DD</th>
@@ -10834,7 +10769,8 @@ const PortfolioBacktester = () => {
                     const cagr = calculateCAGR(priceRange.firstPrice, priceRange.lastPrice, priceRange.months);
                     const stats = calculateAssetStats(ticker, priceRange.firstDate, priceRange.lastDate);
                     if (!stats || stats.volatility <= 0) return -Infinity;
-                    return cagr / stats.volatility;
+                    // Under a year there is no Sharpe (a dash), so it sorts with the blanks
+                    return sharpeFor(cagr, stats.volatility, priceRange.months / 12) ?? -Infinity;
                   }
 
                   // MaxDD column - maximum drawdown (less negative = better)
@@ -10914,6 +10850,7 @@ const PortfolioBacktester = () => {
                           {/* CAGR column - compound annual growth rate */}
                           <th
                             className={getSortableHeaderClass('CAGR', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[60px]')}                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'CAGR' ? null : 'CAGR')}
+                            title={CAGR_HINT}
                           >
                             CAGR
                           </th>
@@ -10926,6 +10863,7 @@ const PortfolioBacktester = () => {
                           {/* Sharpe Ratio column - risk-adjusted return */}
                           <th
                             className={getSortableHeaderClass('Sharpe', 'text-right py-2 px-2 sticky top-0 z-20 min-w-[55px]')}                            onClick={() => setAnnualReturnsSortColumn(annualReturnsSortColumn === 'Sharpe' ? null : 'Sharpe')}
+                            title={SHARPE_HINT}
                           >
                             Sharpe
                           </th>
@@ -11054,7 +10992,8 @@ const PortfolioBacktester = () => {
                               // Calculate volatility and max drawdown (same methodology as Backtest Statistics)
                               const stats = calculateAssetStats(asset.ticker, priceRange.firstDate, priceRange.lastDate);
                               const volatility = stats ? stats.volatility : null;
-                              const sharpeRatio = (volatility !== null && volatility > 0) ? cagr / volatility : null;
+                              // A dash under a year, or when there was no volatility to divide by
+                              const sharpeRatio = (volatility !== null && volatility > 0) ? sharpeFor(cagr, volatility, priceRange.months / 12) : null;
                               const maxDrawdown = stats ? stats.maxDrawdown : null;
 
                               return (
@@ -14471,13 +14410,13 @@ const PortfolioBacktester = () => {
                                 const startCpi = cpiAt(series[0].date);
                                 const endCpi = cpiAt(series[series.length - 1].date);
                                 if (!startCpi || !endCpi || startCpi <= 0) return null;
-                                const yrs = (new Date(series[series.length - 1].date).getTime()
-                                           - new Date(series[0].date).getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+                                const yrs = yearsBetween(series[0].date, series[series.length - 1].date);
                                 if (yrs <= 0) return null;
                                 const realGrowth = (statPoints[statPoints.length - 1].value / statPoints[0].value)
                                                  * (startCpi / endCpi);
                                 if (realGrowth <= 0) return null;
-                                return (Math.pow(realGrowth, 1 / yrs) - 1) * 100;
+                                // lib/stats: under a year, the plain real return (not annualised)
+                                return cagrPct(1, realGrowth, yrs);
                               })();
 
                               // ---- Best / Worst calendar year within the visible period ----
@@ -14752,7 +14691,7 @@ const PortfolioBacktester = () => {
                                       </th>
                                       <th className="text-right py-2 px-2">Total Return</th>
                                       <th className="text-right py-2 px-2">100 → ?</th>
-                                      <th className="text-right py-2 px-2">CAGR</th>
+                                      <th className="text-right py-2 px-2 cursor-help" title={CAGR_HINT}>CAGR</th>
                                       <th className="text-right py-2 px-2"
                                           title={'Real CAGR — the annual growth in PURCHASING POWER, after the inflation of the currency shown above.\n\n'
                                             + 'Returns compound, so this is not simply CAGR minus inflation: the two are divided, not subtracted. 12.8% nominal against 4.0% inflation is 8.5% real, not 8.8%.\n\n'
@@ -14762,7 +14701,7 @@ const PortfolioBacktester = () => {
                                         Real
                                       </th>
                                       <th className="text-right py-2 px-2">Vol</th>
-                                      <th className="text-right py-2 px-2">Sharpe</th>
+                                      <th className="text-right py-2 px-2 cursor-help" title={SHARPE_HINT}>Sharpe</th>
                                       <th className="text-right py-2 px-2">Max DD</th>
                                       <th className="text-right py-2 px-2">Longest DD</th>
                                       <th className="text-right py-2 px-2">Curr DD</th>
@@ -16962,22 +16901,27 @@ const PortfolioBacktester = () => {
                                   {analysis.trendFollowingStats.currentDrawdown.toFixed(2)}%
                                 </td>
                               </tr>
-                              {/* Sharpe Ratio (higher is better) */}
-                              <tr className="border-b border-gray-100">
-                                <td className="py-2 px-3 font-medium text-gray-700">Sharpe Ratio</td>
-                                <td className={`text-right py-2 px-3 ${
-                                  analysis.buyHoldStats.sharpeRatio >= analysis.trendFollowingStats.sharpeRatio
-                                    ? 'font-semibold text-blue-700' : 'text-gray-600'
-                                }`}>
-                                  {analysis.buyHoldStats.sharpeRatio.toFixed(2)}
-                                </td>
-                                <td className={`text-right py-2 px-3 ${
-                                  analysis.trendFollowingStats.sharpeRatio >= analysis.buyHoldStats.sharpeRatio
-                                    ? 'font-semibold text-green-700' : 'text-gray-600'
-                                }`}>
-                                  {analysis.trendFollowingStats.sharpeRatio.toFixed(2)}
-                                </td>
-                              </tr>
+                              {/* Sharpe Ratio (higher is better). A dash under a year, where there
+                                  is no annual return to divide; then neither side is highlighted. */}
+                              {(() => {
+                                const bh = analysis.buyHoldStats.sharpeRatio;
+                                const tf = analysis.trendFollowingStats.sharpeRatio;
+                                return (
+                                  <tr className="border-b border-gray-100">
+                                    <td className="py-2 px-3 font-medium text-gray-700" title={SHARPE_HINT_RF}>Sharpe Ratio</td>
+                                    <td className={`text-right py-2 px-3 ${
+                                      bh !== null && tf !== null && bh >= tf ? 'font-semibold text-blue-700' : 'text-gray-600'
+                                    }`}>
+                                      {bh === null ? '—' : bh.toFixed(2)}
+                                    </td>
+                                    <td className={`text-right py-2 px-3 ${
+                                      bh !== null && tf !== null && tf >= bh ? 'font-semibold text-green-700' : 'text-gray-600'
+                                    }`}>
+                                      {tf === null ? '—' : tf.toFixed(2)}
+                                    </td>
+                                  </tr>
+                                );
+                              })()}
                             </tbody>
                           </table>
                         </div>
@@ -18239,57 +18183,29 @@ const PortfolioBacktester = () => {
                       const totalReturn = ((endValue - startValue) / startValue) * 100;
 
                       // Time period in years
-                      const startDate = new Date(prices[0].date);
-                      const endDate = new Date(prices[prices.length - 1].date);
-                      const years = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+                      const years = yearsBetween(prices[0].date, prices[prices.length - 1].date);
 
-                      // CAGR
-                      const cagr = years > 0 ? (Math.pow(endValue / startValue, 1 / years) - 1) * 100 : 0;
+                      // CAGR, monthly volatility and Sharpe, all from lib/stats (as on the Backtest
+                      // tab). Under a year: CAGR is the plain total return and Sharpe is a dash.
+                      const cagr = cagrPct(startValue, endValue, years);
+                      const volatility = annualisedVolPct(periodReturns(prices.map(p => p.value)), 12);
+                      const sharpe = sharpeFor(cagr, volatility, years);
 
-                      // Periodic returns for volatility (monthly)
-                      const periodicReturns: number[] = [];
-                      for (let i = 1; i < prices.length; i++) {
-                        periodicReturns.push((prices[i].value - prices[i - 1].value) / prices[i - 1].value);
-                      }
-                      const mean = periodicReturns.reduce((sum, r) => sum + r, 0) / periodicReturns.length;
-                      const variance = periodicReturns.map(r => Math.pow(r - mean, 2)).reduce((sum, sq) => sum + sq, 0) / periodicReturns.length;
-                      const volatility = Math.sqrt(variance) * Math.sqrt(12) * 100;
-
-                      // Sharpe (simplified, 0% risk-free rate)
-                      const sharpe = volatility > 0 ? cagr / volatility : 0;
-
-                      // Drawdown series
-                      let peak = prices[0].value;
-                      const drawdowns: number[] = [];
-                      for (const p of prices) {
-                        if (p.value > peak) peak = p.value;
-                        drawdowns.push(((p.value - peak) / peak) * 100);
-                      }
-                      const maxDD = Math.min(...drawdowns);
-
-                      // Longest drawdown (consecutive months underwater)
-                      let longestDDMonths = 0;
-                      let currentDDMonths = 0;
-                      for (const dd of drawdowns) {
-                        if (dd < 0) { currentDDMonths++; }
-                        else {
-                          if (currentDDMonths > longestDDMonths) longestDDMonths = currentDDMonths;
-                          currentDDMonths = 0;
-                        }
-                      }
-                      if (currentDDMonths > longestDDMonths) longestDDMonths = currentDDMonths;
-
-                      // Current drawdown
+                      // Drawdowns: the deepest, the longest run of months underwater, and today's
+                      const drawdowns = drawdownsPct(prices.map(p => p.value));
+                      const maxDD = maxDrawdownPct(drawdowns);
+                      const longestDDMonths = longestUnderwater(drawdowns);
                       const currDD = drawdowns[drawdowns.length - 1];
 
-                      // CPI Inflation: total return and CAGR over the same period
+                      // CPI Inflation: total return and CAGR over the same period (the CAGR follows
+                      // the same under-a-year rule, so Real CAGR compares like with like)
                       let cumInflation = 0;
                       let annInflation = 0;
                       const startCpi = Number(filteredRows[0][ps.cpiTicker]);
                       const endCpi = Number(filteredRows[filteredRows.length - 1][ps.cpiTicker]);
                       if (startCpi > 0 && endCpi > 0) {
                         cumInflation = ((endCpi - startCpi) / startCpi) * 100;
-                        annInflation = years > 0 ? (Math.pow(endCpi / startCpi, 1 / years) - 1) * 100 : 0;
+                        annInflation = cagrPct(startCpi, endCpi, years);
                       }
 
                       // Real CAGR: nominal CAGR adjusted for inflation
@@ -18306,7 +18222,7 @@ const PortfolioBacktester = () => {
                         annInflation: annInflation.toFixed(2),
                         realCagr: realCagr.toFixed(2),
                         volatility: volatility.toFixed(2),
-                        sharpe: sharpe.toFixed(2),
+                        sharpe: sharpe === null ? '—' : sharpe.toFixed(2),
                         maxDD: maxDD.toFixed(2),
                         longestDD: formatPeriod(longestDDMonths),
                         currDD: currDD.toFixed(2),
@@ -18363,11 +18279,11 @@ const PortfolioBacktester = () => {
                               <th className="text-left py-2 px-2">Portfolio</th>
                               <th className="text-right py-2 px-2">Return</th>
                               <th className="text-right py-2 px-2">Cum Inflation</th>
-                              <th className="text-right py-2 px-2">CAGR</th>
+                              <th className="text-right py-2 px-2 cursor-help" title={CAGR_HINT}>CAGR</th>
                               <th className="text-right py-2 px-2">Ann. Inflation</th>
                               <th className="text-right py-2 px-2">Real CAGR</th>
                               <th className="text-right py-2 px-2">Vol</th>
-                              <th className="text-right py-2 px-2">Sharpe</th>
+                              <th className="text-right py-2 px-2 cursor-help" title={SHARPE_HINT}>Sharpe</th>
                               <th className="text-right py-2 px-2">Max DD</th>
                               <th className="text-right py-2 px-2">Longest DD</th>
                               <th className="text-right py-2 px-2">Curr DD</th>
@@ -18513,46 +18429,27 @@ const PortfolioBacktester = () => {
                     }));
 
                     const lastRow = chartData[chartData.length - 1];
-                    const years = (new Date(lastRow.date).getTime() - new Date(chartData[0].date).getTime()) / (365.25 * 86400000);
+                    const years = yearsBetween(chartData[0].date, lastRow.date);
+                    // Under a year nothing is annualised: the CAGR rows show plain returns, are
+                    // labelled that way below, and Sharpe is a dash (lib/stats).
+                    const annualised = isAnnualisable(years);
 
                     // ---- 4. Statistics ----
-                    const nominalCAGR  = years > 0 ? (Math.pow(lastRow.nav  / 100, 1 / years) - 1) * 100 : 0;
-                    const annInflation = years > 0 ? (Math.pow(lastRow.infl / 100, 1 / years) - 1) * 100 : 0;
+                    const nominalCAGR  = cagrPct(100, lastRow.nav, years);
+                    const annInflation = cagrPct(100, lastRow.infl, years);
                     const realCAGR     = ((1 + nominalCAGR / 100) / (1 + annInflation / 100) - 1) * 100;
 
                     // Annualised volatility from daily returns (× sqrt(252))
-                    const dailyReturns: number[] = [];
-                    for (let i = 1; i < chartData.length; i++) {
-                      if (chartData[i - 1].nav > 0) dailyReturns.push((chartData[i].nav - chartData[i - 1].nav) / chartData[i - 1].nav);
-                    }
-                    const drMean     = dailyReturns.reduce((s, r) => s + r, 0) / (dailyReturns.length || 1);
-                    const drVariance = dailyReturns.reduce((s, r) => s + (r - drMean) ** 2, 0) / (dailyReturns.length || 1);
-                    const annVol     = Math.sqrt(drVariance) * Math.sqrt(252) * 100;
-                    const sharpe     = annVol > 0 ? nominalCAGR / annVol : 0;
+                    const annVol     = annualisedVolPct(periodReturns(chartData.map(r => r.nav)), 252);
+                    const sharpe     = sharpeFor(nominalCAGR, annVol, years);
 
-                    // Drawdown stats on raw NAV values (not indexed — same result, just clearer intent)
-                    const navVals = periodData.map(r => r[navKey] as number);
-                    let ddPeak = navVals[0];
-                    let maxDD = 0;
-                    let longestDD = 0;
-                    let currStreak = 0;
-                    for (const v of navVals) {
-                      if (v >= ddPeak) {
-                        ddPeak = v;
-                        if (currStreak > longestDD) longestDD = currStreak;
-                        currStreak = 0;
-                      } else {
-                        const dd = ((v - ddPeak) / ddPeak) * 100;
-                        if (dd < maxDD) maxDD = dd;
-                        currStreak++;
-                      }
-                    }
-                    if (currStreak > longestDD) longestDD = currStreak;
-
+                    // Drawdown stats on raw NAV values (not indexed — same result, just clearer intent).
+                    // Longest DD here counts trading days, since the points are daily.
+                    const navDrawdowns = drawdownsPct(periodData.map(r => r[navKey] as number));
+                    const maxDD = maxDrawdownPct(navDrawdowns);
+                    const longestDD = longestUnderwater(navDrawdowns);
                     // Current drawdown: last price vs running peak through entire period
-                    let runPeak = navVals[0];
-                    for (const v of navVals) { if (v > runPeak) runPeak = v; }
-                    const currDD = ((navVals[navVals.length - 1] - runPeak) / runPeak) * 100;
+                    const currDD = navDrawdowns[navDrawdowns.length - 1];
 
                     // ---- 4b. Benchmark statistics (monthly data) ----
                     // CAGR uses the same span of years as the portfolio, so the two are directly
@@ -18560,27 +18457,19 @@ const PortfolioBacktester = () => {
                     // benchmark prices), and drawdowns are measured on month-end levels, so they
                     // can only be shallower than a daily measurement would find. Longest DD is
                     // left blank: counting days from monthly points would only pretend precision.
-                    let benchStats: { cagr: number; real: number; vol: number; sharpe: number; maxDD: number; currDD: number } | null = null;
+                    let benchStats: { cagr: number; real: number; vol: number; sharpe: number | null; maxDD: number; currDD: number } | null = null;
                     if (benchDef && benchMonthly.length >= 2) {
                       const bLast = benchMonthly[benchMonthly.length - 1];
-                      const cagr  = years > 0 ? (Math.pow(bLast / 100, 1 / years) - 1) * 100 : 0;
-                      const mMean = benchMonthReturns.reduce((s, r) => s + r, 0) / benchMonthReturns.length;
-                      const mVar  = benchMonthReturns.reduce((s, r) => s + (r - mMean) ** 2, 0) / benchMonthReturns.length;
-                      const vol   = Math.sqrt(mVar) * Math.sqrt(12) * 100;
-                      let bPeak = benchMonthly[0];
-                      let bMaxDD = 0;
-                      for (const v of benchMonthly) {
-                        if (v > bPeak) bPeak = v;
-                        const dd = ((v - bPeak) / bPeak) * 100;
-                        if (dd < bMaxDD) bMaxDD = dd;
-                      }
+                      const cagr  = cagrPct(100, bLast, years);
+                      const vol   = annualisedVolPct(benchMonthReturns, 12);
+                      const bDrawdowns = drawdownsPct(benchMonthly);
                       benchStats = {
                         cagr,
                         real:   ((1 + cagr / 100) / (1 + annInflation / 100) - 1) * 100,
                         vol,
-                        sharpe: vol > 0 ? cagr / vol : 0,
-                        maxDD:  bMaxDD,
-                        currDD: ((bLast - bPeak) / bPeak) * 100,
+                        sharpe: sharpeFor(cagr, vol, years),
+                        maxDD:  maxDrawdownPct(bDrawdowns),
+                        currDD: bDrawdowns[bDrawdowns.length - 1],
                       };
                     }
 
@@ -18634,16 +18523,17 @@ const PortfolioBacktester = () => {
                     // under it (phones). 4th/5th entries = the benchmark's value and colour (null =
                     // no benchmark figure).
                     const navStatRows = [
-                      ['CAGR',        `${nominalCAGR.toFixed(1)}%`,  nominalCAGR  >= 0 ? GAIN : LOSS,
+                      // Under a year the first three rows are plain returns, so they say so
+                      [annualised ? 'CAGR' : 'Return', `${nominalCAGR.toFixed(1)}%`,  nominalCAGR  >= 0 ? GAIN : LOSS,
                         benchStats && `${benchStats.cagr.toFixed(1)}%`, benchStats && (benchStats.cagr >= 0 ? GAIN : LOSS)],
-                      ['Ann. Infl.',  `${annInflation.toFixed(1)}%`, MUTED,
+                      [annualised ? 'Ann. Infl.' : 'Inflation', `${annInflation.toFixed(1)}%`, MUTED,
                         benchStats && `${annInflation.toFixed(1)}%`, MUTED],
-                      ['Real CAGR',   `${realCAGR.toFixed(1)}%`,     realCAGR     >= 0 ? GAIN : LOSS,
+                      [annualised ? 'Real CAGR' : 'Real Return', `${realCAGR.toFixed(1)}%`,     realCAGR     >= 0 ? GAIN : LOSS,
                         benchStats && `${benchStats.real.toFixed(1)}%`, benchStats && (benchStats.real >= 0 ? GAIN : LOSS)],
                       ['Ann. Vol.',   `${annVol.toFixed(1)}%`,       INK_SOFT,
                         benchStats && `${benchStats.vol.toFixed(1)}%`, INK_SOFT],
-                      ['Sharpe',      sharpe.toFixed(2),             INK_SOFT,
-                        benchStats && benchStats.sharpe.toFixed(2), INK_SOFT],
+                      ['Sharpe',      sharpe === null ? '—' : sharpe.toFixed(2), INK_SOFT,
+                        benchStats && (benchStats.sharpe === null ? '—' : benchStats.sharpe.toFixed(2)), INK_SOFT],
                       ['Max DD',      `${maxDD.toFixed(1)}%`,        LOSS,
                         benchStats && `${benchStats.maxDD.toFixed(1)}%`, LOSS],
                       ['Curr DD',     `${currDD.toFixed(1)}%`,       currDD < -0.01 ? LOSS : GAIN,
