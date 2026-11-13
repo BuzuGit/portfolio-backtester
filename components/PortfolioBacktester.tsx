@@ -896,7 +896,7 @@ const PortfolioBacktester = () => {
   const triedSavedSheetRef = useRef(false);
   // "30 Oct 21:14", the same style as the "Fetched" line in the menu
   const fmtStamp = (d: Date) =>
-    `${d.getDate()} ${MONTH_LABELS[d.getMonth()]} ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
+    `${d.getDate()} ${MONTH_ABBR[d.getMonth()]} ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
 
   /**
    * Fetches fresh data from the Google Sheet.
@@ -1271,14 +1271,15 @@ const PortfolioBacktester = () => {
    * Returns only assets that match ALL selected criteria (AND logic).
    * Empty asset class, currency, or subcategory fields are treated as matching any selection.
    */
-  const getFilteredAssetLookup = (): typeof assetLookup => {
-    return assetLookup.filter(asset =>
-      selectedAssetTickers.includes(asset.ticker) &&
-      (asset.assetClass === '' || selectedAssetClasses.includes(asset.assetClass)) &&
-      (asset.currency === '' || selectedCurrencies.includes(asset.currency)) &&
-      (asset.assetSubcategory === '' || selectedAssetSubcategories.includes(asset.assetSubcategory))
-    );
-  };
+  // Remembered, so the list keeps the same identity until the lookup or a filter changes: the
+  // tabs that remember calculations on it (Correlations) then don't redo them on every click.
+  const filteredAssetLookup = useMemo(() => assetLookup.filter(asset =>
+    selectedAssetTickers.includes(asset.ticker) &&
+    (asset.assetClass === '' || selectedAssetClasses.includes(asset.assetClass)) &&
+    (asset.currency === '' || selectedCurrencies.includes(asset.currency)) &&
+    (asset.assetSubcategory === '' || selectedAssetSubcategories.includes(asset.assetSubcategory))
+  ), [assetLookup, selectedAssetTickers, selectedAssetClasses, selectedCurrencies, selectedAssetSubcategories]);
+  const getFilteredAssetLookup = (): typeof assetLookup => filteredAssetLookup;
 
   /**
    * Selects or deselects all assets at once.
@@ -1726,9 +1727,12 @@ const PortfolioBacktester = () => {
     overrides?: { start?: string; end?: string; rebalanceFreq?: string },
   ): ReturnPoint[] | null => portfolioReturns(portfolio, data, backtestSettings(overrides));
 
-  /** The month-by-month Rebalancing table: the same simulation the chart line comes from. */
+  /**
+   * The month-by-month Rebalancing table: the same simulation the chart line comes from, run with
+   * the settings and data that result was produced with (not whatever the controls show now).
+   */
   const getRebalancingDetails = (result: BacktestResult): RebalancingRow[] =>
-    (assetData ? simulatePortfolio(result.portfolio, assetData, backtestSettings()) : []);
+    simulatePortfolio(result.portfolio, result.data, result.settings);
 
   /**
    * Builds chart data for the Annual Returns bar chart.
@@ -2234,8 +2238,6 @@ const PortfolioBacktester = () => {
   // The chart data for one ticker (components/charts.tsx), on this screen's price table
   const getMonthlyChartData = (...args: ChartArgs) => monthlyChartData(assetData, getAssetCurrency, ...args);
 
-  const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
 
   // ============================================
   // PORTFOLIO TAB HELPER FUNCTIONS
@@ -2287,14 +2289,17 @@ const PortfolioBacktester = () => {
       return;
     }
 
+    // The settings this run uses, captured once and kept with every result (see BacktestResult)
+    const settings = backtestSettings();
+
     // Calculate returns for each portfolio
     const results = portfolios.map(portfolio => {
-      const returns = calculatePortfolioReturns(portfolio, assetData);
+      const returns = portfolioReturns(portfolio, assetData, settings);
       const stats = calculateStatistics(returns, portfolio);
-      // A value of zero can only come from the liquidation guard in calculatePortfolioReturns
+      // A value of zero can only come from the liquidation guard in the engine
       // (a normal portfolio always has some value left), so the first zero is the wipeout date.
       const wipedOutDate = returns?.find(r => r.value <= 0)?.date ?? null;
-      return { portfolio, returns: returns!, stats: stats!, wipedOutDate };
+      return { portfolio, returns: returns!, stats: stats!, wipedOutDate, settings, data: assetData };
     }).filter(r => r.returns !== null);  // Filter out invalid portfolios
 
     if (results.length === 0) {
@@ -2563,7 +2568,7 @@ const PortfolioBacktester = () => {
   const fmtNavDate = (iso: string) => {
     // Built from the "YYYY-MM-DD" parts directly, so no timezone can shift it by a day
     const [y, m, d] = iso.split('-').map(Number);
-    return `${d} ${MONTH_LABELS[m - 1]} ${y}`;
+    return `${d} ${MONTH_ABBR[m - 1]} ${y}`;
   };
   const navToday = localTodayIso();
   const lastPriceDate = assetData && assetData.length > 0 ? assetData[assetData.length - 1].date : '';
@@ -2571,7 +2576,7 @@ const PortfolioBacktester = () => {
     ? dailyData[dailyData.length - 1].date
     : lastPriceDate && lastPriceDate > navToday ? navToday : lastPriceDate;
   const fetchedLabel = lastFetchedAt
-    ? `${lastFetchedAt.getDate()} ${MONTH_LABELS[lastFetchedAt.getMonth()]} `
+    ? `${lastFetchedAt.getDate()} ${MONTH_ABBR[lastFetchedAt.getMonth()]} `
       + lastFetchedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
     : '';
   const navFooter = latestDataDate ? (

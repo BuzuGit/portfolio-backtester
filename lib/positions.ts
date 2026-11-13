@@ -27,6 +27,7 @@ import {
   TransactionRow, ClosedPositionRow, FlowType, FLOW_PURCHASE, FLOW_SALE, FLOW_DIVIDEND,
   UnitFee, unitFeeQty,
 } from './fetchData';
+import { isAnnualisable } from './stats';
 
 /** A holding that still has shares left in the lot queue. */
 export interface OpenPosition {
@@ -422,9 +423,9 @@ export function toClosedPositionRows(model: PositionsModel): ClosedPositionRow[]
     const totalReturnPct = t.cost > 0 ? (t.pnl / t.cost) * 100 : 0;
     // CAGR is meaningless for a short holding: annualising a few months blows small moves up
     // into silly numbers, and it explodes toward infinity as the holding period approaches zero.
-    // So under a year it is the plain total return instead — the same rule as XIRR (see
-    // calculateXIRR in the component).
-    const cagr = years < 1 ? totalReturnPct
+    // So under a year it is the plain total return instead — the app's one rule, isAnnualisable
+    // in lib/stats.ts, which XIRR uses too.
+    const cagr = !isAnnualisable(years) ? totalReturnPct
       : t.cost > 0 ? (Math.pow(finalNetValue / t.cost, 1 / years) - 1) * 100
       : 0;
     return {

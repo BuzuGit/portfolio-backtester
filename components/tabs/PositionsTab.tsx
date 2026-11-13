@@ -22,6 +22,7 @@ import type { CashAccountBalance } from '@/lib/cash';
 import { portfolioClassOf } from '@/lib/holdings';
 import { FX_TICKER_MAP, getFxRate } from '@/lib/backtest';
 import { toYM } from '@/lib/dates';
+import { isAnnualisable } from '@/lib/stats';
 import { CURRENCY_OPTIONS, CURRENCY_SYMBOLS } from '@/components/options';
 import {
   ASSET_CLASS_COLORS, BLACK, BTN_SECOND, CAGR_LOT_HINT, CHART_PALETTE, CURRENCY_COLORS, FIELD, GAIN, HALO, INK, LINE,
@@ -3064,8 +3065,8 @@ export default function PositionsTab({
                       const returnPct = t.amount > 0 ? (totalReturn / t.amount) * 100 : 0;
                       // Held less than a year: the plain Return % instead of annualising it
                       // (a few months blown up to a yearly rate gives silly numbers) — the
-                      // same rule as XIRR, see calculateXIRR.
-                      const cagr = holdYears < 1 ? returnPct
+                      // same rule as XIRR: isAnnualisable in lib/stats.ts.
+                      const cagr = !isAnnualisable(holdYears) ? returnPct
                         : t.amount > 0 && currentVal > 0
                           ? (Math.pow(currentVal / t.amount, 1 / holdYears) - 1) * 100
                           : 0;

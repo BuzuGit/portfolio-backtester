@@ -7,6 +7,7 @@
 */
 import React from 'react';
 import type { PositionsModel } from '@/lib/positions';
+import { isAnnualisable } from '@/lib/stats';
 import { HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, type HoldingRow, type HoldingsCurrency, type HoldingsModel } from '@/lib/holdings';
 import { PhoneChoice } from '@/components/PhoneSheet';
 import { GAIN, LOSS, PINNED_FILTERS, SEG, formatPrice, readableTextOn, returnHeatColor, segBtn } from '@/components/ui';
@@ -307,7 +308,7 @@ export default function HoldingsTab({
                             </td>
 
                             {heatCell(r.retPct, pctCap, r.retPct === null ? '' : `Total return ÷ invested = ${fmtSigned(r.ret)} ÷ ${fmtMoney(r.invested)} ${r.ccy}`)}
-                            {heatCell(r.xirr, xirrCap, r.yearsHeld !== null && r.yearsHeld < 1
+                            {heatCell(r.xirr, xirrCap, r.yearsHeld !== null && !isAnnualisable(r.yearsHeld)
                               ? `Held less than a year, so this is the plain total return in ${r.ccy}, not annualised`
                               : 'Money-weighted return per year in ' + r.ccy + ': each purchase and dividend on its own date,\ntoday\'s value as the final inflow')}
 

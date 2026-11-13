@@ -502,12 +502,7 @@ export const getHeatmapColor = (value: number, min: number, max: number): string
 };
 
 /**
- * Price heatmap: lowest red → middle neutral → highest green, per row, on the one heat scale.
- * Used for all price tables (Monthly prices, Annual prices, detail view prices). Only the
- * background colour changes; the text keeps the page's normal colour.
+ * Price heatmap for the Monthly and detail price tables: the very same rule as getHeatmapColor
+ * above (it used to be a word-for-word copy), kept under this name for the pages that use it.
  */
-export const getPriceHeatmap = (value: number, min: number, max: number): string => {
-  if (min === max) return heatColor(0);
-  const pos = (value - min) / (max - min); // 0 = min, 1 = max
-  return heatColor(pos * 2 - 1, 0.67);
-};
+export const getPriceHeatmap = getHeatmapColor;
