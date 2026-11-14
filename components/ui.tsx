@@ -286,6 +286,21 @@ export const readableTextOn = (color: string): string => {
 };
 
 /**
+ * Text colour for a red/green HEAT tile (Best To Worst, Return Map "Return", Markets, Holdings,
+ * Monthly). In light mode the strong shades get white text a little earlier than the plain
+ * contrast rule above would give it: from about +33% green / −30% red on the ±40% scale
+ * (luminance 0.27 or darker), where near-black text was hard to read (user, 2026-11-14).
+ * Lighter shades, and everything in dark mode, keep readableTextOn's choice.
+ */
+export const heatTextOn = (bg: string): string => {
+  if (isDarkTheme() || !bg.startsWith('#')) return readableTextOn(bg);
+  const n = parseInt(bg.slice(1), 16);
+  const linear = (c: number) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const lum = 0.2126 * linear((n >> 16) & 255) + 0.7152 * linear((n >> 8) & 255) + 0.0722 * linear(n & 255);
+  return lum <= 0.27 ? '#ffffff' : readableTextOn(bg);
+};
+
+/**
  * Is dark mode on right now? The "dark" class on <html> is the one source of truth: app/layout.tsx
  * sets it before the first paint, and the button at the top of the left panel flips it.
  */

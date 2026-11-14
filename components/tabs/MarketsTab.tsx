@@ -17,7 +17,7 @@ import {
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   CHART_PALETTE, GAIN, INK, LINE, LINE_MID, LOSS, MUTED, PHONE_SCROLL_ROW, PINNED_FILTERS, ResponsiveContainer, SEG,
-  formatPrice, readableTextOn, returnHeatColor, segBtn,
+  formatPrice, heatTextOn, returnHeatColor, segBtn,
 } from '@/components/ui';
 import { EdgeBubbles, type BubbleDef } from '@/components/charts';
 
@@ -300,7 +300,7 @@ export default function MarketsTab({
     const bg = returnHeatColor(Math.max(-1, Math.min(1, v / cap)) * 40);
     return (
       <td className="px-px py-0.5" title={title}>
-        <div className="rounded px-1 py-1 cursor-help text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>{text}</div>
+        <div className="rounded px-1 py-1 cursor-help text-center text-xs tabular-nums" style={{ background: bg, color: heatTextOn(bg) }}>{text}</div>
       </td>
     );
   };
@@ -893,7 +893,7 @@ export default function MarketsTab({
                               const bg = returnHeatColor(Math.max(-1, Math.min(1, v / cap)) * 40 * (macro ? -1 : 1));
                               return (
                                 <td key={p} className={`px-px py-0.5 ${phoneHide}`} title={returnTooltip(r, p, v)}>
-                                  <div className="rounded px-1 py-1 cursor-help text-center text-xs tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
+                                  <div className="rounded px-1 py-1 cursor-help text-center text-xs tabular-nums" style={{ background: bg, color: heatTextOn(bg) }}>
                                     {fmtCell(r, v)}
                                   </div>
                                 </td>
