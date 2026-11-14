@@ -570,10 +570,29 @@ export default function BestToWorstTab({
               const maxPositive = positiveReturns.length > 0 ? Math.max(...positiveReturns) : 1;
               const maxNegative = negativeReturns.length > 0 ? Math.max(...negativeReturns) : 1;
 
+              // Past-years tiles (desktop only): the 5 calendar years BEFORE what is being ranked,
+              // so you can see whether this year's winner or loser had years like it before.
+              // - A calendar year picked (e.g. 2026): 2021 … 2025.
+              // - A 1Y–10Y period: the 5 full years before the period starts. The period runs back N
+              //   years from the latest data, so 3Y in 2026 starts in 2023 and shows 2018 … 2022.
+              // Years with no data at all are left out, so an early year can show fewer than 5.
+              const historyBefore = isYearMode ? currentYear : years[years.length - 1] - (bestToWorstMode as number);
+              const historyYears = [5, 4, 3, 2, 1].map(k => historyBefore - k).filter(y => years.includes(y));
+              // Each year's shade is scaled to that year's biggest move among the assets listed
+              // (the Markets › Assets rule), so the deepest green means "one of the best that year".
+              const historyCaps: Record<number, number> = Object.fromEntries(historyYears.map(y => [
+                y,
+                Math.max(1e-9, ...sortedAssets.map(a => Math.abs(annualReturns[a.ticker]?.[y]?.return ?? 0))),
+              ]));
+
               return (
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-gray-200">
+                      {/* Past-years tile headers (desktop only) */}
+                      {historyYears.map(y => (
+                        <th key={y} className="text-center py-1 px-px bg-gray-100 w-14 max-md:hidden">{y}</th>
+                      ))}
                       <th className="py-1 px-1 bg-gray-100 w-24"></th>
                       <th className="text-right py-1 px-2 bg-gray-100 w-16">{returnColumnHeader}</th>
                       <th className="text-left py-1 px-2 bg-gray-100">Asset</th>
@@ -629,6 +648,20 @@ export default function BestToWorstTab({
 
                       return (
                         <tr key={asset.ticker} className={`border-b border-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-25'}`}>
+                          {/* Past-years tiles (desktop only): that year's return in the asset's own
+                              currency, heat-coloured like Markets › Assets; a dash when it has no data */}
+                          {historyYears.map(y => {
+                            const past = annualReturns[asset.ticker]?.[y];
+                            if (!past) return <td key={y} className="px-px py-0.5 text-center text-gray-300 max-md:hidden">–</td>;
+                            const bg = returnHeatColor(Math.max(-1, Math.min(1, past.return / historyCaps[y])) * 40);
+                            return (
+                              <td key={y} className="px-px py-0.5 max-md:hidden" title={`${y}: ${getReturnTooltip(asset.ticker, y, annualReturns)}`}>
+                                <div className="rounded px-1 h-5 leading-5 cursor-help text-center tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
+                                  {past.return.toFixed(1)}%
+                                </div>
+                              </td>
+                            );
+                          })}
                           {/* Bar Chart Column */}
                           <td className="py-1 px-1">
                             <div className="relative h-4 w-full rounded overflow-hidden">
