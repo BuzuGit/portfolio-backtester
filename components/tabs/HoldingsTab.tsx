@@ -8,6 +8,7 @@
 import React from 'react';
 import type { PositionsModel } from '@/lib/positions';
 import { isAnnualisable } from '@/lib/stats';
+import { colourCap } from '@/lib/markets';
 import { HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, type HoldingRow, type HoldingsCurrency, type HoldingsModel } from '@/lib/holdings';
 import { PhoneChoice } from '@/components/PhoneSheet';
 import { GAIN, LOSS, PINNED_FILTERS, SEG, formatPrice, readableTextOn, returnHeatColor, segBtn } from '@/components/ui';
@@ -78,8 +79,10 @@ export default function HoldingsTab({
   const zeroPct = (-retLo / retSpan) * 100;
   // The theme's gain green / loss red, the same as every bar chart (see Markets above)
   const BAR_UP = GAIN, BAR_DOWN = LOSS;
-  // Heat colours for Return % and XIRR, each column on its own scale (as on the Markets pages).
-  const cap = (vals: (number | null)[]) => Math.max(1e-9, ...vals.filter((v): v is number => v !== null).map(Math.abs));
+  // Heat colours for Return % and XIRR, each column on its own scale (as on the Markets pages),
+  // using the Markets outlier-proof rule (85th percentile of |x|): one holding's huge return
+  // can't turn every other cell pale; anything beyond the scale just gets the deepest shade.
+  const cap = (vals: (number | null)[]) => colourCap(vals.filter((v): v is number => v !== null));
   const pctCap = cap(assetRows.map(r => r.retPct));
   const xirrCap = cap(assetRows.map(r => r.xirr));
   const maxWeight = Math.max(1e-9, ...allRows.map(r => r.weight));
