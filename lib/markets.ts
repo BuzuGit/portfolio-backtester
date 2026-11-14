@@ -402,8 +402,11 @@ const buildMacroRow = (
   };
 };
 
-/** The 85th percentile of |x| — the picture's colour rule, so one outlier can't wash out the rest. */
-const colourCap = (values: number[]): number => {
+/**
+ * The 85th percentile of |x| — the picture's colour rule, so one outlier can't wash out the rest.
+ * Also used by the Markets Stats CAGR column and the Holdings Return % / XIRR columns.
+ */
+export const colourCap =(values: number[]): number => {
   const abs = values.map(Math.abs).sort((a, b) => a - b);
   if (!abs.length) return 1;
   const cap = abs[Math.max(0, Math.ceil(abs.length * 0.85) - 1)];

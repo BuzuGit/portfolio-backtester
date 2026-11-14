@@ -578,12 +578,8 @@ export default function BestToWorstTab({
               // Years with no data at all are left out, so an early year can show fewer than 5.
               const historyBefore = isYearMode ? currentYear : years[years.length - 1] - (bestToWorstMode as number);
               const historyYears = [5, 4, 3, 2, 1].map(k => historyBefore - k).filter(y => years.includes(y));
-              // Each year's shade is scaled to that year's biggest move among the assets listed
-              // (the Markets › Assets rule), so the deepest green means "one of the best that year".
-              const historyCaps: Record<number, number> = Object.fromEntries(historyYears.map(y => [
-                y,
-                Math.max(1e-9, ...sortedAssets.map(a => Math.abs(annualReturns[a.ticker]?.[y]?.return ?? 0))),
-              ]));
+              // Shade: one fixed scale for every year (±40% = deepest, the app's rule for calendar-year
+              // tiles), so +30% looks the same in any year and one outlier can't pale the rest.
 
               return (
                 <table className="w-full text-xs">
@@ -653,7 +649,7 @@ export default function BestToWorstTab({
                           {historyYears.map(y => {
                             const past = annualReturns[asset.ticker]?.[y];
                             if (!past) return <td key={y} className="px-px py-0.5 text-center text-gray-300 max-md:hidden">–</td>;
-                            const bg = returnHeatColor(Math.max(-1, Math.min(1, past.return / historyCaps[y])) * 40);
+                            const bg = returnHeatColor(past.return);
                             return (
                               <td key={y} className="px-px py-0.5 max-md:hidden" title={`${y}: ${getReturnTooltip(asset.ticker, y, annualReturns)}`}>
                                 <div className="rounded px-1 h-5 leading-5 cursor-help text-center tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>

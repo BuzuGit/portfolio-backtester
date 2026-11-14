@@ -11,7 +11,7 @@ import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tool
 import type { AssetLookup } from '@/lib/fetchData';
 import { formatPeriod } from '@/lib/backtest';
 import {
-  COUNTRY_CURRENCIES, COUNTRY_NAMES, MARKETS_PERIODS, STATS_YEARS, currencyBasketMove, formatFxRate, summariseMatrix,
+  COUNTRY_CURRENCIES, COUNTRY_NAMES, MARKETS_PERIODS, STATS_YEARS, colourCap, currencyBasketMove, formatFxRate, summariseMatrix,
   type MarketRow, type MarketsCurrency, type MarketsPeriod, type ReturnMatrix, type ValueWorking,
 } from '@/lib/markets';
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
@@ -287,11 +287,14 @@ export default function MarketsTab({
   const isStatsSection = (s: { rows: MarketRow[] }) =>
     marketsView === 'stats' && s.rows.length > 0 && s.rows.every(r => r.kind === 'asset' || r.kind === 'fx');
   const statsRows = m ? m.sections.filter(isStatsSection).flatMap(s => s.rows) : [];
-  const maxAbs = (vals: (number | null | undefined)[]) =>
-    Math.max(1e-9, ...vals.filter((v): v is number => v !== null && v !== undefined).map(Math.abs));
+  // Heat-cell scales. CAGR: the main table's outlier-proof rule (85th percentile of |x|), so one
+  // extreme asset can't turn every other cell pale. Calendar years: one fixed ±40% scale, the
+  // same as every calendar-year tile in the app (Best To Worst, Return Map's "Return" colour).
+  const outlierProofCap = (vals: (number | null | undefined)[]) =>
+    colourCap(vals.filter((v): v is number => v !== null && v !== undefined));
+  const YEAR_TILE_CAP = 40;
   const ddLo = Math.min(0, ...statsRows.map(r => r.stats[marketsPeriod]?.maxDD ?? 0)) || -1;
-  const cagrCap = maxAbs(statsRows.map(r => r.stats[marketsPeriod]?.cagr));
-  const yearCaps = Object.fromEntries(STATS_YEARS.map(y => [y, maxAbs(statsRows.map(r => r.yearReturns[y]))]));
+  const cagrCap = outlierProofCap(statsRows.map(r => r.stats[marketsPeriod]?.cagr));
   const heatCell = (v: number | null, cap: number, text: string, title: string) => {
     if (v === null) return <td className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
     const bg = returnHeatColor(Math.max(-1, Math.min(1, v / cap)) * 40);
@@ -353,7 +356,7 @@ export default function MarketsTab({
             <td className="px-2 py-1">{sparkline(r.spark.slice(-trendPoints))}</td>
             {STATS_YEARS.map(y => (
               <React.Fragment key={y}>
-                {heatCell(r.yearReturns[y] ?? null, yearCaps[y], r.yearReturns[y] != null ? fmtRet(r.yearReturns[y] as number) : '',
+                {heatCell(r.yearReturns[y] ?? null, YEAR_TILE_CAP,r.yearReturns[y] != null ? fmtRet(r.yearReturns[y] as number) : '',
                   r.isFx
                     ? `${y}: change in ${r.name} (Dec ${y - 1} → Dec ${y}); + = ${r.name.split('/')[0]} strengthened`
                     : `${y} calendar-year return in ${viewCurrency === 'Native' ? r.priceCurrency : viewCurrency} (Dec ${y - 1} → Dec ${y})`)}
