@@ -18,7 +18,7 @@ import { getYearsWithData, type AssetsAnnualReturns } from '@/lib/assetStats';
 import { PhoneChoice } from '@/components/PhoneSheet';
 import {
   ASSET_CLASS_COLORS, METALS_CRYPTO_LABEL, PHONE_SCROLL_ROW, PINNED_FILTERS, RETURN_MAP_ASSET_COLORS, SEG,
-  getPeriodReturnTooltip, getReturnTooltip, readableTextOn, returnHeatColor, segBtn,
+  getPeriodReturnTooltip, getReturnTooltip, heatTextOn, readableTextOn, returnHeatColor, segBtn,
 } from '@/components/ui';
 
 /** A ticker's return over the last N years (the main screen's getPeriodReturn). */
@@ -252,7 +252,7 @@ export default function BestToWorstTab({
             aria-pressed={tracked}
             title={cell.tooltip}
             className={`w-full rounded px-1 py-1 text-center leading-tight transition-opacity ${tracked ? 'ring-2 ring-offset-1 ring-slate-900' : ''}`}
-            style={{ backgroundColor: bg, color: readableTextOn(bg), opacity: faded ? 0.2 : 1 }}
+            style={{ backgroundColor: bg, color: returnMapHighlight === 'return' ? heatTextOn(bg) : readableTextOn(bg), opacity: faded ? 0.2 : 1 }}
           >
             <div className="font-semibold truncate">{cell.asset.ticker}</div>
             <div>{cell.ret.toFixed(1)}%{cell.shortHistory ? '*' : ''}</div>
@@ -652,7 +652,7 @@ export default function BestToWorstTab({
                             const bg = returnHeatColor(past.return);
                             return (
                               <td key={y} className="px-px py-0.5 max-md:hidden" title={`${y}: ${getReturnTooltip(asset.ticker, y, annualReturns)}`}>
-                                <div className="rounded px-1 h-5 leading-5 cursor-help text-center tabular-nums" style={{ background: bg, color: readableTextOn(bg) }}>
+                                <div className="rounded px-1 h-5 leading-5 cursor-help text-center tabular-nums" style={{ background: bg, color: heatTextOn(bg) }}>
                                   {past.return.toFixed(1)}%
                                 </div>
                               </td>

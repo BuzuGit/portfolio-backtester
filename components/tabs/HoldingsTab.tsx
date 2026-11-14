@@ -11,7 +11,7 @@ import { isAnnualisable } from '@/lib/stats';
 import { colourCap } from '@/lib/markets';
 import { HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, type HoldingRow, type HoldingsCurrency, type HoldingsModel } from '@/lib/holdings';
 import { PhoneChoice } from '@/components/PhoneSheet';
-import { GAIN, LOSS, PINNED_FILTERS, SEG, formatPrice, readableTextOn, returnHeatColor, segBtn } from '@/components/ui';
+import { GAIN, LOSS, PINNED_FILTERS, SEG, formatPrice, heatTextOn, returnHeatColor, segBtn } from '@/components/ui';
 
 export interface HoldingsTabProps {
   holdingsModel: HoldingsModel | null;
@@ -93,7 +93,7 @@ export default function HoldingsTab({
     return (
       <td className="px-px py-0.5" title={title}>
         <div className={`rounded px-1 py-1 cursor-help text-center text-xs tabular-nums ${bold ? 'font-semibold' : ''}`}
-          style={{ background: bg, color: readableTextOn(bg) }}>{fmtPctSigned(v)}</div>
+          style={{ background: bg, color: heatTextOn(bg) }}>{fmtPctSigned(v)}</div>
       </td>
     );
   };

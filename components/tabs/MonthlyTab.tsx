@@ -28,7 +28,7 @@ import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   BENCH_LABEL, BLACK, CAGR_HINT, CHART_PALETTE, FIELD, GAIN, GAIN_DEEP, GAIN_PILL, HALO, INK, INK_SOFT, LOSS,
   LOSS_DEEP, LOSS_PILL, MUTED, MUTED_LABEL, ResponsiveContainer, SEG, SHARPE_HINT, SMA_COLOR, WINE_LABEL,
-  formatPrice, getHeatmapColor, getPriceHeatmap, heatColor, lossBarLabel, lossLabelRoom, readableTextOn,
+  formatPrice, getHeatmapColor, getPriceHeatmap, heatColor, lossBarLabel, lossLabelRoom, heatTextOn,
   segBtn, themedCell, type MonthlyChartPeriod,
 } from '@/components/ui';
 import {
@@ -852,7 +852,7 @@ export default function MonthlyTab({
                                 // fixed green / red text on the stronger shades was hard to read,
                                 // in dark mode especially
                                 const bg = heatColor(ret / 15, 0.67);
-                                return { backgroundColor: bg, color: readableTextOn(bg) };
+                                return { backgroundColor: bg, color: heatTextOn(bg) };
                               })()}
                             >
                               {ret !== null ? `${ret.toFixed(1)}%` : '-'}
