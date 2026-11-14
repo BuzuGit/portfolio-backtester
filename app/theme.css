@@ -86,11 +86,11 @@ html.dark {
   --c-wine-label: var(--d-text-500);   /* both hues are too dim to read as text on a dark card */
   --c-olive-label: var(--d-text-500);
 
-  /* Black and slate would vanish on a dark card, so the main colours become a soft light grey:
-     clear against the card, but not the near-white that glares at night... */
-  --c-slate: #a7aeb8;
-  --c-black: #a7aeb8;
-  --c-ink: #a7aeb8;
+  /* Black and slate would vanish on a dark card, so the main colours become a soft white (the
+     user's pick from five options, 2026-11-14): a step dimmer than the near-white text... */
+  --c-slate: #cfd3d9;
+  --c-black: #cfd3d9;
+  --c-ink: #cfd3d9;
   --c-ink-soft: var(--d-text-700);
   --c-muted: var(--d-text-500);
   --c-muted-label: var(--d-text-500);
