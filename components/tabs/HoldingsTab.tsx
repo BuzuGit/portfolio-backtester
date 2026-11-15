@@ -11,7 +11,9 @@ import { isAnnualisable } from '@/lib/stats';
 import { colourCap } from '@/lib/markets';
 import { HOLDINGS_CURRENCIES, HOLDINGS_MIX_ABBR, type HoldingRow, type HoldingsCurrency, type HoldingsModel } from '@/lib/holdings';
 import { PhoneChoice } from '@/components/PhoneSheet';
-import { GAIN, LOSS, PINNED_FILTERS, SEG, formatPrice, heatTextOn, returnHeatColor, segBtn } from '@/components/ui';
+import {
+  ASSET_CLASS_COLORS, GAIN, LOSS, PINNED_FILTERS, SEG, formatPrice, heatTextOn, readableTextOn, returnHeatColor, segBtn,
+} from '@/components/ui';
 
 export interface HoldingsTabProps {
   holdingsModel: HoldingsModel | null;
@@ -87,6 +89,36 @@ export default function HoldingsTab({
   const xirrCap = cap(assetRows.map(r => r.xirr));
   const maxWeight = Math.max(1e-9, ...allRows.map(r => r.weight));
 
+  // Leader / Laggard tiles: the holdings with the best and worst XIRR. Holdings with no XIRR
+  // (cash, or nothing dated to measure) sit out. With a single holding there is no laggard.
+  const byXirr = assetRows.filter(r => r.xirr !== null).sort((a, b) => (b.xirr as number) - (a.xirr as number));
+  const leader = byXirr[0] ?? null;
+  const laggard = byXirr.length > 1 ? byXirr[byXirr.length - 1] : null;
+  const holdingTile = (label: string, r: HoldingRow | null) => {
+    if (!r || r.xirr === null) return { label, value: '–' as React.ReactNode, cls: 'text-gray-400', sub: '', title: '' };
+    const underYear = r.yearsHeld !== null && !isAnnualisable(r.yearsHeld);
+    return {
+      label, cls: 'text-gray-800',
+      // "Wrd Healthcare +14.2%": the name, then its XIRR in gain green / loss red
+      value: <>{r.name} <span className={r.xirr >= 0 ? 'text-green-700' : 'text-red-700'}>{fmtPctSigned(r.xirr)}</span></> as React.ReactNode,
+      sub: r.retPct !== null ? `${fmtPctSigned(r.retPct)} total` : '',
+      title: `${r.name} (${r.ticker})\n`
+        + (underYear
+          ? `Held less than a year: ${fmtPctSigned(r.xirr)} is the plain total return in ${r.ccy}, not annualised\n`
+          : `XIRR ${fmtPctSigned(r.xirr)} a year in ${r.ccy} (money-weighted)\n`)
+        + (r.retPct !== null ? `Return % ${fmtPctSigned(r.retPct)} · total return ${fmtSigned(r.ret)} ${r.ccy}` : '')
+        + (r.yearsHeld !== null ? ` · held ${r.yearsHeld.toFixed(1)}y` : '')
+        + `\nRanked by XIRR among the ${byXirr.length} holdings (cash excluded)`,
+    };
+  };
+
+  // Asset-mix bar: each section's weight, in page order, in its asset-class colour. Only
+  // sections worth more than zero get a piece (a bar can't draw a negative slice).
+  const mix = (h ? h.sections : []).filter(s => s.weight > 0).map(s => {
+    const color = ASSET_CLASS_COLORS[s.name] ?? '#94a3b8';
+    return { name: s.name, weight: s.weight, value: s.value, color, abbr: HOLDINGS_MIX_ABBR[s.name] ?? s.name.slice(0, 3).toUpperCase() };
+  });
+
   const heatCell = (v: number | null, capV: number, title: string, bold = false) => {
     if (v === null) return <td className="px-0.5 py-0.5 text-center text-xs text-gray-300">–</td>;
     const bg = returnHeatColor(Math.max(-1, Math.min(1, v / capV)) * 40);
@@ -136,7 +168,7 @@ export default function HoldingsTab({
     window.scrollTo({ top: 0 });
   };
 
-  // Asset + Price + Held + Invested + Value + Return bar + Return % + XIRR + Qty + Curr DD + Weight
+  // Asset + Price + Held + Return % + XIRR + Invested + Value + Return bar + Qty + Curr DD + Weight
   const colCount = 11;
 
   return (
@@ -191,10 +223,9 @@ export default function HoldingsTab({
           </p>
         ) : (
           <>
-            {/* Summary tiles: what it is all worth, what it has made, and how it is split */}
-            {/* across the sections. The mix tile is wider: its five figures need ~350px on one */}
-            {/* line, so below the lg breakpoint it takes a whole row of its own. */}
-            <div className="grid grid-cols-2 lg:grid-cols-[1fr_1fr_2fr] gap-2 mb-4">
+            {/* Summary tiles: what it is all worth, what it has made, and the best and worst */}
+            {/* holding by XIRR (Leader / Laggard). Four in a row; two by two on phones. */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-3">
               {[
                 {
                   label: 'Total value', value: `${fmtMoney(h.totals.value)} ${ccy}`, cls: 'text-gray-800',
@@ -208,24 +239,48 @@ export default function HoldingsTab({
                     + 'Shares still held only; gains on shares already sold are in Positions › Closed Positions.\n'
                     + 'The % is on everything invested INCLUDING cash, so idle cash pulls it down.',
                 },
-                {
-                  // "Cash 6.7% | FI 12.0% | EQ 34.9% | ALT 39.3% | OTH 7.1%" — each section's weight,
-                  // in page order. OTH = Metals & Crypto. Hover for full names and amounts.
-                  label: 'Asset mix', cls: 'text-gray-800', sub: '',
-                  value: h.sections.map(s => `${HOLDINGS_MIX_ABBR[s.name] ?? s.name.slice(0, 3).toUpperCase()} ${s.weight.toFixed(1)}%`).join(' | '),
-                  title: h.sections.map(s => `${s.name}: ${s.weight.toFixed(1)}% · ${fmtMoney(s.value)} ${ccy}`).join('\n'),
-                },
+                // Leader and Laggard: the holdings with the best and worst XIRR (cash has none, so
+                // it is never in the running). XIRR, because it is per year: an 8-year holding and
+                // a 1-year one compare fairly, which Return % (all-time) would not.
+                holdingTile('Leader · best XIRR', leader),
+                holdingTile('Laggard · worst XIRR', laggard),
               ].map(t => (
                 <div key={t.label} title={t.title || undefined}
-                  className={`rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0 ${t.title ? 'cursor-help' : ''} ${t.label === 'Asset mix' ? 'col-span-2 lg:col-span-1' : ''}`}>
+                  className={`rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 min-w-0 ${t.title ? 'cursor-help' : ''}`}>
                   <div className="text-[10px] uppercase tracking-wide text-gray-500 whitespace-nowrap truncate">{t.label}</div>
-                  {/* Phones: wraps instead of "…" (the Asset mix), and the small note goes on its own line */}
+                  {/* Phones: wraps instead of "…", and the small note goes on its own line */}
                   <div className="text-sm whitespace-nowrap truncate max-md:whitespace-normal">
                     <span className={`font-semibold tabular-nums ${t.cls}`}>{t.value}</span>
                     <span className="text-xs text-gray-500 ml-2 max-md:block max-md:ml-0">{t.sub}</span>
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* Asset mix: one bar split by each section's weight ("Cash 6.9% | FI 15.7% | …"), in */}
+            {/* page order and the app's asset-class colours. Each piece's width is its share of */}
+            {/* everything held. Desktop writes the label inside each piece; phones, where the */}
+            {/* pieces are too narrow for text, list them underneath. Hover a piece for the amount. */}
+            <div className="mb-4">
+              <div className="flex gap-0.5 h-6" role="img"
+                aria-label={`Asset mix: ${mix.map(s => `${s.name} ${s.weight.toFixed(1)}%`).join(', ')}`}>
+                {mix.map(s => (
+                  <div key={s.name}
+                    className="rounded-sm flex items-center justify-center overflow-hidden min-w-0 cursor-help text-xs font-medium whitespace-nowrap tabular-nums"
+                    style={{ flexGrow: s.weight, flexBasis: 0, background: s.color, color: readableTextOn(s.color) }}
+                    title={`${s.name}: ${s.weight.toFixed(1)}% · ${fmtMoney(s.value)} ${ccy}`}>
+                    {s.weight >= 3 && <span className="px-1 max-md:hidden">{s.abbr} {s.weight.toFixed(1)}%</span>}
+                  </div>
+                ))}
+              </div>
+              <div className="hidden max-md:flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-600">
+                {mix.map(s => (
+                  <span key={s.name} className="flex items-center gap-1 tabular-nums">
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: s.color }} />
+                    {s.abbr} {s.weight.toFixed(1)}%
+                  </span>
+                ))}
+              </div>
             </div>
 
             {/* Phones: names stay put on the left while the figures swipe ("phone-pin-first") */}
@@ -242,15 +297,15 @@ export default function HoldingsTab({
                         <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name}</th>
                         <th className="text-right font-medium px-2 py-2">Price</th>
                         <th className="text-right font-medium px-2 py-2 whitespace-nowrap" title="Years since the first purchase of the shares still held">Held</th>
+                        <th className="text-center font-medium px-0.5 py-2 w-16 whitespace-nowrap">Return %</th>
+                        <th className="text-center font-medium px-0.5 py-2 w-16 cursor-help"
+                          title={'Money-weighted return per year (XIRR), in ' + (native ? "each holding's own currency" : ccy) + '.\nHeld less than a year: the plain total return instead (not annualised).'}>XIRR</th>
                         <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Invested</th>
                         <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Value</th>
                         {/* The fixed-width div holds the bar column open (the bars claim no width). */}
                         <th className="text-left font-medium px-3 py-2">
                           <div className="w-[220px]"><span className="text-gray-800 font-semibold">Total return · {native ? 'own currency' : ccy}</span></div>
                         </th>
-                        <th className="text-center font-medium px-0.5 py-2 w-16 whitespace-nowrap">Return %</th>
-                        <th className="text-center font-medium px-0.5 py-2 w-16 cursor-help"
-                          title={'Money-weighted return per year (XIRR), in ' + (native ? "each holding's own currency" : ccy) + '.\nHeld less than a year: the plain total return instead (not annualised).'}>XIRR</th>
                         <th className="text-right font-medium px-2 py-2">Qty</th>
                         <th className="text-right font-medium px-2 py-2 whitespace-nowrap cursor-help"
                           title={'Profit given back since the holding\'s best month-end (its profit/loss line, dividends included), in ' + (native ? "its own currency" : ccy) + '.\nHover a figure for the working.'}>Curr DD</th>
@@ -290,6 +345,11 @@ export default function HoldingsTab({
                               title={r.firstBuyDate ? `First buy: ${dayLabel(r.firstBuyDate)}` : ''}>
                               {r.yearsHeld === null ? <span className="text-gray-300">–</span> : `${r.yearsHeld.toFixed(1)}y`}
                             </td>
+
+                            {heatCell(r.retPct, pctCap, r.retPct === null ? '' : `Total return ÷ invested = ${fmtSigned(r.ret)} ÷ ${fmtMoney(r.invested)} ${r.ccy}`)}
+                            {heatCell(r.xirr, xirrCap, r.yearsHeld !== null && !isAnnualisable(r.yearsHeld)
+                              ? `Held less than a year, so this is the plain total return in ${r.ccy}, not annualised`
+                              : 'Money-weighted return per year in ' + r.ccy + ': each purchase and dividend on its own date,\ntoday\'s value as the final inflow')}
                             <td className="px-2 py-1 text-right text-xs tabular-nums text-gray-700 whitespace-nowrap">{isCash ? <span className="text-gray-300">–</span> : <>{fmtMoney(r.invested)}{tag}</>}</td>
                             <td className={`px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap ${r.value < 0 ? 'text-red-600' : 'text-gray-900'}`}>{fmtMoney(r.value)}{tag}</td>
 
@@ -309,11 +369,6 @@ export default function HoldingsTab({
                                 </div>
                               )}
                             </td>
-
-                            {heatCell(r.retPct, pctCap, r.retPct === null ? '' : `Total return ÷ invested = ${fmtSigned(r.ret)} ÷ ${fmtMoney(r.invested)} ${r.ccy}`)}
-                            {heatCell(r.xirr, xirrCap, r.yearsHeld !== null && !isAnnualisable(r.yearsHeld)
-                              ? `Held less than a year, so this is the plain total return in ${r.ccy}, not annualised`
-                              : 'Money-weighted return per year in ' + r.ccy + ': each purchase and dividend on its own date,\ntoday\'s value as the final inflow')}
 
                             <td className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap text-gray-700">
                               {fmtQty(r.qty)}
@@ -351,13 +406,13 @@ export default function HoldingsTab({
                               Subtotal{native && <> · in {ccy}</>}
                             </td>
                             <td /><td />
+                            {heatCell(s.retPct, pctCap, s.retPct === null ? '' : `${s.name}: total return ÷ invested = ${fmtSigned(s.ret)} ÷ ${fmtMoney(s.invested)} ${ccy}`, true)}
+                            {heatCell(s.xirr, xirrCap, `${s.name}: money-weighted return per year, all its purchases and dividends on one timeline`, true)}
                             <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{isCashSection ? '' : <>{fmtMoney(s.invested)}{totTag}</>}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{fmtMoney(s.value)}{totTag}</td>
                             <td className={`px-3 py-1.5 tabular-nums whitespace-nowrap ${s.ret >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                               {isCashSection ? '' : <span className="ml-14">{fmtSigned(s.ret)}{totTag}</span>}
                             </td>
-                            {heatCell(s.retPct, pctCap, s.retPct === null ? '' : `${s.name}: total return ÷ invested = ${fmtSigned(s.ret)} ÷ ${fmtMoney(s.invested)} ${ccy}`, true)}
-                            {heatCell(s.xirr, xirrCap, `${s.name}: money-weighted return per year, all its purchases and dividends on one timeline`, true)}
                             <td /><td />
                             {weightCell(s.weight, true)}
                           </tr>
@@ -371,13 +426,13 @@ export default function HoldingsTab({
                     {/* Kept short so it stays on one line, like the Subtotal rows */}
                     <td className="px-3 py-2 whitespace-nowrap">Total{native && <> · in {ccy}</>}</td>
                     <td /><td />
+                    {heatCell(h.totals.retPct, pctCap, 'Total return ÷ everything invested, cash included', true)}
+                    {heatCell(h.totals.xirr, xirrCap, 'Money-weighted return per year of all the investments together (cash has no dated flows, so it is left out)', true)}
                     <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap" title="Cash counts at its balance">{fmtMoney(h.totals.invested)}{totTag}</td>
                     <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">{fmtMoney(h.totals.value)}{totTag}</td>
                     <td className={`px-3 py-2 tabular-nums whitespace-nowrap ${h.totals.ret >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       <span className="ml-14">{fmtSigned(h.totals.ret)}{totTag}</span>
                     </td>
-                    {heatCell(h.totals.retPct, pctCap, 'Total return ÷ everything invested, cash included', true)}
-                    {heatCell(h.totals.xirr, xirrCap, 'Money-weighted return per year of all the investments together (cash has no dated flows, so it is left out)', true)}
                     <td /><td />
                     {weightCell(100, true)}
                   </tr>

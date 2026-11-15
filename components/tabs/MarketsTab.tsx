@@ -767,6 +767,8 @@ export default function MarketsTab({
                       {/* Each category carries its own copy of the column headers, with the */}
                       {/* category name (e.g. "EQUITIES") in the first cell instead of "Asset". */}
                       <tr className="bg-gray-100 text-[11px] uppercase tracking-wide text-gray-500">
+                        {/* Price/asset sections open with the 10-month SMA Signal, before the name */}
+                        {!isMacroSection(s.rows) && <th className="text-center font-medium px-2 py-2 cursor-help max-md:hidden" title={SIGNAL_RULE}>Signal</th>}
                         <th className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{s.name}</th>
                         {/* Price/asset sections show the Price second, right after the name */}
                         {!isMacroSection(s.rows) && <th className="text-right font-medium px-2 py-2">Price</th>}
@@ -802,7 +804,7 @@ export default function MarketsTab({
                         ) : (
                           <>
                             <th className="text-right font-medium px-2 py-2 whitespace-nowrap max-md:hidden" title="Current drawdown: how far the latest price is below its all-time high (asset's own currency)">Curr DD</th>
-                            <th className="text-center font-medium px-2 py-2 cursor-help max-md:hidden" title={SIGNAL_RULE}>Signal</th>
+                            {/* (Signal is the first column, see above) */}
                           </>
                         )}
                       </tr>
@@ -816,6 +818,22 @@ export default function MarketsTab({
                         const stale = !!r.priceDate && r.priceDate.slice(0, 7) !== m.endDate.slice(0, 7);
                         return (
                           <tr key={r.ticker} className="border-b border-gray-100 hover:bg-gray-50">
+                            {/* 10-month SMA signal, first in price/asset sections — same rule and colours
+                                as the Monthly tab. Hidden on phones, where the name stays first. */}
+                            {!isMacroSection(s.rows) && (
+                            <td
+                              className={`px-2 py-1 text-center text-xs font-medium cursor-help max-md:hidden ${
+                                r.signal === 'BUY' ? 'bg-green-100 text-green-700'
+                                  : r.signal === 'SELL' ? 'bg-red-100 text-red-700'
+                                  : 'text-gray-300'
+                              }`}
+                              title={r.sma10 !== null && r.price !== null
+                                ? `${r.signal}: price ${fmtLevel(r.isFx, r.price)} ${r.priceCurrency} is ${r.signal === 'BUY' ? 'above' : 'at or below'} its 10-month SMA ${fmtLevel(r.isFx, r.sma10)} ${r.priceCurrency} (${fmtRet((r.price / r.sma10 - 1) * 100)}%).\n\n${SIGNAL_RULE}`
+                                : `Not enough history: needs 10 months of prices.\n\n${SIGNAL_RULE}`}
+                            >
+                              {r.signal ?? '–'}
+                            </td>
+                            )}
                             {/* Phones: a long name ("10Y Yield US - 5.29%") may wrap rather than widen the table */}
                             <td className="px-3 py-1 whitespace-nowrap max-md:whitespace-normal">
                               <button
@@ -950,20 +968,6 @@ export default function MarketsTab({
                                 {r.drawdown.toFixed(1)}%
                               </td>
                             )}
-
-                            {/* 10-month SMA signal — same rule and colours as the Monthly tab */}
-                            <td
-                              className={`px-2 py-1 text-center text-xs font-medium cursor-help max-md:hidden ${
-                                r.signal === 'BUY' ? 'bg-green-100 text-green-700'
-                                  : r.signal === 'SELL' ? 'bg-red-100 text-red-700'
-                                  : 'text-gray-300'
-                              }`}
-                              title={r.sma10 !== null && r.price !== null
-                                ? `${r.signal}: price ${fmtLevel(r.isFx, r.price)} ${r.priceCurrency} is ${r.signal === 'BUY' ? 'above' : 'at or below'} its 10-month SMA ${fmtLevel(r.isFx, r.sma10)} ${r.priceCurrency} (${fmtRet((r.price / r.sma10 - 1) * 100)}%).\n\n${SIGNAL_RULE}`
-                                : `Not enough history: needs 10 months of prices.\n\n${SIGNAL_RULE}`}
-                            >
-                              {r.signal ?? '–'}
-                            </td>
                             </>)}
                           </tr>
                         );
