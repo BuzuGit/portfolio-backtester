@@ -235,6 +235,9 @@ export default function MarketsTab({
       + `End ${dayLabel(w.endDate)}${mtd}: ${fmtWorking(r, w.end)}\n`
       + `Return = end ÷ start − 1 = ${(w.end.result / w.start.result - 1 >= 0 ? '+' : '')}${((w.end.result / w.start.result - 1) * 100).toFixed(2)}%`;
   };
+  // BUY / SELL tiles take the deepest shade of the ±40% heat scale (user's pick, 2026-11-15),
+  // so the signal reads like a traffic light at the start of each row
+  const SIGNAL_SHADE = 40;
   // Hover text explaining the Signal column (header and every BUY/SELL cell).
   const SIGNAL_RULE = '10-month SMA trend signal (same rule as the Monthly tab):\n'
     + '• SMA = average of the last 10 month-end prices, current month included, in the asset\'s own currency.\n'
@@ -820,20 +823,22 @@ export default function MarketsTab({
                           <tr key={r.ticker} className="border-b border-gray-100 hover:bg-gray-50">
                             {/* 10-month SMA signal, first in price/asset sections — same rule and colours
                                 as the Monthly tab. Hidden on phones, where the name stays first. */}
-                            {!isMacroSection(s.rows) && (
-                            <td
-                              className={`px-2 py-1 text-center text-xs font-medium cursor-help max-md:hidden ${
-                                r.signal === 'BUY' ? 'bg-green-100 text-green-700'
-                                  : r.signal === 'SELL' ? 'bg-red-100 text-red-700'
-                                  : 'text-gray-300'
-                              }`}
-                              title={r.sma10 !== null && r.price !== null
+                            {!isMacroSection(s.rows) && (() => {
+                              const title = r.sma10 !== null && r.price !== null
                                 ? `${r.signal}: price ${fmtLevel(r.isFx, r.price)} ${r.priceCurrency} is ${r.signal === 'BUY' ? 'above' : 'at or below'} its 10-month SMA ${fmtLevel(r.isFx, r.sma10)} ${r.priceCurrency} (${fmtRet((r.price / r.sma10 - 1) * 100)}%).\n\n${SIGNAL_RULE}`
-                                : `Not enough history: needs 10 months of prices.\n\n${SIGNAL_RULE}`}
-                            >
-                              {r.signal ?? '–'}
-                            </td>
-                            )}
+                                : `Not enough history: needs 10 months of prices.\n\n${SIGNAL_RULE}`;
+                              if (!r.signal) return <td className="px-0.5 py-0.5 text-center text-xs text-gray-300 cursor-help max-md:hidden" title={title}>–</td>;
+                              // A tile like the period cells beside it: same size, rounding and text,
+                              // in a shade from the same red/green heat scale (BUY green, SELL red)
+                              const bg = returnHeatColor(r.signal === 'BUY' ? SIGNAL_SHADE : -SIGNAL_SHADE);
+                              return (
+                                <td className="px-px py-0.5 w-14 max-md:hidden" title={title}>
+                                  <div className="rounded px-1 py-1 cursor-help text-center text-xs" style={{ background: bg, color: heatTextOn(bg) }}>
+                                    {r.signal}
+                                  </div>
+                                </td>
+                              );
+                            })()}
                             {/* Phones: a long name ("10Y Yield US - 5.29%") may wrap rather than widen the table */}
                             <td className="px-3 py-1 whitespace-nowrap max-md:whitespace-normal">
                               <button
