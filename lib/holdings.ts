@@ -122,8 +122,9 @@ export interface HoldingsModel {
   };
 }
 
-// Sections in page order: cash, then bonds, equities, alternatives, metals & crypto.
-const SECTION_ORDER = ['Cash', 'Fixed Income', 'Equities', 'Alternatives', 'Metals & Crypto'];
+// Sections in page order: bonds, equities, alternatives, metals & crypto, and cash at the bottom
+// (user, 2026-11-20). Any other section the sheet adds goes after these but still above cash.
+const SECTION_ORDER = ['Fixed Income', 'Equities', 'Alternatives', 'Metals & Crypto', 'Cash'];
 /** Short names for the "Asset mix" tile; any other section shows its first three letters. */
 export const HOLDINGS_MIX_ABBR: Record<string, string> = {
   'Cash': 'Cash', 'Fixed Income': 'FI', 'Equities': 'EQ', 'Alternatives': 'ALT', 'Metals & Crypto': 'OTH',
@@ -295,8 +296,9 @@ export const buildHoldings = (args: {
     return flows.length >= 2 ? xirr(flows) : null;
   };
   const rank = (name: string) => {
+    if (name === 'Cash') return SECTION_ORDER.length;      // always the last section
     const i = SECTION_ORDER.indexOf(name);
-    return i === -1 ? SECTION_ORDER.length : i;
+    return i === -1 ? SECTION_ORDER.length - 0.5 : i;      // unknown: after the known classes, before cash
   };
   const names = Array.from(new Set(rows.map(r => r.section)))
     .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
