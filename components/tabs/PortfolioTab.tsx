@@ -31,7 +31,7 @@ import {
   ResponsiveContainer, SEG, SHARPE_HINT, SLATE, lossBarLabel, lossLabelRoom, segBtn,
 } from '@/components/ui';
 import {
-  CURRENCY_CPI, DAILY_NAV_BENCHMARKS, DivergingBar, barMillions, barPct, renderEdgeBubbles,
+  BUBBLE_W, CURRENCY_CPI, DAILY_NAV_BENCHMARKS, DivergingBar, EdgeBubbles, barMillions, barPct, renderEdgeBubbles,
   type BubbleDef, type RechartsCustomizedProps,
 } from '@/components/charts';
 
@@ -1612,6 +1612,20 @@ export default function PortfolioTab({
               }
             }
 
+            // Right-edge bubbles, the same as the Daily NAV chart's: each shown currency's CURRENT
+            // drawdown (its latest day with a value), in that currency's colour
+            const ddBubbleDefs: BubbleDef[] = [];
+            for (const c of ['PLN', 'USD', 'SGD', 'CHF'] as const) {
+              if (!ddSelectedCurrencies.includes(c)) continue;
+              for (let i = ddChartData.length - 1; i >= 0; i--) {
+                const v = ddChartData[i][c];
+                if (v === undefined) continue;
+                // At a new high the drawdown is 0; print "0.0%", not "-0.0%"
+                ddBubbleDefs.push({ value: v, color: DD_COLORS[c], label: `${Math.abs(v) < 0.05 ? '0.0' : v.toFixed(1)}%` });
+                break;
+              }
+            }
+
             if (dailyData.length === 0) return null;
 
             return (
@@ -1693,7 +1707,8 @@ export default function PortfolioTab({
 
                 <div className="bg-white p-4 rounded-lg shadow">
                   <ResponsiveContainer width="100%" height={280}>
-                    <AreaChart data={ddChartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                    {/* Right margin leaves room for the current-drawdown bubbles (BUBBLE_W wide) */}
+                    <AreaChart data={ddChartData} margin={{ top: 10, right: BUBBLE_W + 8, left: 0, bottom: 0 }}>
                       <defs>
                         {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => (
                           <linearGradient key={c} id={`ddGrad${c}`} x1="0" y1="0" x2="0" y2="1">
@@ -1742,6 +1757,8 @@ export default function PortfolioTab({
                           />
                         ) : null
                       )}
+                      {/* Current drawdown per currency, beside the right edge */}
+                      <Customized component={<EdgeBubbles defs={ddBubbleDefs} />} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
