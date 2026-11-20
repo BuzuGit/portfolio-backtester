@@ -97,6 +97,9 @@ export interface BubbleDef {
   value: number;   // numeric value (used for Y positioning via yAxis.scale)
   color: string;   // background color of the bubble rectangle
   label: string;   // formatted text to display inside the bubble
+  // Text colour, when white won't read on `color` (light grey, yellow). Left out = the usual rule:
+  // the theme's on-black colour on black/ink/slate, white on everything else.
+  textColor?: string;
 }
 
 /** One buy or sell marker on a position's price-history chart.
@@ -248,7 +251,7 @@ export function renderEdgeBubbles(
           <text
             x={bubbleX + BUBBLE_W / 2} y={b.yRaw}
             textAnchor="middle" dominantBaseline="central"
-            fill={[BLACK, INK, SLATE].includes(b.color) ? ON_BLACK : '#ffffff'} fontSize={11} fontWeight={600}
+            fill={b.textColor ?? ([BLACK, INK, SLATE].includes(b.color) ? ON_BLACK : '#ffffff')} fontSize={11} fontWeight={600}
           >
             {b.label}
           </text>

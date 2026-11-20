@@ -12,7 +12,7 @@
   screen and is passed in, so it survives switching tabs; only the hovered day is kept here.
 */
 import React, { useMemo, useState } from 'react';
-import { ComposedChart, Area, Line, XAxis, YAxis, Tooltip } from 'recharts';
+import { ComposedChart, Area, Line, XAxis, YAxis, Tooltip, Customized } from 'recharts';
 import type { DailyNavRow } from '@/lib/fetchData';
 import {
   ALLOC_CLASSES, ALLOC_CURRENCIES, RISK_ON_CLASSES, dailyAllocation, plnTo, riskOnPct, sharesPct, type AllocPoint,
@@ -21,8 +21,10 @@ import { isPhoneScreen } from '@/lib/savedSheet';
 import { MONTH_ABBR, periodStartIso } from '@/lib/dates';
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
-  ASSET_CLASS_COLORS, CARD, CURRENCY_COLORS, INK, LINE, MUTED, ResponsiveContainer, SEG, readableTextOn, segBtn,
+  ASSET_CLASS_COLORS, BLACK, CARD, CURRENCY_COLORS, INK, LINE, MUTED, ResponsiveContainer, SEG, SLATE, readableTextOn,
+  segBtn,
 } from '@/components/ui';
+import { BUBBLE_W, EdgeBubbles, type BubbleDef } from '@/components/charts';
 
 export type AllocView = 'class' | 'currency';
 type Ccy = 'PLN' | 'USD' | 'SGD' | 'CHF';
@@ -77,7 +79,33 @@ export function dateAxisTicks(dates: string[]): { ticks: string[]; label: (d: st
   return { ticks, label: (d: string) => labels.get(d) ?? d };
 }
 
-const money =(v: number | null, ccy: string) =>
+/**
+ * The right-edge labels for a 100% stacked chart: each band's share on the LAST row, as a label in
+ * the band's colour placed at the middle of that band's slice (renderEdgeBubbles nudges labels
+ * apart where bands are too thin to hold one each). Bands empty on the last row get no label.
+ * `chartData` rows carry each band's share under b0, b1... in `bands` order (bottom band first).
+ */
+export function latestShareBubbles(chartData: Record<string, unknown>[], bands: { name: string; color: string }[]): BubbleDef[] {
+  const last = chartData[chartData.length - 1];
+  if (!last) return [];
+  const defs: BubbleDef[] = [];
+  let below = 0;   // the share stacked under this band
+  bands.forEach((b, i) => {
+    const v = Number(last[`b${i}`] ?? 0);
+    if (v >= 0.05) {
+      defs.push({
+        value: below + v / 2, color: b.color, label: `${v.toFixed(1)}%`,
+        // Black, ink and slate flip with dark mode, which renderEdgeBubbles already handles; every
+        // other band colour is the same in both modes, so its text colour can be worked out once
+        textColor: [BLACK, INK, SLATE].includes(b.color) ? undefined : readableTextOn(b.color),
+      });
+    }
+    below += v;
+  });
+  return defs;
+}
+
+const money = (v: number | null, ccy: string) =>
   v === null ? '—' : `${Math.round(v).toLocaleString('en-US')} ${ccy}`;
 
 export interface AllocationHistoryProps {
@@ -239,12 +267,14 @@ const AllocationChart = React.memo(function AllocationChart({ chartData, bands, 
 }) {
   const { ticks, label: tickLabel } = dateAxisTicks(chartData.map(r => String(r.date)));
   const phone = isPhoneScreen();
+  const edgeDefs = latestShareBubbles(chartData, bands);
 
   return (
     <ResponsiveContainer width="100%" height={phone ? 280 : 360}>
       <ComposedChart
         data={chartData}
-        margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+        // Room on the right for the latest-% labels (BUBBLE_W wide, plus a small gap)
+        margin={{ top: 4, right: BUBBLE_W + 10, left: 0, bottom: 0 }}
         onMouseMove={(s: { activeLabel?: string | number }) => { if (s?.activeLabel) onHover(String(s.activeLabel)); }}
         onMouseLeave={() => onHover(null)}
       >
@@ -261,6 +291,8 @@ const AllocationChart = React.memo(function AllocationChart({ chartData, bands, 
           <Line type="linear" dataKey="riskOn" name="Risk-on" stroke={RISK_LINE} strokeWidth={1.5}
             dot={false} activeDot={{ r: 3 }} isAnimationActive={false} />
         )}
+        {/* The latest % of each band, in its colour, beside the chart's right edge */}
+        <Customized component={<EdgeBubbles defs={edgeDefs} />} />
       </ComposedChart>
     </ResponsiveContainer>
   );
