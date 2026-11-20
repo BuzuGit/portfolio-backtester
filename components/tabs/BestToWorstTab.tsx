@@ -2,7 +2,7 @@
   THE BEST TO WORST TAB
 
   Two layouts of the same question, "which assets did best?":
-  - Ranking: the filtered assets sorted best to worst for one year (or the last 1–10 years),
+  - Ranking: the filtered assets sorted best to worst for one year (or the last 1–6 months / 1–10 years),
     with the return in each asset's own currency and in PLN.
   - Return Map: every year a column, assets ranked top to bottom, in a chosen currency,
     coloured by asset, class or return, with assets you click to track across the years.
@@ -15,6 +15,7 @@ import React from 'react';
 import type { AssetLookup } from '@/lib/fetchData';
 import { FX_TICKER_MAP } from '@/lib/backtest';
 import { getYearsWithData, type AssetsAnnualReturns } from '@/lib/assetStats';
+import { monthsBeforeIso } from '@/lib/dates';
 import { PhoneChoice } from '@/components/PhoneSheet';
 import {
   ASSET_CLASS_COLORS, METALS_CRYPTO_LABEL, PHONE_SCROLL_ROW, PINNED_FILTERS, RETURN_MAP_ASSET_COLORS, SEG,
@@ -23,7 +24,13 @@ import {
 
 /** A ticker's return over the last N years (the main screen's getPeriodReturn). */
 type PeriodReturn = { return: number; startDate: string; startPrice: number; endDate: string; endPrice: number } | null;
-export type BestToWorstMode = 'year' | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+/** 'year' = one calendar year; a number = the last N years; '1M' / '3M' / '6M' = the last N months. */
+export type BestToWorstMode = 'year' | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | '1M' | '3M' | '6M';
+type RankingPeriod = Exclude<BestToWorstMode, 'year'>;
+const MONTH_PERIODS = ['1M', '3M', '6M'] as const;
+const YEAR_PERIODS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+/** Button text for a period: 3 → "3Y", '3M' stays "3M". */
+const periodLabel = (p: RankingPeriod) => typeof p === 'number' ? `${p}Y` : p;
 export type ReturnMapCurrency = 'native' | 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD';
 
 export interface BestToWorstTabProps {
@@ -31,7 +38,7 @@ export interface BestToWorstTabProps {
   filteredAssets: AssetLookup[];                     // the assets passing the filter bar, in order
   memoizedAnnualReturns: AssetsAnnualReturns;
   fxAnnualReturns: Record<string, Record<number, number>>;   // xxxPLN calendar-year returns, %
-  getPeriodReturn: (ticker: string, years: number) => PeriodReturn;
+  getPeriodReturn: (ticker: string, years: number, months?: number) => PeriodReturn;
   bestToWorstLayout: 'ranking' | 'map';
   bestToWorstMode: BestToWorstMode;
   setBestToWorstMode: (m: BestToWorstMode) => void;
@@ -342,7 +349,7 @@ export default function BestToWorstTab({
    * Used for the "Best To Worst" view when a period button is selected.
    * Includes PLN return calculated using the same period's FX return.
    */
-  const getSortedAssetsByPeriodReturn = (years: number): Array<{
+  const getSortedAssetsByPeriodReturn = (period: RankingPeriod): Array<{
     ticker: string;
     name: string;
     return: number;
@@ -369,9 +376,13 @@ export default function BestToWorstTab({
       endPrice: number;
     }> = [];
 
+    // Years go in as before; '3M' becomes "0 years, 3 months"
+    const returnOver = (ticker: string) =>
+      typeof period === 'number' ? getPeriodReturn(ticker, period) : getPeriodReturn(ticker, 0, parseInt(period, 10));
+
     // Loop through all assets in the lookup table
     assetLookup.forEach(asset => {
-      const periodData = getPeriodReturn(asset.ticker, years);
+      const periodData = returnOver(asset.ticker);
       if (periodData) {
         const assetReturn = periodData.return;
         const fxTicker = asset.fx;
@@ -382,7 +393,7 @@ export default function BestToWorstTab({
         let fxReturn: number | null = null;
 
         if (fxTicker) {
-          const fxPeriodData = getPeriodReturn(fxTicker, years);
+          const fxPeriodData = returnOver(fxTicker);
           if (fxPeriodData) {
             fxReturn = fxPeriodData.return;
             // (1 + assetReturn) × (1 + fxReturn) - 1
@@ -438,13 +449,13 @@ export default function BestToWorstTab({
         const filteredTickers = new Set(getFilteredAssetLookup().map(a => a.ticker));
         const sortedAssets = (isYearMode
           ? getSortedAssetsByReturn(currentYear, annualReturns)
-          : getSortedAssetsByPeriodReturn(bestToWorstMode as number)
+          : getSortedAssetsByPeriodReturn(bestToWorstMode)
         ).filter(a => filteredTickers.has(a.ticker));
 
         // Column header text
         const returnColumnHeader = isYearMode
           ? `${currentYear} Return`
-          : `${bestToWorstMode}Y Return`;
+          : `${periodLabel(bestToWorstMode)} Return`;
 
         return (
           <>
@@ -512,13 +523,16 @@ export default function BestToWorstTab({
                 label="Ranking period"
                 options={[
                   ...years.slice().reverse().map(y => ({ value: `y${y}`, label: String(y), group: 'Calendar year' })),
-                  ...([1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const).map(p => ({ value: `p${p}`, label: `${p}Y`, hint: `last ${p} year${p === 1 ? '' : 's'}`, group: 'Last years' })),
+                  ...MONTH_PERIODS.map(p => ({ value: `p${p}`, label: p, hint: `last ${parseInt(p, 10)} month${p === '1M' ? '' : 's'}`, group: 'Last months' })),
+                  ...YEAR_PERIODS.map(p => ({ value: `p${p}`, label: `${p}Y`, hint: `last ${p} year${p === 1 ? '' : 's'}`, group: 'Last years' })),
                 ]}
                 selected={isYearMode ? `y${currentYear}` : `p${bestToWorstMode}`}
                 onPick={v => {
-                  const n = parseInt(v.slice(1), 10);
+                  const rest = v.slice(1);
+                  const n = parseInt(rest, 10);
                   if (v[0] === 'y') { setSelectedRankingYear(n); setBestToWorstMode('year'); }
-                  else setBestToWorstMode(n as Exclude<typeof bestToWorstMode, 'year'>);
+                  else if (rest.endsWith('M')) setBestToWorstMode(rest as typeof MONTH_PERIODS[number]);
+                  else setBestToWorstMode(n as typeof YEAR_PERIODS[number]);
                 }}
               />
             </div>
@@ -540,13 +554,13 @@ export default function BestToWorstTab({
             {/* Period Buttons */}
             <div className={`flex gap-1 ${PHONE_SCROLL_ROW} max-md:hidden`}>
               <span className={SEG}>
-              {([1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const).map(period => (
+              {[...MONTH_PERIODS, ...YEAR_PERIODS].map(period => (
                 <button
                   key={period}
                   onClick={() => setBestToWorstMode(period)}
                   className={segBtn(bestToWorstMode === period)}
                 >
-                  {period}Y
+                  {periodLabel(period)}
                 </button>
               ))}
               </span>
@@ -576,7 +590,16 @@ export default function BestToWorstTab({
               // - A 1Y–10Y period: the 5 full years before the period starts. The period runs back N
               //   years from the latest data, so 3Y in 2026 starts in 2023 and shows 2018 … 2022.
               // Years with no data at all are left out, so an early year can show fewer than 5.
-              const historyBefore = isYearMode ? currentYear : years[years.length - 1] - (bestToWorstMode as number);
+              // - A 1M–6M period: the 5 full years before the year it starts in (6M in Nov 2026 starts
+              //   in May 2026 → 2021 … 2025; 1M in January starts in December → the year before).
+              const latestEnd = sortedAssets.reduce((max, a) => {
+                const end = (a as { endDate?: string }).endDate ?? '';
+                return end > max ? end : max;
+              }, '');
+              const historyBefore = isYearMode ? currentYear
+                : typeof bestToWorstMode === 'number' ? years[years.length - 1] - bestToWorstMode
+                : latestEnd ? Number(monthsBeforeIso(latestEnd, parseInt(bestToWorstMode, 10)).slice(0, 4))
+                : years[years.length - 1];
               const historyYears = [5, 4, 3, 2, 1].map(k => historyBefore - k).filter(y => years.includes(y));
               // Shade: one fixed scale for every year (±40% = deepest, the app's rule for calendar-year
               // tiles), so +30% looks the same in any year and one outlier can't pale the rest.

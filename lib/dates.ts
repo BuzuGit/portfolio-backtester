@@ -16,6 +16,21 @@ export const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep'
  * so callers can always filter with `date >= periodStartIso(period)`.
  * Used by both asset-allocation charts so their period buttons follow one rule.
  */
+/**
+ * The date N months before a YYYY-MM-DD date: monthsBeforeIso('2026-11-20', 3) = '2026-08-20'.
+ * When that month is shorter, the day is pulled back to its last day, so one month before
+ * 31 March is 28/29 February (JavaScript's own setMonth would overshoot to 3 March).
+ * Used by the Ranking tab's 1M / 3M / 6M buttons.
+ */
+export function monthsBeforeIso(iso: string, months: number): string {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  const total = y * 12 + (m - 1) - months;            // months counted from year 0
+  const year = Math.floor(total / 12), month = total % 12;   // month is 0 = January
+  const lastDay = new Date(year, month + 1, 0).getDate();    // day 0 of next month = last day of this one
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${year}-${pad(month + 1)}-${pad(Math.min(d, lastDay))}`;
+}
+
 export function periodStartIso(period: string, today: Date = new Date()): string {
   const m = /^(\d+)Y$/.exec(period);
   if (!m) return '';
