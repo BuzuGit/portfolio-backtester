@@ -32,7 +32,10 @@ const PERIODS: readonly Period[] = ['1Y', '3Y', '5Y', 'Max'];
 // The risk-on line: the app's main dark ink, so it reads as "the summary" over the coloured bands.
 // Shared with the Positions tab's month-end chart.
 export const RISK_LINE = INK;
-export const RISK_LABEL = `Risk-on (${RISK_ON_CLASSES.join(' + ').replace('Metals & Crypto', 'M&C')})`;
+// One item of the risk-on summary line above each chart ("label  figure  date"), with the leading
+// line marker centred on the text. Every item uses it, so they all sit at the same height.
+export const RISK_ROW = 'inline-flex items-center gap-1 whitespace-nowrap leading-5';
+export const RISK_LABEL =`Risk-on (${RISK_ON_CLASSES.join(' + ').replace('Metals & Crypto', 'M&C')})`;
 
 // One band of the chart: what it is called, its colour, and how to read its amount from a day
 interface Band { name: string; color: string; pln: (p: AllocPoint) => number }
@@ -146,19 +149,25 @@ export default function AllocationHistory({ dailyData, view, setView, currency, 
       <div className="bg-white p-4 rounded-lg shadow">
         {/* Risk-on summary: today, and the period's high and low with their dates (class view
             only, like the line it describes) */}
-        <div className={`flex flex-wrap items-baseline gap-x-5 gap-y-1 text-xs mb-3 ${view === 'class' ? '' : 'hidden'}`}>
-          <span className="flex items-center gap-1.5">
+        {/* Every item is the same centred row (RISK_ROW), so the three line up whether or not
+            they start with the line marker */}
+        <div className={`flex flex-wrap items-center gap-x-5 gap-y-1 text-xs mb-3 ${view === 'class' ? '' : 'hidden'}`}>
+          <span className={RISK_ROW}>
             <span className="inline-block w-4 h-0.5" style={{ background: RISK_LINE }} />
             <span className="text-gray-500">{RISK_LABEL}:</span>
             <span className="font-semibold text-gray-800">{pct(riskOnPct(now))}</span>
             <span className="text-gray-400">today</span>
           </span>
-          <span title="Measured on month-end days, so the day or two an ETF switch spends in cash doesn't count">
-            <span className="text-gray-500">Month-end high </span><span className="font-semibold text-gray-800">{pct(riskOnPct(hi))}</span>
-            <span className="text-gray-400"> {monthYear(hi.date)}</span></span>
-          <span title="Measured on month-end days, so the day or two an ETF switch spends in cash doesn't count">
-            <span className="text-gray-500">low </span><span className="font-semibold text-gray-800">{pct(riskOnPct(lo))}</span>
-            <span className="text-gray-400"> {monthYear(lo.date)}</span></span>
+          <span className={RISK_ROW} title="Measured on month-end days, so the day or two an ETF switch spends in cash doesn't count">
+            <span className="text-gray-500">Month-end high</span>
+            <span className="font-semibold text-gray-800">{pct(riskOnPct(hi))}</span>
+            <span className="text-gray-400">{monthYear(hi.date)}</span>
+          </span>
+          <span className={RISK_ROW} title="Measured on month-end days, so the day or two an ETF switch spends in cash doesn't count">
+            <span className="text-gray-500">low</span>
+            <span className="font-semibold text-gray-800">{pct(riskOnPct(lo))}</span>
+            <span className="text-gray-400">{monthYear(lo.date)}</span>
+          </span>
         </div>
 
         <AllocationChart chartData={chartData} bands={bands} showRisk={view === 'class'} currency={currency} onHover={setHoverDate} />
@@ -232,7 +241,7 @@ const AllocationChart = React.memo(function AllocationChart({ chartData, bands, 
         <Tooltip content={<AllocTooltip bands={bands} showRisk={showRisk} currency={currency} />} />
         {bands.map((b, i) => (
           <Area key={b.name} type="linear" dataKey={`b${i}`} name={b.name} stackId="mix"
-            stroke={b.color} strokeWidth={0.5} fill={b.color} fillOpacity={0.88} isAnimationActive={false} />
+            stroke={b.color} strokeWidth={0.5} fill={b.color} fillOpacity={1} isAnimationActive={false} />
         ))}
         {showRisk && (
           <Line type="linear" dataKey="riskOn" name="Risk-on" stroke={RISK_LINE} strokeWidth={1.5}

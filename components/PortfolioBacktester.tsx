@@ -553,7 +553,7 @@ const PortfolioBacktester = () => {
   const [allCashAccounts, setAllCashAccounts] = useState<CashAccountBalance[]>([]);
   // The Positions tab's Allocation by Month-end chart: by class or currency, and its period
   const [posAllocView, setPosAllocView] = useState<'class' | 'currency'>('class');
-  const [posAllocPeriod, setPosAllocPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
+  const [posAllocPeriod, setPosAllocPeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y' | 'Max'>('Max');
   // Which cash balance the user drilled into, keyed "account|currency".
   // Empty string = showing the summary list, mirroring openSelectedTicker above.
   const [cashSelected, setCashSelected] = useState<string>('');
