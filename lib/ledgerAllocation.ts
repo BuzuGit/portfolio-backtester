@@ -18,21 +18,23 @@
 */
 
 import type { AssetLookup, AssetRow, UnitFee } from './fetchData';
+import { unitFeeQty } from './fetchData.ts';
 import type { PositionsModel } from './positions';
 import type { CashAccountBalance } from './cash';
 
-// Units given up to fees AFTER `date` (they were still held on `date`). Mirrors unitFeeQty in
-// fetchData.ts, re-typed here because that file can't be imported by the node tests.
+// Units given up to fees AFTER `date` (they were still held on `date`): all of them, less those
+// taken on or before it. Built on fetchData's unitFeeQty so the rule lives in one place.
 const feesAfter = (fees: UnitFee[] | undefined, date: string): number =>
-  (fees ?? []).reduce((s, f) => s + (f.date > date ? f.qty : 0), 0);
+  unitFeeQty(fees) - unitFeeQty(fees, date);
 
 /**
- * One holding at one month-end. `estimated` = the price sheet had no price for it that month, so
- * it was valued from its own trades instead (see ESTIMATES below). `valuePln` is null only when
- * the month has no exchange rate for its currency.
+ * One holding at one month-end. `estimated` = the price sheet has never had a price for it up to
+ * that month, so it was valued from its own trades instead (see ESTIMATES below). A month that
+ * merely skips a price uses the last one before it, as the Positions tab does for today.
+ * `valuePln` is null only when its currency has no exchange rate in the price sheet at all.
  */
 export interface MonthHolding { ticker: string; currency: string; qty: number; valuePln: number | null; estimated: boolean }
-/** One cash account (in one currency) at one month-end. `valuePln` null = no exchange rate that month. */
+/** One cash account (in one currency) at one month-end. `valuePln` null = no exchange rate for that currency. */
 export interface MonthCash { account: string; currency: string; balance: number; valuePln: number | null }
 export interface LedgerMonth {
   date: string;
@@ -87,17 +89,30 @@ export function ledgerMonthEnds(model: PositionsModel, cash: CashAccountBalance[
   const firstBuy = spans.reduce((m, s) => (s.from < m ? s.from : m), spans[0].from);
   const currencyOf = new Map(lookup.map(a => [a.ticker, a.currency || 'PLN']));
 
+  // The latest price seen for each ticker held at some point, and the latest rate for each
+  // currency. A blank cell then means "unchanged since the last one", not "worth nothing" — the
+  // same rule the Positions tab uses for today's value (getCurrentPrice walks back to the last price).
+  const heldTickers = new Set(spans.map(s => s.ticker));
+  const lastPrice = new Map<string, number>();
+  const lastRate: Record<string, number> = { PLN: 1 };
+
   const out: LedgerMonth[] = [];
   for (const row of rows) {
     const date = String(row.date);
+    // Remember this row's prices and rates first, even for rows before the first purchase: a
+    // later blank cell falls back on them
+    for (const t of Array.from(heldTickers)) {
+      const p = Number(row[t]);
+      if (p > 0) lastPrice.set(t, p);
+    }
+    for (const [ccy, col] of Object.entries(FX_COL)) {
+      const r = Number(row[col]);
+      if (r > 0) lastRate[ccy] = r;
+    }
     // Start with the month of the first purchase (its month-end row is the first on/after it)
     if (date.slice(0, 7) < firstBuy.slice(0, 7)) continue;
 
-    const pln: Record<string, number> = { PLN: 1 };
-    for (const [ccy, col] of Object.entries(FX_COL)) {
-      const r = Number(row[col]);
-      if (r > 0) pln[ccy] = r;
-    }
+    const pln: Record<string, number> = { ...lastRate };
     const toPln = (amount: number, ccy: string): number | null => (pln[ccy] ? amount * pln[ccy] : null);
 
     // Units of each ticker held on this date, and what they'd be worth by ESTIMATES (used only if
@@ -116,7 +131,7 @@ export function ledgerMonthEnds(model: PositionsModel, cash: CashAccountBalance[
     for (const [ticker, q] of Array.from(qty)) {
       if (Math.abs(q) < 1e-9) continue;
       const currency = currencyOf.get(ticker) ?? 'PLN';
-      const price = Number(row[ticker]);
+      const price = lastPrice.get(ticker) ?? 0;   // this month's, or the last one before it
       const native = price > 0 ? q * price : (estimate.get(ticker) ?? 0);
       holdings.push({ ticker, currency, qty: q, valuePln: toPln(native, currency), estimated: !(price > 0) });
     }

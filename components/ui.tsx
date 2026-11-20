@@ -49,7 +49,10 @@ export const CHART_PALETTE = {
 // Five rules, so every page uses colour the same way:
 //  1. GAIN and LOSS are the one green and the one red, for gains and losses only. The green-* and
 //     red-* Tailwind classes are the same two colours (tailwind.config.js). Nothing else (a line,
-//     a currency, a portfolio) is ever green or red, so a red bar always means a loss.
+//     a currency, a portfolio) is ever green or red, so a red BAR always means a loss.
+//     Two deliberate exceptions, both the user's choice — don't "fix" them: the SMA line is red
+//     (SMA_COLOR), and the Equities asset class is red (#e60000) in every asset-class chart, pie
+//     and mix bar (ASSET_CLASS_COLORS, 2026-11-20). There red names a class, not a loss.
 //  2. heatColor() (below) is the one heat scale for every heat-coloured cell.
 //  3. CURRENCY_COLORS and ASSET_CLASS_COLORS give each currency and asset class one colour, on
 //     every page.

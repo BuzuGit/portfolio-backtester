@@ -14,23 +14,28 @@
     - amounts are in the tab's chosen currency (PLN when it shows each position natively).
 
   The choices themselves (view, period) live in the main screen and are passed in, so they survive
-  switching tabs; only the hovered month is kept here.
+  switching tabs; only the hovered month is kept here. Moving the pointer changes only that, so
+  every figure below is memoised and the bars sit in their own memoised component: a hover redraws
+  the "Then vs Now" strip, not ~100 months x 6 bars.
 */
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip } from 'recharts';
 import type { AssetLookup, AssetRow } from '@/lib/fetchData';
+import { localTodayIso } from '@/lib/fetchData';
 import type { PositionsModel } from '@/lib/positions';
 import type { CashAccountBalance } from '@/lib/cash';
 import { ledgerMonthEnds, type LedgerMonth } from '@/lib/ledgerAllocation';
 import { RISK_ON_CLASSES } from '@/lib/allocation';
 import { portfolioClassOf } from '@/lib/holdings';
 import { isPhoneScreen } from '@/lib/savedSheet';
-import { MONTH_ABBR } from '@/lib/dates';
+import { MONTH_ABBR, periodStartIso } from '@/lib/dates';
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   ASSET_CLASS_COLORS, CURRENCY_COLORS, METALS_CRYPTO_CCY, METALS_CRYPTO_LABEL, MUTED, ResponsiveContainer, SEG, segBtn,
 } from '@/components/ui';
-import { AllocTooltipBox, RISK_LABEL, RISK_LINE, RISK_ROW, ThenVsNow, type AllocView } from '@/components/AllocationHistory';
+import {
+  AllocTooltipBox, RISK_LABEL, RISK_LINE, RISK_ROW, ThenVsNow, dateAxisTicks, monthYear, type AllocView,
+} from '@/components/AllocationHistory';
 
 export type MonthPeriod = '1Y' | '3Y' | '5Y' | '10Y' | 'Max';
 type Period = MonthPeriod;
@@ -44,12 +49,12 @@ const FALLBACK_COLOR = '#94a3b8';
 
 // "2026-11-30" -> "Nov 2026"
 const monthLong = (d: string) => `${MONTH_ABBR[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`;
-const monthShort = (d: string) => `${MONTH_ABBR[Number(d.slice(5, 7)) - 1]} ${d.slice(2, 4)}`;
 const pct = (v: number) => `${v.toFixed(1)}%`;
 
 // One month as the chart needs it: PLN per band, which bands contain an estimated value, the
 // risk-on amount, and the rates for converting amounts
 interface MonthMix { date: string; byBand: Record<string, number>; estimated: Set<string>; riskOn: number; total: number; pln: LedgerMonth['pln'] }
+interface Band { name: string; color: string }
 
 export interface AllocationByMonthProps {
   assetData: AssetRow[];
@@ -77,101 +82,134 @@ export default function AllocationByMonth({
     () => (positionsModel ? ledgerMonthEnds(positionsModel, allCashAccounts, assetLookup, assetData) : []),
     [positionsModel, allCashAccounts, assetLookup, assetData],
   );
-
-  // Same class / currency rules as the cards above (see effectiveClass / effectiveCurrency there)
   const info = useMemo(() => new Map(assetLookup.map(a => [a.ticker, a])), [assetLookup]);
-  const classOf = (t: string) => {
-    const a = info.get(t);
-    if (!a) return 'Other';
-    return groupMetalsCrypto ? portfolioClassOf(a) : (a.assetClass || 'Other');
-  };
-  const ccyOf = (t: string, fallback: string) => {
-    const a = info.get(t);
-    return a && groupMetalsCrypto && portfolioClassOf(a) === METALS_CRYPTO_LABEL ? METALS_CRYPTO_CCY : (a?.currency || fallback);
-  };
-  // Risk-on is always Equities + Metals & Crypto by the PortfolioClass column, whatever the
-  // toggle shows, so the figure doesn't change when you flip Group M&C
-  const isRiskOn = (t: string) => {
-    const a = info.get(t);
-    return !!a && (RISK_ON_CLASSES as readonly string[]).includes(portfolioClassOf(a));
-  };
 
-  // Each month split into bands, after the filters
-  const mixes: MonthMix[] = months.map(m => {
-    const byBand: Record<string, number> = {};
-    const estimated = new Set<string>();
-    let riskOn = 0;
-    for (const h of m.holdings) {
-      if (h.valuePln === null) continue;
-      if (accountFilter && !tickerAccounts[h.ticker]?.has(accountFilter)) continue;
-      const cls = classOf(h.ticker), ccy = ccyOf(h.ticker, h.currency);
-      if (view === 'class' && currencyFilter && ccy !== currencyFilter) continue;
-      if (view === 'currency' && classFilter && cls !== classFilter) continue;
-      const band = view === 'class' ? cls : ccy;
-      byBand[band] = (byBand[band] ?? 0) + h.valuePln;
-      if (h.estimated) estimated.add(band);
-      if (isRiskOn(h.ticker)) riskOn += h.valuePln;
-    }
-    for (const c of m.cash) {
-      if (c.valuePln === null) continue;
-      if (accountFilter && c.account !== accountFilter) continue;
-      if (view === 'class' && currencyFilter && c.currency !== currencyFilter) continue;
-      if (view === 'currency' && classFilter && classFilter !== CASH) continue;
-      const band = view === 'class' ? CASH : c.currency;
-      byBand[band] = (byBand[band] ?? 0) + c.valuePln;
-    }
-    // A band below zero (an account overdrawn by a rounding difference) can't be drawn in a 100%
-    // bar, so it counts as empty
-    for (const k of Object.keys(byBand)) if (byBand[k] < 0) byBand[k] = 0;
-    const total = Object.values(byBand).reduce((s, v) => s + v, 0);
-    return { date: m.date, byBand, estimated, riskOn, total, pln: m.pln };
-  }).filter(m => m.total > 0);
+  // Each month split into bands, after the filters. Same class / currency rules as the cards above
+  // (effectiveClass / effectiveCurrency there).
+  const mixes = useMemo((): MonthMix[] => {
+    const classOf = (t: string) => {
+      const a = info.get(t);
+      if (!a) return 'Other';
+      return groupMetalsCrypto ? portfolioClassOf(a) : (a.assetClass || 'Other');
+    };
+    const ccyOf = (t: string, fallback: string) => {
+      const a = info.get(t);
+      return a && groupMetalsCrypto && portfolioClassOf(a) === METALS_CRYPTO_LABEL ? METALS_CRYPTO_CCY : (a?.currency || fallback);
+    };
+    // Risk-on is always Equities + Metals & Crypto by the PortfolioClass column, whatever the
+    // toggle shows, so the figure doesn't change when you flip Group M&C
+    const isRiskOn = (t: string) => {
+      const a = info.get(t);
+      return !!a && (RISK_ON_CLASSES as readonly string[]).includes(portfolioClassOf(a));
+    };
+    return months.map(m => {
+      const byBand: Record<string, number> = {};
+      const estimated = new Set<string>();
+      let riskOn = 0;
+      for (const h of m.holdings) {
+        if (h.valuePln === null) continue;   // no exchange rate at all: listed under the chart instead
+        if (accountFilter && !tickerAccounts[h.ticker]?.has(accountFilter)) continue;
+        const cls = classOf(h.ticker), ccy = ccyOf(h.ticker, h.currency);
+        if (view === 'class' && currencyFilter && ccy !== currencyFilter) continue;
+        if (view === 'currency' && classFilter && cls !== classFilter) continue;
+        const band = view === 'class' ? cls : ccy;
+        byBand[band] = (byBand[band] ?? 0) + h.valuePln;
+        if (h.estimated) estimated.add(band);
+        if (isRiskOn(h.ticker)) riskOn += h.valuePln;
+      }
+      for (const c of m.cash) {
+        if (c.valuePln === null) continue;
+        if (accountFilter && c.account !== accountFilter) continue;
+        if (view === 'class' && currencyFilter && c.currency !== currencyFilter) continue;
+        if (view === 'currency' && classFilter && classFilter !== CASH) continue;
+        const band = view === 'class' ? CASH : c.currency;
+        byBand[band] = (byBand[band] ?? 0) + c.valuePln;
+      }
+      // A band below zero (an account overdrawn by a rounding difference) can't be drawn in a
+      // 100% bar, so it counts as empty
+      for (const k of Object.keys(byBand)) if (byBand[k] < 0) byBand[k] = 0;
+      const total = Object.values(byBand).reduce((s, v) => s + v, 0);
+      return { date: m.date, byBand, estimated, riskOn, total, pln: m.pln };
+    }).filter(m => m.total > 0);
+  }, [months, info, groupMetalsCrypto, tickerAccounts, accountFilter, currencyFilter, classFilter, view]);
 
-  // The months inside the chosen period
-  const now = new Date();
-  const years = period === 'Max' ? 0 : parseInt(period, 10);   // "10Y" -> 10
-  const cutoff = years ? new Date(new Date().setFullYear(now.getFullYear() - years)).toISOString().slice(0, 10) : '';
-  const shown = mixes.filter(m => m.date >= cutoff);
-  if (shown.length === 0) return null;
+  // Currencies that never had an exchange rate in the price sheet: their holdings and cash can't
+  // be converted, so they are left out of the bars — said in words under the chart, never silently
+  const unconverted = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of months) {
+      for (const h of m.holdings) if (h.valuePln === null) s.add(h.currency);
+      for (const c of m.cash) if (c.valuePln === null) s.add(c.currency);
+    }
+    return Array.from(s).sort();
+  }, [months]);
+
+  // The months inside the chosen period (periodStartIso: the rule both allocation charts share)
+  const shown = useMemo(() => {
+    const start = periodStartIso(period);
+    return mixes.filter(m => m.date >= start);
+  }, [mixes, period]);
 
   // The bands present in the period, in stacking order
-  const order = view === 'class' ? CLASS_ORDER : CCY_ORDER;
-  const rank = (k: string) => {
-    const i = order.indexOf(k);
-    return i >= 0 ? i : (view === 'class' ? CLASS_ORDER.indexOf('Fixed Income') - 0.5 : order.length);
-  };
-  const bandNames = Array.from(new Set(shown.flatMap(m => Object.keys(m.byBand).filter(k => m.byBand[k] > 0))))
-    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-  const bands = bandNames.map(name => ({
-    name,
-    color: (view === 'class' ? ASSET_CLASS_COLORS[name] : CURRENCY_COLORS[name]) ?? FALLBACK_COLOR,
-  }));
-  const sharesOf = (m: MonthMix) => bandNames.map(n => ((m.byBand[n] ?? 0) / m.total) * 100);
-  const riskPct = (m: MonthMix) => (m.riskOn / m.total) * 100;
+  const bands = useMemo((): Band[] => {
+    const order = view === 'class' ? CLASS_ORDER : CCY_ORDER;
+    const rank = (k: string) => {
+      const i = order.indexOf(k);
+      return i >= 0 ? i : (view === 'class' ? CLASS_ORDER.indexOf('Fixed Income') - 0.5 : order.length);
+    };
+    return Array.from(new Set(shown.flatMap(m => Object.keys(m.byBand).filter(k => m.byBand[k] > 0))))
+      .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+      .map(name => ({ name, color: (view === 'class' ? ASSET_CLASS_COLORS[name] : CURRENCY_COLORS[name]) ?? FALLBACK_COLOR }));
+  }, [shown, view]);
+
+  const chartData = useMemo(() => shown.map(m => {
+    const row: Record<string, unknown> = { date: m.date, riskOn: (m.riskOn / m.total) * 100 };
+    bands.forEach((b, i) => { row[`b${i}`] = ((m.byBand[b.name] ?? 0) / m.total) * 100; });
+    return row;
+  }), [shown, bands]);
+  const byDate = useMemo(() => new Map(shown.map(m => [m.date, m])), [shown]);
 
   const amountCcy = positionsCurrency || 'PLN';
-  const fromPln = (m: MonthMix, v: number) => (amountCcy === 'PLN' ? v : m.pln[amountCcy] ? v / m.pln[amountCcy] : null);
+  const showRisk = view === 'class';
+  const lastDate = shown.length > 0 ? shown[shown.length - 1].date : '';
 
-  const chartData = shown.map(m => {
-    const row: Record<string, unknown> = { date: m.date, riskOn: riskPct(m) };
-    sharesOf(m).forEach((v, i) => { row[`b${i}`] = v; });
-    return row;
-  });
-  const byDate = new Map(shown.map(m => [m.date, m]));
+  // The hover box. useCallback so the memoised bars below keep the same function across hovers.
+  const renderTooltip = useCallback((p: { active?: boolean; label?: string | number }) => {
+    const m = p.active && p.label !== undefined ? byDate.get(String(p.label)) : undefined;
+    if (!m) return null;
+    const fromPln = (v: number) => (amountCcy === 'PLN' ? v : m.pln[amountCcy] ? v / m.pln[amountCcy] : null);
+    return (
+      <AllocTooltipBox
+        title={m.date === lastDate ? `${monthLong(m.date)} · latest` : `End of ${monthLong(m.date)}`}
+        rows={bands.map(b => ({
+          name: b.name, color: b.color, pct: ((m.byBand[b.name] ?? 0) / m.total) * 100,
+          amount: fromPln(m.byBand[b.name] ?? 0), estimated: m.estimated.has(b.name),
+        }))}
+        total={fromPln(m.total)}
+        currency={amountCcy}
+        riskOn={showRisk ? (m.riskOn / m.total) * 100 : undefined}
+        note={bands.some(b => m.estimated.has(b.name)) ? '≈ no market price yet: valued from its own buy and sale prices.' : undefined}
+      />
+    );
+  }, [byDate, bands, amountCcy, showRisk, lastDate]);
+
+  if (shown.length === 0) return null;
+
   const last = shown[shown.length - 1];
   const thenMix = (hoverDate && byDate.get(hoverDate)) || shown[0];
-  let hi = shown[0], lo = shown[0];
-  for (const m of shown) {
+  const sharesOf = (m: MonthMix) => bands.map(b => ((m.byBand[b.name] ?? 0) / m.total) * 100);
+  const riskPct = (m: MonthMix) => (m.riskOn / m.total) * 100;
+
+  // The risk-on high and low over COMPLETED months only: the last bar is the month in progress,
+  // valued at today's prices (it has its own "latest" figure). Same rule as the Portfolio chart.
+  const today = localTodayIso();
+  const completed = shown.filter(m => m.date <= today);
+  const ranked = completed.length > 0 ? completed : shown;
+  let hi = ranked[0], lo = ranked[0];
+  for (const m of ranked) {
     if (riskPct(m) > riskPct(hi)) hi = m;
     if (riskPct(m) < riskPct(lo)) lo = m;
   }
-  const showRisk = view === 'class';
-  const titleOf = (m: MonthMix) => (m === last ? `${monthLong(m.date)} · latest` : `End of ${monthLong(m.date)}`);
-
-  // X axis: January of each year, or every third month when the period is under 3 years
-  const yearly = shown.length > 36;
-  const ticks = shown.map(m => m.date).filter(d => (yearly ? d.slice(5, 7) === '01' : (Number(d.slice(5, 7)) - 1) % 3 === 0));
-  const phone = isPhoneScreen();
 
   // What the filters above are doing to this chart, in words
   const filterNote = [
@@ -220,61 +258,20 @@ export default function AllocationByMonth({
             <span className="font-semibold text-gray-800">{pct(riskPct(last))}</span>
             <span className="text-gray-400">latest</span>
           </span>
-          <span className={RISK_ROW}>
+          <span className={RISK_ROW} title="Over finished months only (the current month is still moving)">
             <span className="text-gray-500">High</span>
             <span className="font-semibold text-gray-800">{pct(riskPct(hi))}</span>
-            <span className="text-gray-400">{monthShort(hi.date)}</span>
+            <span className="text-gray-400">{monthYear(hi.date)}</span>
           </span>
-          <span className={RISK_ROW}>
+          <span className={RISK_ROW} title="Over finished months only (the current month is still moving)">
             <span className="text-gray-500">Low</span>
             <span className="font-semibold text-gray-800">{pct(riskPct(lo))}</span>
-            <span className="text-gray-400">{monthShort(lo.date)}</span>
+            <span className="text-gray-400">{monthYear(lo.date)}</span>
           </span>
         </div>
       )}
 
-      <ResponsiveContainer width="100%" height={phone ? 280 : 340}>
-        <ComposedChart
-          data={chartData}
-          margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
-          // Gaps between bars help on a wide screen; on a phone 100 bars are ~2px each and the gaps
-          // turn them into pinstripes, so there the bars touch
-          barCategoryGap={phone && shown.length > 40 ? 0 : shown.length > 60 ? '10%' : '20%'}
-          onMouseMove={(s: { activeLabel?: string | number }) => { if (s?.activeLabel) setHoverDate(String(s.activeLabel)); }}
-          onMouseLeave={() => setHoverDate(null)}
-        >
-          <XAxis dataKey="date" ticks={ticks} interval={0}
-            tickFormatter={(d: string) => (yearly ? d.slice(0, 4) : monthShort(d))}
-            tick={{ fontSize: 11, fill: MUTED }} tickLine={false} />
-          <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`}
-            tick={{ fontSize: 11, fill: MUTED }} tickLine={false} axisLine={false} width={40} allowDataOverflow />
-          <Tooltip cursor={{ fill: 'rgba(148,163,184,0.15)' }} content={(p: { active?: boolean; label?: string | number }) => {
-            const m = p.active && p.label !== undefined ? byDate.get(String(p.label)) : undefined;
-            if (!m) return null;
-            const anyEstimate = bandNames.some(n => m.estimated.has(n));
-            return (
-              <AllocTooltipBox
-                title={titleOf(m)}
-                rows={bandNames.map((n, i) => ({
-                  name: n, color: bands[i].color, pct: ((m.byBand[n] ?? 0) / m.total) * 100,
-                  amount: fromPln(m, m.byBand[n] ?? 0), estimated: m.estimated.has(n),
-                }))}
-                total={fromPln(m, m.total)}
-                currency={amountCcy}
-                riskOn={showRisk ? riskPct(m) : undefined}
-                note={anyEstimate ? '≈ no market price that month: valued from its own buy and sale prices.' : undefined}
-              />
-            );
-          }} />
-          {bands.map((b, i) => (
-            <Bar key={b.name} dataKey={`b${i}`} name={b.name} stackId="mix" fill={b.color} isAnimationActive={false} />
-          ))}
-          {showRisk && (
-            <Line type="linear" dataKey="riskOn" name="Risk-on" stroke={RISK_LINE} strokeWidth={1.5}
-              dot={false} activeDot={{ r: 3 }} isAnimationActive={false} />
-          )}
-        </ComposedChart>
-      </ResponsiveContainer>
+      <MonthBars chartData={chartData} bands={bands} showRisk={showRisk} renderTooltip={renderTooltip} onHover={setHoverDate} />
 
       {/* Legend, top band first like the bars */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-gray-600">
@@ -289,6 +286,11 @@ export default function AllocationByMonth({
           </span>
         )}
       </div>
+      {unconverted.length > 0 && (
+        <p className="text-xs text-amber-600 mt-1.5">
+          Not in the bars: anything held in {unconverted.join(', ')} (the price sheet has no exchange rate for it).
+        </p>
+      )}
 
       <ThenVsNow
         thenLabel={monthLong(thenMix.date)} nowLabel={`${monthLong(last.date)} (latest)`} bands={bands}
@@ -298,3 +300,42 @@ export default function AllocationByMonth({
     </div>
   );
 }
+
+// The stacked bars on their own, memoised: hovering changes only the hovered month in the parent,
+// and none of these props, so the bars aren't redrawn on every pointer move.
+const MonthBars = React.memo(function MonthBars({ chartData, bands, showRisk, renderTooltip, onHover }: {
+  chartData: Record<string, unknown>[];
+  bands: Band[];
+  showRisk: boolean;
+  renderTooltip: (p: { active?: boolean; label?: string | number }) => React.ReactNode;
+  onHover: (date: string | null) => void;
+}) {
+  const { ticks, label } = dateAxisTicks(chartData.map(r => String(r.date)));
+  const phone = isPhoneScreen();
+  return (
+    <ResponsiveContainer width="100%" height={phone ? 280 : 340}>
+      <ComposedChart
+        data={chartData}
+        margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+        // Gaps between bars help on a wide screen; on a phone 100 bars are ~2px each and the gaps
+        // turn them into pinstripes, so there the bars touch
+        barCategoryGap={phone && chartData.length > 40 ? 0 : chartData.length > 60 ? '10%' : '20%'}
+        onMouseMove={(s: { activeLabel?: string | number }) => { if (s?.activeLabel) onHover(String(s.activeLabel)); }}
+        onMouseLeave={() => onHover(null)}
+      >
+        <XAxis dataKey="date" ticks={ticks} interval={0} tickFormatter={label}
+          tick={{ fontSize: 11, fill: MUTED }} tickLine={false} />
+        <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`}
+          tick={{ fontSize: 11, fill: MUTED }} tickLine={false} axisLine={false} width={40} allowDataOverflow />
+        <Tooltip cursor={{ fill: 'rgba(148,163,184,0.15)' }} content={renderTooltip} />
+        {bands.map((b, i) => (
+          <Bar key={b.name} dataKey={`b${i}`} name={b.name} stackId="mix" fill={b.color} isAnimationActive={false} />
+        ))}
+        {showRisk && (
+          <Line type="linear" dataKey="riskOn" name="Risk-on" stroke={RISK_LINE} strokeWidth={1.5}
+            dot={false} activeDot={{ r: 3 }} isAnimationActive={false} />
+        )}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+});
