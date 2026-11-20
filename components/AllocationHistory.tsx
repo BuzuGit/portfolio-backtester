@@ -18,7 +18,7 @@ import {
   ALLOC_CLASSES, ALLOC_CURRENCIES, RISK_ON_CLASSES, dailyAllocation, plnTo, riskOnPct, sharesPct, type AllocPoint,
 } from '@/lib/allocation';
 import { isPhoneScreen } from '@/lib/savedSheet';
-import { MONTH_ABBR } from '@/lib/dates';
+import { MONTH_ABBR, periodStartIso } from '@/lib/dates';
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   ASSET_CLASS_COLORS, CARD, CURRENCY_COLORS, INK, LINE, MUTED, ResponsiveContainer, SEG, readableTextOn, segBtn,
@@ -48,7 +48,36 @@ export const longDate = (d: string) => `${Number(d.slice(8, 10))} ${MONTH_ABBR[N
 // "2021-03-15" -> "Mar 21"
 export const monthYear = (d: string) => `${MONTH_ABBR[Number(d.slice(5, 7)) - 1]} ${d.slice(2, 4)}`;
 const pct = (v: number) => `${v.toFixed(1)}%`;
-const money = (v: number | null, ccy: string) =>
+
+/**
+ * X-axis marks for both allocation charts, daily or month-end: the first date of each year
+ * ("2021"), or of every third month ("Apr 26") when the dates span under 3 years. The very first
+ * date gets a mark only if it opens a year (or quarter) itself, so a series starting mid-December
+ * doesn't print its year over a few days of data.
+ */
+export function dateAxisTicks(dates: string[]): { ticks: string[]; label: (d: string) => string } {
+  const ticks: string[] = [];
+  const labels = new Map<string, string>();
+  if (dates.length > 0) {
+    const first = dates[0], last = dates[dates.length - 1];
+    const yearly = (Date.parse(last) - Date.parse(first)) / (365.25 * 864e5) >= 3;
+    let prev = '';
+    for (const d of dates) {
+      const key = d.slice(0, yearly ? 4 : 7);
+      const month = Number(d.slice(5, 7));
+      const opensPeriod = yearly ? month === 1 : (month - 1) % 3 === 0;
+      // A new year / quarter-month starts here (for the first date: only if it opens one)
+      if (key !== prev && (prev !== '' ? (yearly || opensPeriod) : opensPeriod)) {
+        ticks.push(d);
+        labels.set(d, yearly ? key : monthYear(d));
+      }
+      prev = key;
+    }
+  }
+  return { ticks, label: (d: string) => labels.get(d) ?? d };
+}
+
+const money =(v: number | null, ccy: string) =>
   v === null ? '—' : `${Math.round(v).toLocaleString('en-US')} ${ccy}`;
 
 export interface AllocationHistoryProps {
@@ -68,12 +97,10 @@ export default function AllocationHistory({ dailyData, view, setView, currency, 
     [dailyData],
   );
 
-  // The days inside the chosen period — the same cut-off rule as the two charts above
+  // The days inside the chosen period (periodStartIso: the rule both allocation charts share)
   const shown = useMemo(() => {
-    const now = new Date();
-    const years = period === 'Max' ? 0 : Number(period[0]);
-    const cutoff = years ? new Date(new Date().setFullYear(now.getFullYear() - years)) : new Date('1900-01-01');
-    return points.filter(p => new Date(p.date) >= cutoff);
+    const start = periodStartIso(period);
+    return points.filter(p => p.date >= start);
   }, [points, period]);
 
   // The bands for this view, dropping any that are empty for the whole period (Multi-asset in the
@@ -100,7 +127,11 @@ export default function AllocationHistory({ dailyData, view, setView, currency, 
   // ETF and buying its replacement a day or two later parks the money in cash for those days
   // (12 Sep 2025: 19.9% for one trading day), which is a trade in progress, not a risk-off period.
   // The chart still shows those days; the headline figures skip them.
-  const monthEnds = shown.filter((p, i) => i === shown.length - 1 || shown[i + 1].date.slice(0, 7) !== p.date.slice(0, 7));
+  // Only COMPLETED months count: the last day of the data is today, not a month-end, so it is left
+  // out (it has its own "today" figure) — otherwise a switch in progress today would become the
+  // "month-end low". A period too short to hold a finished month falls back to every day.
+  const completed = shown.filter((p, i) => i < shown.length - 1 && shown[i + 1].date.slice(0, 7) !== p.date.slice(0, 7));
+  const monthEnds = completed.length > 0 ? completed : shown;
   let hi = monthEnds[0], lo = monthEnds[0];
   for (const p of monthEnds) {
     if (riskOnPct(p) > riskOnPct(hi)) hi = p;
@@ -206,24 +237,7 @@ const AllocationChart = React.memo(function AllocationChart({ chartData, bands, 
   currency: Ccy;
   onHover: (date: string | null) => void;
 }) {
-  // X axis: the first day of each year, or of every third month when the period is under 3 years
-  const ticks: string[] = [];
-  const tickLabel = new Map<string, string>();
-  if (chartData.length > 0) {
-    const first = String(chartData[0].date), last = String(chartData[chartData.length - 1].date);
-    const yearly = (new Date(last).getTime() - new Date(first).getTime()) / (365.25 * 864e5) >= 3;
-    let prev = first.slice(0, yearly ? 4 : 7);
-    for (const r of chartData) {
-      const d = String(r.date);
-      const key = d.slice(0, yearly ? 4 : 7);
-      const month = Number(d.slice(5, 7));
-      if (key !== prev && (yearly || (month - 1) % 3 === 0)) {
-        ticks.push(d);
-        tickLabel.set(d, yearly ? key : monthYear(d));
-      }
-      prev = key;
-    }
-  }
+  const { ticks, label: tickLabel } = dateAxisTicks(chartData.map(r => String(r.date)));
   const phone = isPhoneScreen();
 
   return (
@@ -234,7 +248,7 @@ const AllocationChart = React.memo(function AllocationChart({ chartData, bands, 
         onMouseMove={(s: { activeLabel?: string | number }) => { if (s?.activeLabel) onHover(String(s.activeLabel)); }}
         onMouseLeave={() => onHover(null)}
       >
-        <XAxis dataKey="date" ticks={ticks} interval={0} tickFormatter={(d: string) => tickLabel.get(d) ?? d}
+        <XAxis dataKey="date" ticks={ticks} interval={0} tickFormatter={tickLabel}
           tick={{ fontSize: 11, fill: MUTED }} tickLine={false} />
         <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`}
           tick={{ fontSize: 11, fill: MUTED }} tickLine={false} axisLine={false} width={40} allowDataOverflow />
