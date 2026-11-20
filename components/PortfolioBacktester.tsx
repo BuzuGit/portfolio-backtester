@@ -57,7 +57,7 @@ import TrendFollowingTab from '@/components/tabs/TrendFollowingTab';
 import CorrelationsTab from '@/components/tabs/CorrelationsTab';
 import GraphsTab from '@/components/tabs/GraphsTab';
 import AnnualReturnsTab from '@/components/tabs/AnnualReturnsTab';
-import BestToWorstTab from '@/components/tabs/BestToWorstTab';
+import BestToWorstTab, { type BestToWorstMode } from '@/components/tabs/BestToWorstTab';
 import MonthlyTab from '@/components/tabs/MonthlyTab';
 import BacktestSetup from '@/components/tabs/BacktestSetup';
 import BacktestResults from '@/components/tabs/BacktestResults';
@@ -86,7 +86,7 @@ import {
   type ReturnsChartPeriod, type PeriodicReturnsRow,
 } from '@/components/charts';
 import type { AssetsAnnualReturns } from '@/lib/assetStats';
-import { toYM, MONTH_ABBR } from '@/lib/dates';
+import { toYM, MONTH_ABBR, monthsBeforeIso } from '@/lib/dates';
 // The shared design system: colours, heat scale, button/field looks, chart helpers, tooltip texts
 import {
   SERIES_COLORS, BLACK, MUTED, BTN_MAIN, BTN_SECOND, isDarkTheme, setPhoneBarColours, formatPrice,
@@ -354,7 +354,7 @@ const PortfolioBacktester = () => {
 
   // Best To Worst view mode: 'year' for annual returns, or a number (1-5) for period returns
   // When null or 'year', the year dropdown is used. When 1-5, shows period returns.
-  const [bestToWorstMode, setBestToWorstMode] = useState<'year' | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10>('year');
+  const [bestToWorstMode, setBestToWorstMode] = useState<BestToWorstMode>('year');
 
   // Best To Worst "Return Map" — years laid side by side, each column ranked best (top) to worst (bottom).
   // layout: 'ranking' = the original single-year table, 'map' = the multi-year return map
@@ -2177,8 +2177,9 @@ const PortfolioBacktester = () => {
    * Calculates total return for a ticker over a specific number of years.
    * Returns: current price vs price X years ago.
    * Used for the 1Y, 2Y, 3Y, 4Y, 5Y columns in Assets Annual Returns.
+   * Pass `months` (and years = 0) for a shorter window, e.g. Ranking's 1M / 3M / 6M buttons.
    */
-  const getPeriodReturn = (ticker: string, years: number): {
+  const getPeriodReturn = (ticker: string, years: number, months?: number): {
     return: number;
     startDate: string;
     startPrice: number;
@@ -2202,9 +2203,10 @@ const PortfolioBacktester = () => {
     const endPrice = Number(endRow[ticker]);
 
     // Calculate target start date (X years ago)
+    // (or, for a months window, X months ago — same day of the month, pulled back in a shorter month)
     const targetStartDate = new Date(endDate);
     targetStartDate.setFullYear(endDate.getFullYear() - years);
-    const targetDateStr = targetStartDate.toISOString().split('T')[0];
+    const targetDateStr = months ? monthsBeforeIso(endRow.date, months) : targetStartDate.toISOString().split('T')[0];
 
     // Find the closest date on or after target date with valid price
     let startRow = null;
@@ -2224,7 +2226,10 @@ const PortfolioBacktester = () => {
     // so it should be excluded rather than showing a shorter return mislabelled as e.g. "10Y".
     const actualStartMs = new Date(startRow.date).getTime();
     const targetStartMs = new Date(targetDateStr).getTime();
-    if (actualStartMs - targetStartMs > 93 * 24 * 60 * 60 * 1000) return null;
+    // For a months window the slack shrinks with it (about a week per month: 1M → 8 days,
+    // 6M → 47), so an asset that only started trading last week can't pass as a "1M" return.
+    const slackDays = months ? Math.round(months * 7.75) : 93;
+    if (actualStartMs - targetStartMs > slackDays * 24 * 60 * 60 * 1000) return null;
 
     // EDO: "3Y" is the bond BOUGHT three years ago and held (rolled at maturity) — a fresh
     // purchase at the window's start, not a slice of one long chain (see lib/edo.ts).
