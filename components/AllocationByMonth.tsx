@@ -19,7 +19,7 @@
   the "Then vs Now" strip, not ~100 months x 6 bars.
 */
 import React, { useCallback, useMemo, useState } from 'react';
-import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip } from 'recharts';
+import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Customized } from 'recharts';
 import type { AssetLookup, AssetRow } from '@/lib/fetchData';
 import { localTodayIso } from '@/lib/fetchData';
 import type { PositionsModel } from '@/lib/positions';
@@ -34,8 +34,9 @@ import {
   ASSET_CLASS_COLORS, CURRENCY_COLORS, METALS_CRYPTO_CCY, METALS_CRYPTO_LABEL, MUTED, ResponsiveContainer, SEG, segBtn,
 } from '@/components/ui';
 import {
-  AllocTooltipBox, RISK_LABEL, RISK_LINE, RISK_ROW, ThenVsNow, dateAxisTicks, monthYear, type AllocView,
+  AllocTooltipBox, RISK_LABEL, RISK_LINE, RISK_ROW, ThenVsNow, dateAxisTicks, latestShareBubbles, monthYear, type AllocView,
 } from '@/components/AllocationHistory';
+import { BUBBLE_W, EdgeBubbles } from '@/components/charts';
 
 export type MonthPeriod = '1Y' | '3Y' | '5Y' | '10Y' | 'Max';
 type Period = MonthPeriod;
@@ -312,14 +313,20 @@ const MonthBars = React.memo(function MonthBars({ chartData, bands, showRisk, re
 }) {
   const { ticks, label } = dateAxisTicks(chartData.map(r => String(r.date)));
   const phone = isPhoneScreen();
+  // The latest month's share of each band, labelled beside the right edge (as on the Portfolio chart)
+  const edgeDefs = latestShareBubbles(chartData, bands);
+  // Gaps between bars help on a wide screen; on a phone ~100 bars are under 3px each, so the bars
+  // touch. Even then Recharts rounds each bar's width DOWN to whole pixels (a 1.77px slot gets a
+  // 1px bar), and the leftover sliver shows the card through as pinstripes. A 1px outline in the
+  // bar's own colour adds half a pixel on each side, which closes a gap of up to 1px.
+  const touching = phone && chartData.length > 40;
   return (
     <ResponsiveContainer width="100%" height={phone ? 280 : 340}>
       <ComposedChart
         data={chartData}
-        margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
-        // Gaps between bars help on a wide screen; on a phone 100 bars are ~2px each and the gaps
-        // turn them into pinstripes, so there the bars touch
-        barCategoryGap={phone && chartData.length > 40 ? 0 : chartData.length > 60 ? '10%' : '20%'}
+        // Room on the right for the latest-% labels (BUBBLE_W wide, plus a small gap)
+        margin={{ top: 4, right: BUBBLE_W + 10, left: 0, bottom: 0 }}
+        barCategoryGap={touching ? 0 : chartData.length > 60 ? '10%' : '20%'}
         onMouseMove={(s: { activeLabel?: string | number }) => { if (s?.activeLabel) onHover(String(s.activeLabel)); }}
         onMouseLeave={() => onHover(null)}
       >
@@ -329,12 +336,15 @@ const MonthBars = React.memo(function MonthBars({ chartData, bands, showRisk, re
           tick={{ fontSize: 11, fill: MUTED }} tickLine={false} axisLine={false} width={40} allowDataOverflow />
         <Tooltip cursor={{ fill: 'rgba(148,163,184,0.15)' }} content={renderTooltip} />
         {bands.map((b, i) => (
-          <Bar key={b.name} dataKey={`b${i}`} name={b.name} stackId="mix" fill={b.color} isAnimationActive={false} />
+          <Bar key={b.name} dataKey={`b${i}`} name={b.name} stackId="mix" fill={b.color} isAnimationActive={false}
+            stroke={touching ? b.color : undefined} strokeWidth={touching ? 1 : 0} />
         ))}
         {showRisk && (
           <Line type="linear" dataKey="riskOn" name="Risk-on" stroke={RISK_LINE} strokeWidth={1.5}
             dot={false} activeDot={{ r: 3 }} isAnimationActive={false} />
         )}
+        {/* The latest % of each band, in its colour, beside the chart's right edge */}
+        <Customized component={<EdgeBubbles defs={edgeDefs} />} />
       </ComposedChart>
     </ResponsiveContainer>
   );
