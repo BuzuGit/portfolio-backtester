@@ -37,7 +37,12 @@
   --c-yellow: #F5A623;           /* the user's favourite: profit on the Portfolio tab */
   --c-sma: #ef4444;              /* the 10-month SMA is always this red, in both modes */
   --c-bench-label: #92600a;      /* the small figures on world-equities bars */
-  --c-cash: #94a3b8;             /* the Cash asset class: deliberately the one grey in the set */
+  --c-cash: #cccccc;             /* the Cash asset class: deliberately the one grey in the set */
+  /* Asset-class colours (the user's picks, 2026-11-20). Equities are red by choice, the one place
+     red is not a loss; Metals & Crypto use --c-yellow. Same in both modes. */
+  --c-class-eq: #e60000;
+  --c-class-fi: #90a723;
+  --c-class-alt: #4f46e5;
 
   /* The chart palette (CHART_PALETTE in the component) */
   --c-blue: #2f6fa8;

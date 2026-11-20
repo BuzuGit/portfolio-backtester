@@ -235,9 +235,11 @@ export const PINNED_FILTERS = 'sticky top-0 md:top-4 z-40 bg-white pt-2 pb-1';
 
 // Asset class colors for the breakdown chart and table color dots
 export const ASSET_CLASS_COLORS: Record<string, string> = {
-  'Fixed Income': CHART_PALETTE.olive, 'Equities': CHART_PALETTE.wine,
-  'Crypto': CHART_PALETTE.rose, 'Alternatives': CHART_PALETTE.violet,
-  'Metals & Crypto': CHART_PALETTE.gold, // gold-ish to represent the physical + crypto nature
+  // The user's picks (2026-11-20): red equities (the one exception to theme rule 1 — red here is a
+  // class, not a loss), olive fixed income, indigo alternatives, their favourite yellow for M&C
+  'Fixed Income': 'var(--c-class-fi)', 'Equities': 'var(--c-class-eq)',
+  'Crypto': CHART_PALETTE.rose, 'Alternatives': 'var(--c-class-alt)',
+  'Metals & Crypto': THEME_YELLOW,
   // Only the Portfolio tab's Asset Allocation chart has these two (the Daily sheet's PLN RE bucket,
   // and Skandia + StashAway): brick for property, steel blue for the mixed funds.
   'Real estate': CHART_PALETTE.terracotta, 'Multi-asset': CHART_PALETTE.blue,
@@ -253,7 +255,7 @@ export const ASSET_CLASS_COLORS: Record<string, string> = {
 export const CURRENCY_COLORS: Record<string, string> = {
   PLN: SLATE, USD: CHART_PALETTE.teal, SGD: CHART_PALETTE.blue,
   EUR: CHART_PALETTE.violet, CHF: CHART_PALETTE.rose,
-  'M&C': CHART_PALETTE.gold, // matches the Metals & Crypto asset class color
+  'M&C': THEME_YELLOW, // matches the Metals & Crypto asset class color
 };
 
 // Return Map (Best To Worst tab): one fixed colour per asset, so the same asset is easy to spot

@@ -27,7 +27,7 @@ import { CURRENCY_OPTIONS, CURRENCY_SYMBOLS } from '@/components/options';
 import {
   ASSET_CLASS_COLORS, BLACK, BTN_SECOND, CAGR_LOT_HINT, CHART_PALETTE, CURRENCY_COLORS, FIELD, GAIN, HALO, INK, LINE,
   LOSS, METALS_CRYPTO_CCY, METALS_CRYPTO_LABEL, MUTED, OLIVE_LABEL, ON_BLACK, ResponsiveContainer, SEG, SLATE,
-  WEIGHT_BAR, WINE_LABEL, XIRR_HINT, formatPrice, segBtn,
+  WEIGHT_BAR, WINE_LABEL, XIRR_HINT, formatPrice, readableTextOn, segBtn,
 } from '@/components/ui';
 import {
   DateAxisTick, collapseTradePrices, computePnlZeroFraction, mergeComparisonData, pushTradePrice, renderEdgeBubbles,
@@ -37,7 +37,7 @@ import {
   SharesHeldTooltip, TradeHistoryTable, SortableTh, applyFifoRunningTotals, applyUnitFeeToLots, heldQty,
   mergeUnitFees, sortTableRows, unitFeeToEvent, type TableSortMap, type TableSortState, type TradeEvent,
 } from '@/components/positionsParts';
-import AllocationByMonth from '@/components/AllocationByMonth';   // the mix at every month-end
+import AllocationByMonth, { type MonthPeriod } from '@/components/AllocationByMonth';   // the mix at every month-end
 import type { AllocView } from '@/components/AllocationHistory';
 
 type SetState<T> = React.Dispatch<React.SetStateAction<T>>;
@@ -53,7 +53,7 @@ export interface PositionsTabProps {
   // For the Allocation by Month-end chart: every cash account (closed ones too), and its choices
   allCashAccounts: CashAccountBalance[];
   posAllocView: AllocView; setPosAllocView: (v: AllocView) => void;
-  posAllocPeriod: '1Y' | '3Y' | '5Y' | 'Max'; setPosAllocPeriod: (p: '1Y' | '3Y' | '5Y' | 'Max') => void;
+  posAllocPeriod: MonthPeriod; setPosAllocPeriod: (p: MonthPeriod) => void;
   calculateXIRR: (cashFlows: { date: Date; amount: number }[]) => number | null;
   getClosedTransactions: (ticker: string) => ClosedPositionRow[];
   getOpenPurchases: (ticker: string) => TransactionRow[];
@@ -1700,12 +1700,14 @@ export default function PositionsTab({
                           innerRadius={35}
                           paddingAngle={2}
                           labelLine={false}
-                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }: { cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; percent: number }) => {
+                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, fill }: { cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; percent: number; fill?: string }) => {
                             if (percent < 0.05) return null;
                             const RAD = Math.PI / 180;
                             const r = innerRadius + (outerRadius - innerRadius) * 0.5;
+                            // White or dark text, whichever reads on the slice's own colour (light
+                            // grey Cash and yellow M&C need dark text)
                             return (
-                              <text x={cx + r * Math.cos(-midAngle * RAD)} y={cy + r * Math.sin(-midAngle * RAD)} fill="white" textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold">
+                              <text x={cx + r * Math.cos(-midAngle * RAD)} y={cy + r * Math.sin(-midAngle * RAD)} fill={fill ? readableTextOn(fill) : 'white'} textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold">
                                 {`${(percent * 100).toFixed(1)}%`}
                               </text>
                             );
@@ -1766,7 +1768,7 @@ export default function PositionsTab({
                               className="h-full rounded flex items-center pl-1.5"
                               style={{ width: `${barPct}%`, backgroundColor: color }}
                             >
-                              <span className="font-mono whitespace-nowrap" style={{ fontSize: 10, color: barPct >= 10 ? (color === SLATE ? ON_BLACK : 'white') : color }}>
+                              <span className="font-mono whitespace-nowrap" style={{ fontSize: 10, color: barPct >= 10 ? readableTextOn(color) : color }}>
                                 {ccyRow.currentValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                               </span>
                             </div>
@@ -1797,12 +1799,14 @@ export default function PositionsTab({
                           innerRadius={35}
                           paddingAngle={2}
                           labelLine={false}
-                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }: { cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; percent: number }) => {
+                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, fill }: { cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; percent: number; fill?: string }) => {
                             if (percent < 0.05) return null;
                             const RAD = Math.PI / 180;
                             const r = innerRadius + (outerRadius - innerRadius) * 0.5;
+                            // White or dark text, whichever reads on the slice's own colour (light
+                            // grey Cash and yellow M&C need dark text)
                             return (
-                              <text x={cx + r * Math.cos(-midAngle * RAD)} y={cy + r * Math.sin(-midAngle * RAD)} fill="white" textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold">
+                              <text x={cx + r * Math.cos(-midAngle * RAD)} y={cy + r * Math.sin(-midAngle * RAD)} fill={fill ? readableTextOn(fill) : 'white'} textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold">
                                 {`${(percent * 100).toFixed(1)}%`}
                               </text>
                             );

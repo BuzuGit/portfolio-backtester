@@ -30,10 +30,11 @@ import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   ASSET_CLASS_COLORS, CURRENCY_COLORS, METALS_CRYPTO_CCY, METALS_CRYPTO_LABEL, MUTED, ResponsiveContainer, SEG, segBtn,
 } from '@/components/ui';
-import { AllocTooltipBox, RISK_LABEL, RISK_LINE, ThenVsNow, type AllocView } from '@/components/AllocationHistory';
+import { AllocTooltipBox, RISK_LABEL, RISK_LINE, RISK_ROW, ThenVsNow, type AllocView } from '@/components/AllocationHistory';
 
-type Period = '1Y' | '3Y' | '5Y' | 'Max';
-const PERIODS: readonly Period[] = ['1Y', '3Y', '5Y', 'Max'];
+export type MonthPeriod = '1Y' | '3Y' | '5Y' | '10Y' | 'Max';
+type Period = MonthPeriod;
+const PERIODS: readonly Period[] = ['1Y', '3Y', '5Y', '10Y', 'Max'];
 const CASH = 'Cash';
 // Stacking order, bottom up. Equities and Metals & Crypto first, so with Group M&C on the
 // risk-on line runs along the top of the M&C band. Anything unlisted goes before Fixed Income.
@@ -128,7 +129,7 @@ export default function AllocationByMonth({
 
   // The months inside the chosen period
   const now = new Date();
-  const years = period === 'Max' ? 0 : Number(period[0]);
+  const years = period === 'Max' ? 0 : parseInt(period, 10);   // "10Y" -> 10
   const cutoff = years ? new Date(new Date().setFullYear(now.getFullYear() - years)).toISOString().slice(0, 10) : '';
   const shown = mixes.filter(m => m.date >= cutoff);
   if (shown.length === 0) return null;
@@ -212,17 +213,23 @@ export default function AllocationByMonth({
       </div>
 
       {showRisk && (
-        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 text-xs mb-3">
-          <span className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs mb-3">
+          <span className={RISK_ROW}>
             <span className="inline-block w-4 h-0.5" style={{ background: RISK_LINE }} />
             <span className="text-gray-500">{RISK_LABEL}:</span>
             <span className="font-semibold text-gray-800">{pct(riskPct(last))}</span>
             <span className="text-gray-400">latest</span>
           </span>
-          <span><span className="text-gray-500">High </span><span className="font-semibold text-gray-800">{pct(riskPct(hi))}</span>
-            <span className="text-gray-400"> {monthShort(hi.date)}</span></span>
-          <span><span className="text-gray-500">Low </span><span className="font-semibold text-gray-800">{pct(riskPct(lo))}</span>
-            <span className="text-gray-400"> {monthShort(lo.date)}</span></span>
+          <span className={RISK_ROW}>
+            <span className="text-gray-500">High</span>
+            <span className="font-semibold text-gray-800">{pct(riskPct(hi))}</span>
+            <span className="text-gray-400">{monthShort(hi.date)}</span>
+          </span>
+          <span className={RISK_ROW}>
+            <span className="text-gray-500">Low</span>
+            <span className="font-semibold text-gray-800">{pct(riskPct(lo))}</span>
+            <span className="text-gray-400">{monthShort(lo.date)}</span>
+          </span>
         </div>
       )}
 
