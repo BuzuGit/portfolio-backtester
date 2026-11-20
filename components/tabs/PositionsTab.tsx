@@ -37,6 +37,8 @@ import {
   SharesHeldTooltip, TradeHistoryTable, SortableTh, applyFifoRunningTotals, applyUnitFeeToLots, heldQty,
   mergeUnitFees, sortTableRows, unitFeeToEvent, type TableSortMap, type TableSortState, type TradeEvent,
 } from '@/components/positionsParts';
+import AllocationByMonth from '@/components/AllocationByMonth';   // the mix at every month-end
+import type { AllocView } from '@/components/AllocationHistory';
 
 type SetState<T> = React.Dispatch<React.SetStateAction<T>>;
 
@@ -48,6 +50,10 @@ export interface PositionsTabProps {
   positionsModel: PositionsModel | null;
   cashAccounts: CashAccountBalance[];
   edoMissingBanner: React.ReactNode;                 // a warning when EDO bonds are held but their sheet is missing
+  // For the Allocation by Month-end chart: every cash account (closed ones too), and its choices
+  allCashAccounts: CashAccountBalance[];
+  posAllocView: AllocView; setPosAllocView: (v: AllocView) => void;
+  posAllocPeriod: '1Y' | '3Y' | '5Y' | 'Max'; setPosAllocPeriod: (p: '1Y' | '3Y' | '5Y' | 'Max') => void;
   calculateXIRR: (cashFlows: { date: Date; amount: number }[]) => number | null;
   getClosedTransactions: (ticker: string) => ClosedPositionRow[];
   getOpenPurchases: (ticker: string) => TransactionRow[];
@@ -87,6 +93,7 @@ export interface PositionsTabProps {
 
 export default function PositionsTab({
   assetData, assetLookup, closedData, transactionData, positionsModel, cashAccounts, edoMissingBanner,
+  allCashAccounts, posAllocView, setPosAllocView, posAllocPeriod, setPosAllocPeriod,
   calculateXIRR, getClosedTransactions, getOpenPurchases, getOpenDividends, tableSort, sortPropsFor,
   closedSelectAllRef, openSelectAllRef, positionsCurrency, setPositionsCurrency, groupMetalsCrypto,
   setGroupMetalsCrypto, cashCategory, setCashCategory, cashSelected, setCashSelected, openAccountFilter,
@@ -1983,6 +1990,19 @@ export default function PositionsTab({
                 </div>
               );
             })()}
+
+            {/* === Allocation by Month-end (how the mix above changed over time) === */}
+            {openSummaryData.length > 0 && (
+              <AllocationByMonth
+                assetData={assetData} assetLookup={assetLookup} positionsModel={positionsModel}
+                allCashAccounts={allCashAccounts} groupMetalsCrypto={groupMetalsCrypto}
+                tickerAccounts={tickerPurchaseAccounts}
+                accountFilter={openAccountFilter} currencyFilter={openCurrencyFilter} classFilter={openAssetClassFilter}
+                positionsCurrency={positionsCurrency}
+                view={posAllocView} setView={setPosAllocView}
+                period={posAllocPeriod} setPeriod={setPosAllocPeriod}
+              />
+            )}
 
             {/* === Cash Table === */}
             {/* Sits above Open Positions because it answers the prior question:

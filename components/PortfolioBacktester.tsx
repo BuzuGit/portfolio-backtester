@@ -548,6 +548,12 @@ const PortfolioBacktester = () => {
   // Transactions ledger as the positions above, but answering a different question:
   // not "what do I own?" but "what cash is parked where?". See lib/cash.ts.
   const [cashAccounts, setCashAccounts] = useState<CashAccountBalance[]>([]);
+  // Every cash account INCLUDING ones closed since: the Positions tab's month-end allocation chart
+  // needs what sat in them back then. (Same objects as above, so this costs almost no memory.)
+  const [allCashAccounts, setAllCashAccounts] = useState<CashAccountBalance[]>([]);
+  // The Positions tab's Allocation by Month-end chart: by class or currency, and its period
+  const [posAllocView, setPosAllocView] = useState<'class' | 'currency'>('class');
+  const [posAllocPeriod, setPosAllocPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
   // Which cash balance the user drilled into, keyed "account|currency".
   // Empty string = showing the summary list, mirroring openSelectedTicker above.
   const [cashSelected, setCashSelected] = useState<string>('');
@@ -852,7 +858,8 @@ const PortfolioBacktester = () => {
       // holding the raw ledger and recomputing, which costs the same memory and more
       // work. Building it takes well under a millisecond, so it happens once here
       // rather than on render.
-      const cash = selectVisibleCash(buildCashAccounts(fetchedLedgerData));
+      const allCash = buildCashAccounts(fetchedLedgerData);
+      const cash = selectVisibleCash(allCash);
 
       if (fetchedLedgerData.length === 0) {
         console.warn('Ledger is empty — the Positions tab will have nothing to show');
@@ -869,6 +876,7 @@ const PortfolioBacktester = () => {
       setYearsData(fetchedYearsData);
       setPositionsModel(model);
       setCashAccounts(cash);
+      setAllCashAccounts(allCash);
       setClosedData(effectiveClosed);
       setTransactionData(effectiveTransactions);
       setDailyData(fetchedDailyData);
@@ -3024,6 +3032,9 @@ const PortfolioBacktester = () => {
             <PositionsTab
               assetData={assetData} assetLookup={assetLookup} closedData={closedData} transactionData={transactionData}
               positionsModel={positionsModel} cashAccounts={cashAccounts} edoMissingBanner={edoMissingBanner}
+              allCashAccounts={allCashAccounts}
+              posAllocView={posAllocView} setPosAllocView={setPosAllocView}
+              posAllocPeriod={posAllocPeriod} setPosAllocPeriod={setPosAllocPeriod}
               calculateXIRR={calculateXIRR} getClosedTransactions={getClosedTransactions}
               getOpenPurchases={getOpenPurchases} getOpenDividends={getOpenDividends}
               tableSort={tableSort} sortPropsFor={sortPropsFor}

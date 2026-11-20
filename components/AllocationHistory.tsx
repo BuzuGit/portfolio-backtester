@@ -29,9 +29,10 @@ type Ccy = 'PLN' | 'USD' | 'SGD' | 'CHF';
 type Period = '1Y' | '3Y' | '5Y' | 'Max';
 const CCYS: readonly Ccy[] = ['PLN', 'USD', 'SGD', 'CHF'];
 const PERIODS: readonly Period[] = ['1Y', '3Y', '5Y', 'Max'];
-// The risk-on line: the app's main dark ink, so it reads as "the summary" over the coloured bands
-const RISK_LINE = INK;
-const RISK_LABEL = `Risk-on (${RISK_ON_CLASSES.join(' + ').replace('Metals & Crypto', 'M&C')})`;
+// The risk-on line: the app's main dark ink, so it reads as "the summary" over the coloured bands.
+// Shared with the Positions tab's month-end chart.
+export const RISK_LINE = INK;
+export const RISK_LABEL = `Risk-on (${RISK_ON_CLASSES.join(' + ').replace('Metals & Crypto', 'M&C')})`;
 
 // One band of the chart: what it is called, its colour, and how to read its amount from a day
 interface Band { name: string; color: string; pln: (p: AllocPoint) => number }
@@ -40,11 +41,11 @@ const classBands: Band[] = ALLOC_CLASSES.map(c => ({ name: c, color: ASSET_CLASS
 const currencyBands: Band[] = ALLOC_CURRENCIES.map(c => ({ name: c, color: CURRENCY_COLORS[c] ?? '#94a3b8', pln: p => p.byCurrency[c] }));
 
 // "2021-03-15" -> "15 Mar 2021"
-const longDate = (d: string) => `${Number(d.slice(8, 10))} ${MONTH_ABBR[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`;
+export const longDate = (d: string) => `${Number(d.slice(8, 10))} ${MONTH_ABBR[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`;
 // "2021-03-15" -> "Mar 21"
-const monthYear = (d: string) => `${MONTH_ABBR[Number(d.slice(5, 7)) - 1]} ${d.slice(2, 4)}`;
+export const monthYear = (d: string) => `${MONTH_ABBR[Number(d.slice(5, 7)) - 1]} ${d.slice(2, 4)}`;
 const pct = (v: number) => `${v.toFixed(1)}%`;
-const money = (v: number | null, ccy: Ccy) =>
+const money = (v: number | null, ccy: string) =>
   v === null ? '—' : `${Math.round(v).toLocaleString('en-US')} ${ccy}`;
 
 export interface AllocationHistoryProps {
@@ -176,7 +177,12 @@ export default function AllocationHistory({ dailyData, view, setView, currency, 
           )}
         </div>
 
-        <ThenVsNow then={thenPoint} now={now} bands={bands} hovering={!!hoverDate} />
+        <ThenVsNow
+          thenLabel={longDate(thenPoint.date)} nowLabel={longDate(now.date)} bands={bands}
+          thenPct={bands.map(b => (b.pln(thenPoint) / thenPoint.totalPln) * 100)}
+          nowPct={bands.map(b => (b.pln(now) / now.totalPln) * 100)}
+          hint={hoverDate ? 'Showing the day under the pointer.' : 'Then = start of the period. Hover (or touch) the chart to compare another day.'}
+        />
       </div>
     </div>
   );
@@ -237,7 +243,7 @@ const AllocationChart = React.memo(function AllocationChart({ chartData, bands, 
   );
 });
 
-// The hover box: the day's bands from top to bottom, each with its share and its amount
+// The Portfolio chart's hover box: turns the day under the pointer into rows for AllocTooltipBox
 function AllocTooltip({ active, payload, bands, showRisk, currency }: {
   active?: boolean;
   payload?: { payload?: { point?: AllocPoint; riskOn?: number } }[];
@@ -246,22 +252,44 @@ function AllocTooltip({ active, payload, bands, showRisk, currency }: {
   const row = payload?.[0]?.payload;
   const p = row?.point;
   if (!active || !p) return null;
-  const total = plnTo(p, p.totalPln, currency);
+  return (
+    <AllocTooltipBox
+      title={longDate(p.date)}
+      rows={bands.map(b => ({ name: b.name, color: b.color, pct: (b.pln(p) / p.totalPln) * 100, amount: plnTo(p, b.pln(p), currency) }))}
+      total={plnTo(p, p.totalPln, currency)}
+      currency={currency}
+      riskOn={showRisk ? row?.riskOn : undefined}
+    />
+  );
+}
+
+/**
+ * The hover box both allocation charts share: each band from top to bottom with its share and
+ * its amount, the total, and the risk-on share. `rows` run bottom band first (the stack order);
+ * empty ones are skipped. `estimated` puts "≈" before an amount valued without a market price.
+ */
+export function AllocTooltipBox({ title, rows, total, currency, riskOn, note }: {
+  title: string;
+  rows: { name: string; color: string; pct: number; amount: number | null; estimated?: boolean }[];
+  total: number | null;
+  currency: string;
+  riskOn?: number;
+  note?: string;
+}) {
   return (
     <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 6, padding: '6px 10px', fontSize: 12 }}>
-      <div className="font-semibold mb-1" style={{ color: INK }}>{longDate(p.date)}</div>
+      <div className="font-semibold mb-1" style={{ color: INK }}>{title}</div>
       <table style={{ borderCollapse: 'collapse' }}>
         <tbody>
-          {[...bands].reverse().map(b => {
-            const pln = b.pln(p);
-            if (pln <= 0) return null;
+          {[...rows].reverse().map(r => {
+            if (!(r.pct > 0)) return null;
             return (
-              <tr key={b.name}>
+              <tr key={r.name}>
                 <td style={{ paddingRight: 10 }}>
-                  <span className="inline-block w-2 h-2 rounded-sm mr-1.5" style={{ background: b.color }} />{b.name}
+                  <span className="inline-block w-2 h-2 rounded-sm mr-1.5" style={{ background: r.color }} />{r.name}
                 </td>
-                <td style={{ textAlign: 'right', paddingRight: 10, fontWeight: 600 }}>{pct((pln / p.totalPln) * 100)}</td>
-                <td style={{ textAlign: 'right', color: MUTED }}>{money(plnTo(p, pln, currency), currency)}</td>
+                <td style={{ textAlign: 'right', paddingRight: 10, fontWeight: 600 }}>{pct(r.pct)}</td>
+                <td style={{ textAlign: 'right', color: MUTED }}>{r.estimated ? '≈ ' : ''}{money(r.amount, currency)}</td>
               </tr>
             );
           })}
@@ -270,24 +298,31 @@ function AllocTooltip({ active, payload, bands, showRisk, currency }: {
             <td />
             <td style={{ textAlign: 'right', paddingTop: 2, fontWeight: 600 }}>{money(total, currency)}</td>
           </tr>
-          {showRisk && row?.riskOn !== undefined && (
+          {riskOn !== undefined && (
             <tr>
               <td style={{ paddingRight: 10 }}>Risk-on</td>
-              <td style={{ textAlign: 'right', paddingRight: 10, fontWeight: 600 }}>{pct(row.riskOn)}</td>
+              <td style={{ textAlign: 'right', paddingRight: 10, fontWeight: 600 }}>{pct(riskOn)}</td>
               <td />
             </tr>
           )}
         </tbody>
       </table>
+      {note && <div style={{ color: MUTED, fontSize: 11, marginTop: 4, maxWidth: 260 }}>{note}</div>}
     </div>
   );
 }
 
-// Two thin 100% bars — a past day and today — and how much each band moved between them, in
-// percentage points. Neutral colours on purpose: a shift in the mix is not a gain or a loss.
-function ThenVsNow({ then, now, bands, hovering }: { then: AllocPoint; now: AllocPoint; bands: Band[]; hovering: boolean }) {
-  const thenPct = bands.map(b => (b.pln(then) / then.totalPln) * 100);
-  const nowPct = bands.map(b => (b.pln(now) / now.totalPln) * 100);
+/**
+ * Two thin 100% bars, a past date and today, and how much each band moved between them, in
+ * percentage points. Neutral colours on purpose: a shift in the mix is not a gain or a loss.
+ * Shared by both allocation charts. `bands`, `thenPct` and `nowPct` run bottom band first.
+ */
+export function ThenVsNow({ thenLabel, nowLabel, bands, thenPct, nowPct, hint }: {
+  thenLabel: string; nowLabel: string;
+  bands: { name: string; color: string }[];
+  thenPct: number[]; nowPct: number[];
+  hint: string;
+}) {
   const bar = (shares: number[]) => (
     <div className="flex h-5 w-full rounded overflow-hidden">
       {[...bands].reverse().map((b, ri) => {
@@ -306,11 +341,11 @@ function ThenVsNow({ then, now, bands, hovering }: { then: AllocPoint; now: Allo
     <div className="mt-4 pt-3 border-t border-gray-200">
       <div className="grid grid-cols-[150px_1fr] max-md:grid-cols-1 gap-x-3 gap-y-1.5 items-center text-xs">
         <span className="text-gray-500 whitespace-nowrap">
-          <span className="font-semibold text-gray-700">Then</span> · {longDate(then.date)}
+          <span className="font-semibold text-gray-700">Then</span> · {thenLabel}
         </span>
         {bar(thenPct)}
         <span className="text-gray-500 whitespace-nowrap max-md:mt-1">
-          <span className="font-semibold text-gray-700">Now</span> · {longDate(now.date)}
+          <span className="font-semibold text-gray-700">Now</span> · {nowLabel}
         </span>
         {bar(nowPct)}
       </div>
@@ -328,9 +363,7 @@ function ThenVsNow({ then, now, bands, hovering }: { then: AllocPoint; now: Allo
           );
         })}
       </div>
-      <p className="text-[11px] text-gray-400 mt-1.5">
-        {hovering ? 'Showing the day under the pointer.' : 'Then = start of the period. Hover (or touch) the chart to compare another day.'}
-      </p>
+      <p className="text-[11px] text-gray-400 mt-1.5">{hint}</p>
     </div>
   );
 }
