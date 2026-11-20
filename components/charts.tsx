@@ -89,8 +89,8 @@ export type RechartsCustomizedProps = {
 /** Right-edge bubbles as a component, for `<Customized component={<EdgeBubbles defs={...} />} />`.
  *  Recharts clones the element and passes in the chart geometry. Defined at module scope so it
  *  keeps one identity across renders (see DivergingBar below for why that matters). */
-export const EdgeBubbles = (props: Partial<RechartsCustomizedProps> & { defs: BubbleDef[] }) =>
-  renderEdgeBubbles(props as RechartsCustomizedProps, props.defs);
+export const EdgeBubbles = (props: Partial<RechartsCustomizedProps> & { defs: BubbleDef[]; bubbleWidth?: number }) =>
+  renderEdgeBubbles(props as RechartsCustomizedProps, props.defs, props.bubbleWidth);
 
 /** Definition for a single right-edge bubble (colored label at chart's right edge). */
 export interface BubbleDef {
@@ -196,6 +196,8 @@ export const BUBBLE_RX = 4;   // border-radius of rounded corners
 export function renderEdgeBubbles(
   props: RechartsCustomizedProps,
   defs: BubbleDef[],
+  // Narrower bubbles for short labels ("24.9%"): the allocation charts use ~40px. Default BUBBLE_W.
+  bubbleWidth: number = BUBBLE_W,
 ): JSX.Element | null {
   const { yAxisMap, offset: offsetData, width: chartWidth, height: chartHeight } = props;
   if (!yAxisMap || !offsetData || !chartWidth) return null;
@@ -245,11 +247,11 @@ export function renderEdgeBubbles(
         <g key={i}>
           <rect
             x={bubbleX} y={b.yRaw - BUBBLE_H / 2}
-            width={BUBBLE_W} height={BUBBLE_H}
+            width={bubbleWidth} height={BUBBLE_H}
             rx={BUBBLE_RX} ry={BUBBLE_RX} fill={b.color}
           />
           <text
-            x={bubbleX + BUBBLE_W / 2} y={b.yRaw}
+            x={bubbleX + bubbleWidth / 2} y={b.yRaw}
             textAnchor="middle" dominantBaseline="central"
             fill={b.textColor ?? ([BLACK, INK, SLATE].includes(b.color) ? ON_BLACK : '#ffffff')} fontSize={11} fontWeight={600}
           >
