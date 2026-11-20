@@ -43,6 +43,7 @@
   --c-class-eq: #e60000;
   --c-class-fi: #90a723;
   --c-class-alt: #4f46e5;
+  --c-class-re: #757575;          /* Real estate: a mid grey, darker than Cash's light grey */
 
   /* The chart palette (CHART_PALETTE in the component) */
   --c-blue: #2f6fa8;

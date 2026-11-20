@@ -241,8 +241,9 @@ export const ASSET_CLASS_COLORS: Record<string, string> = {
   'Crypto': CHART_PALETTE.rose, 'Alternatives': 'var(--c-class-alt)',
   'Metals & Crypto': THEME_YELLOW,
   // Only the Portfolio tab's Asset Allocation chart has these two (the Daily sheet's PLN RE bucket,
-  // and Skandia + StashAway): brick for property, steel blue for the mixed funds.
-  'Real estate': CHART_PALETTE.terracotta, 'Multi-asset': CHART_PALETTE.blue,
+  // and Skandia + StashAway): mid grey for property (the user's pick, 2026-11-20), steel blue for
+  // the mixed funds.
+  'Real estate': 'var(--c-class-re)', 'Multi-asset': CHART_PALETTE.blue,
   // Cash is deliberately the one grey in the set. It is not an investment competing with the
   // others for attention, and a muted slice reads as "not at work yet" at a glance.
   'Cash': 'var(--c-cash)',
