@@ -25,7 +25,7 @@ import {
   ASSET_CLASS_COLORS, BLACK, CARD, CURRENCY_COLORS, INK, LINE, MUTED, ResponsiveContainer, SEG, SLATE, readableTextOn,
   segBtn,
 } from '@/components/ui';
-import { BUBBLE_W, EdgeBubbles, type BubbleDef } from '@/components/charts';
+import { EdgeBubbles, type BubbleDef } from '@/components/charts';
 
 export type AllocView = 'class' | 'currency';
 type Ccy = 'PLN' | 'USD' | 'SGD' | 'CHF';
@@ -86,6 +86,10 @@ export function dateAxisTicks(dates: string[]): { ticks: string[]; label: (d: st
  * apart where bands are too thin to hold one each). Bands empty on the last row get no label.
  * `chartData` rows carry each band's share under b0, b1... in `bands` order (bottom band first).
  */
+// Width of those labels: just enough for "24.9%" at 11px (the user asked for ~60% of the 62px used
+// on the price charts). Both allocation charts use it for the labels and the room beside the plot.
+export const ALLOC_LABEL_W = 40;
+
 export function latestShareBubbles(chartData: Record<string, unknown>[], bands: { name: string; color: string }[]): BubbleDef[] {
   const last = chartData[chartData.length - 1];
   if (!last) return [];
@@ -274,8 +278,8 @@ const AllocationChart = React.memo(function AllocationChart({ chartData, bands, 
     <ResponsiveContainer width="100%" height={phone ? 280 : 360}>
       <ComposedChart
         data={chartData}
-        // Room on the right for the latest-% labels (BUBBLE_W wide, plus a small gap)
-        margin={{ top: 4, right: BUBBLE_W + 10, left: 0, bottom: 0 }}
+        // Room on the right for the latest-% labels (ALLOC_LABEL_W wide, plus a small gap)
+        margin={{ top: 4, right: ALLOC_LABEL_W + 8, left: 0, bottom: 0 }}
         onMouseMove={(s: { activeLabel?: string | number }) => { if (s?.activeLabel) onHover(String(s.activeLabel)); }}
         onMouseLeave={() => onHover(null)}
       >
@@ -293,7 +297,7 @@ const AllocationChart = React.memo(function AllocationChart({ chartData, bands, 
             dot={false} activeDot={{ r: 3 }} isAnimationActive={false} />
         )}
         {/* The latest % of each band, in its colour, beside the chart's right edge */}
-        <Customized component={<EdgeBubbles defs={edgeDefs} />} />
+        <Customized component={<EdgeBubbles defs={edgeDefs} bubbleWidth={ALLOC_LABEL_W} />} />
       </ComposedChart>
     </ResponsiveContainer>
   );

@@ -283,9 +283,12 @@ export const readableTextOn = (color: string): string => {
   // The sums need real numbers, so a theme colour (var(--c-teal)) is first looked up in
   // the page. Before the page exists (the server's first pass) there is nothing to look it up in,
   // but this table only ever appears after the data has loaded in the browser.
-  const hex = color.startsWith('var(') && typeof document !== 'undefined'
+  let hex = color.startsWith('var(') && typeof document !== 'undefined'
     ? getComputedStyle(document.documentElement).getPropertyValue(color.slice(4, -1)).trim()
     : color;
+  // The live site's CSS is minified, which shortens #cccccc to #ccc (found 2026-11-20: Cash labels
+  // came out white on light grey in production only). Expand the short form before reading it.
+  if (/^#[0-9a-f]{3}$/i.test(hex)) hex = '#' + hex.slice(1).split('').map(c => c + c).join('');
   const n = parseInt(hex.slice(1), 16);
   const linear = (c: number) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
   // Relative luminance: 0 = black, 1 = white
