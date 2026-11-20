@@ -371,15 +371,28 @@ if ($local -ne $remoteHead) {
 # something a local typecheck never sees, which would sit broken in production unnoticed.
 # Vercel reports build status back to GitHub as a commit status, so we can watch the merge
 # commit through the API we already have a token for -- no separate Vercel login needed.
-# Repos with no deployment hooked up (CashFlowsTracker) simply report nothing, and we say so.
+# Repos with no deployment hooked up simply report nothing, and we say so.
+#
+# Silence is ambiguous, though: it can also mean Vercel has not started yet, or missed the push
+# altogether (2026-11-20: the preview built, but the merge to main never got a production build,
+# and an earlier version of this script reported "No deployment is wired up" after 30 seconds).
+# So we first ask whether this repo has EVER had a deployment. If it has, it is wired up, and
+# silence means "not started" -- we keep waiting the full time, and if nothing starts we say the
+# site did NOT update, rather than calling it a repo without deployments.
 
 $deployState = "skipped"
 $deployUrl = ""
 
 if (-not $NoWait) {
     Write-Step "Waiting for the deployment"
+    $hasDeployments = $true   # if we can't tell, assume it does: waiting too long beats giving up early
+    try {
+        $prior = Invoke-RestMethod -Uri "https://api.github.com/repos/$owner/$repo/deployments?per_page=1" -Headers $headers
+        $hasDeployments = @($prior).Count -gt 0
+    } catch { }
     $deadline = (Get-Date).AddMinutes(5)
     $emptyPolls = 0
+    $sawStatus = $false
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 10
         $status = $null
@@ -389,12 +402,14 @@ if (-not $NoWait) {
             continue   # transient DNS or rate limit; just poll again
         }
         if ($status.total_count -eq 0) {
-            # Give it a little while in case the hook has not posted yet, then conclude
-            # this repo simply has no deployment wired up.
             $emptyPolls++
-            if ($emptyPolls -ge 3) { $deployState = "none"; break }
+            # A repo that has never deployed: after a short grace period, conclude there is
+            # nothing to wait for. One that has: keep waiting for the build to start.
+            if (-not $hasDeployments -and $emptyPolls -ge 3) { $deployState = "none"; break }
+            if ($hasDeployments) { Write-Host "    waiting for the build to start..." -ForegroundColor DarkGray }
             continue
         }
+        $sawStatus = $true
         if ($status.state -ne "pending") {
             $deployState = $status.state
             $target = $status.statuses | Where-Object { $_.target_url } | Select-Object -First 1
@@ -403,7 +418,10 @@ if (-not $NoWait) {
         }
         Write-Host "    building..." -ForegroundColor DarkGray
     }
-    if ($deployState -eq "skipped") { $deployState = "timeout" }
+    if ($deployState -eq "skipped") {
+        # Out of time. Still building = slow; never started = the push was most likely missed.
+        $deployState = if ($sawStatus) { "timeout" } else { "notstarted" }
+    }
 }
 
 Write-Host ""
@@ -426,6 +444,11 @@ switch ($deployState) {
         exit 1
     }
     "none"    { Write-Host "  No deployment is wired up for this repo, so nothing to wait for." -ForegroundColor DarkGray }
+    "notstarted" {
+        Write-Host "  NO DEPLOYMENT STARTED after 5 minutes - Vercel probably missed the push." -ForegroundColor Red
+        Write-Host "  The merge is on GitHub but the site did NOT update. Redeploy in Vercel, or publish again." -ForegroundColor Red
+        exit 1
+    }
     "timeout" { Write-Host "  Deployment still building after 5 minutes - check Vercel." -ForegroundColor Yellow }
     "skipped" { Write-Host "  Skipped the deployment check (-NoWait)." -ForegroundColor DarkGray }
 }
