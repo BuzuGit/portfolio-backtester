@@ -389,7 +389,9 @@ const PortfolioBacktester = () => {
   // Markets tab state: which currency the returns are shown in, and which period the bar
   // chart and the summary tiles focus on. Separate from the Portfolio tab's currency on
   // purpose, so switching one tab never quietly changes the other.
-  const [marketsCurrency, setMarketsCurrency] = useState<MarketsCurrency>('USD');
+  // Always opens on Native (each asset in its own currency; the user's choice, 2026-11-20) — on
+  // phones too, which is why it isn't among the remembered phone choices below.
+  const [marketsCurrency, setMarketsCurrency] = useState<MarketsCurrency>('Native');
   // Markets "Country" page: which country (as its currency code) is shown. Poland by default.
   const [marketsCountry, setMarketsCountry] = useState<Exclude<MarketsCurrency, 'Native'>>('PLN');
   // Which SnapshotCategory the table shows ("Assets", "Factor", ...). '' = the first one in the sheet.
@@ -415,8 +417,9 @@ const PortfolioBacktester = () => {
   // Sharpe need), Returns keeps whatever was last chosen there. Switching view swaps them over.
   const marketsSavedPeriod = useRef<Record<'returns' | 'stats', MarketsPeriod>>({ returns: 'YTD', stats: '5Y' });
   // Markets "Holdings" page: the one currency every money figure on it is converted into.
-  // Its own setting (USD by default), so it never moves the Positions tab's currency.
-  const [holdingsCurrency, setHoldingsCurrency] = useState<HoldingsCurrency>('USD');
+  // Its own setting, so it never moves the Positions tab's currency. Always opens on Native, like
+  // the rest of Markets (the user's choice, 2026-11-20), and phones don't remember it either.
+  const [holdingsCurrency, setHoldingsCurrency] = useState<HoldingsCurrency>('Native');
   // Which year the "Profit Breakdown by Asset" table shows.
   // null = default to the latest available year in yearsData (computed at render time).
   const [breakdownYear, setBreakdownYear] = useState<number | null>(null);
@@ -671,7 +674,6 @@ const PortfolioBacktester = () => {
       if (saved && typeof saved === 'object') {
         if (saved.view) setActiveView(saved.view);
         if (typeof saved.marketsCategory === 'string') setMarketsCategory(saved.marketsCategory);
-        if (saved.marketsCurrency) setMarketsCurrency(saved.marketsCurrency);
         if (saved.marketsView && saved.marketsPeriod) {
           setMarketsView(saved.marketsView);
           setMarketsPeriod(saved.marketsPeriod);
@@ -682,7 +684,6 @@ const PortfolioBacktester = () => {
         if (saved.bestToWorstLayout) setBestToWorstLayout(saved.bestToWorstLayout);
         if (saved.portfolioCurrency) setPortfolioCurrency(saved.portfolioCurrency);
         if (saved.positionsCurrency) setPositionsCurrency(saved.positionsCurrency);
-        if (saved.holdingsCurrency) setHoldingsCurrency(saved.holdingsCurrency);
         if (saved.dailyNavCurrency) setDailyNavCurrency(saved.dailyNavCurrency);
         if (saved.dailyNavPeriod) setDailyNavPeriod(saved.dailyNavPeriod);
         if (saved.graphsPeriod) setGraphsPeriod(saved.graphsPeriod);
@@ -710,13 +711,14 @@ const PortfolioBacktester = () => {
     if (!isPhoneScreen()) return;
     try {
       localStorage.setItem('phoneState', JSON.stringify({
-        view: activeView, marketsCategory, marketsCurrency, marketsView, marketsPeriod, marketsTrendPeriod,
-        bestToWorstLayout, portfolioCurrency, positionsCurrency, holdingsCurrency,
+        // Not the two Markets currencies: those always open on Native
+        view: activeView, marketsCategory, marketsView, marketsPeriod, marketsTrendPeriod,
+        bestToWorstLayout, portfolioCurrency, positionsCurrency,
         dailyNavCurrency, dailyNavPeriod, graphsPeriod,
       }));
     } catch { /* private window: just don't remember */ }
-  }, [activeView, marketsCategory, marketsCurrency, marketsView, marketsPeriod, marketsTrendPeriod,
-      bestToWorstLayout, portfolioCurrency, positionsCurrency, holdingsCurrency,
+  }, [activeView, marketsCategory, marketsView, marketsPeriod, marketsTrendPeriod,
+      bestToWorstLayout, portfolioCurrency, positionsCurrency,
       dailyNavCurrency, dailyNavPeriod, graphsPeriod]);
 
   // PHONES: EACH PAGE KEEPS ITS PLACE. Scroll halfway down Positions, look at Markets, come back,
