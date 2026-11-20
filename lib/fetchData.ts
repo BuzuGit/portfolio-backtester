@@ -13,6 +13,7 @@
 */
 
 import { parseEdoSheet, withEdoColumn, withEdoSeriesColumns, EDO_TICKER, type EdoData } from './edo.ts';
+import { DAILY_BUCKETS, type DailyAllocInput } from './allocation.ts';
 
 // The base URL for your published Google Sheet
 const SHEET_BASE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ1Q5jNM3Qq52UZwmQyRQrG_YER6-RNnagk2GG9Os65kFPtkNTpNtZywaoMEV8w_xDDuu0eRdEoPWgn/pub';
@@ -285,6 +286,9 @@ export interface DailyNavRow {
   // from the PLN NAV and the sheet's daily CHFPLN rate. 0 = no CHFPLN rate for that day.
   navChf: number;   // NW Price ÷ CHFPLN — NAV per share in CHF
   ddChf: number;    // drawdown from the all-time CHF peak, in % (only meaningful when navChf > 0)
+  // How much sits in each bucket that day (PLN Cash, USD EQ, Gold...), each in its own currency,
+  // plus the zloty exchange rates — what the Asset Allocation chart is built from (lib/allocation.ts).
+  alloc?: DailyAllocInput;
 }
 
 // ---------------------------------------------------------------------------
@@ -1204,6 +1208,13 @@ function parseDailyData(csvText: string): DailyNavRow[] {
       ddPln:   readNum(values, 'NW DD'),
       ddUsd:   readNum(values, 'DD USD'),
       ddSgd:   readNum(values, 'DD SGD'),
+      alloc: {
+        date,
+        buckets: Object.fromEntries(DAILY_BUCKETS.map(b => [b.col, readNum(values, b.col)])),
+        usdPln: readNum(values, 'USDPLN'),
+        sgdPln: readNum(values, 'SGDPLN'),
+        chfPln,
+      },
     });
   }
 

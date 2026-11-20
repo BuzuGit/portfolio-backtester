@@ -506,6 +506,10 @@ const PortfolioBacktester = () => {
   // chart opens exactly as it did before CHF was added)
   const [ddSelectedCurrencies, setDdSelectedCurrencies] = useState<('PLN' | 'USD' | 'SGD' | 'CHF')[]>(['PLN', 'USD', 'SGD']);
   const [ddPeriod, setDdPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
+  // ---- Asset Allocation chart state (Portfolio tab, under the drawdowns) ----
+  const [allocView, setAllocView] = useState<'class' | 'currency'>('class');
+  const [allocCurrency, setAllocCurrency] = useState<'PLN' | 'USD' | 'SGD' | 'CHF'>('PLN');  // for the tooltip's amounts
+  const [allocPeriod, setAllocPeriod] = useState<'1Y' | '3Y' | '5Y' | 'Max'>('Max');
   // Which open-position asset the user drilled into (empty string = showing summary list)
   const [openSelectedTicker, setOpenSelectedTicker] = useState<string>('');
   // Set of purchase transaction indices that are currently included (checked).
@@ -3007,6 +3011,9 @@ const PortfolioBacktester = () => {
               dailyNavBenchmark={dailyNavBenchmark} setDailyNavBenchmark={setDailyNavBenchmark}
               ddPeriod={ddPeriod} setDdPeriod={setDdPeriod}
               ddSelectedCurrencies={ddSelectedCurrencies} setDdSelectedCurrencies={setDdSelectedCurrencies}
+              allocView={allocView} setAllocView={setAllocView}
+              allocCurrency={allocCurrency} setAllocCurrency={setAllocCurrency}
+              allocPeriod={allocPeriod} setAllocPeriod={setAllocPeriod}
             />
           )}
 

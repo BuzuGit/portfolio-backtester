@@ -36,6 +36,7 @@ import {
 } from '@/components/charts';
 
 import type { YearlyProfitBreakdown } from '@/lib/profitBreakdown';   // one year's profit split by asset
+import AllocationHistory, { type AllocView } from '@/components/AllocationHistory';   // asset mix over time
 
 type NavCurrency = 'PLN' | 'USD' | 'SGD' | 'CHF';
 type NavPeriod = '1Y' | '3Y' | '5Y' | 'Max';
@@ -61,6 +62,9 @@ export interface PortfolioTabProps {
   dailyNavBenchmark: NavBenchmark; setDailyNavBenchmark: React.Dispatch<React.SetStateAction<NavBenchmark>>;
   ddPeriod: NavPeriod; setDdPeriod: (p: NavPeriod) => void;
   ddSelectedCurrencies: NavCurrency[]; setDdSelectedCurrencies: React.Dispatch<React.SetStateAction<NavCurrency[]>>;
+  allocView: AllocView; setAllocView: (v: AllocView) => void;
+  allocCurrency: NavCurrency; setAllocCurrency: (c: NavCurrency) => void;
+  allocPeriod: NavPeriod; setAllocPeriod: (p: NavPeriod) => void;
 }
 
 export default function PortfolioTab({
@@ -69,6 +73,7 @@ export default function PortfolioTab({
   portfolioCurrency, setPortfolioCurrency, selectedReturnCurrencies, setSelectedReturnCurrencies,
   dailyNavCurrency, setDailyNavCurrency, dailyNavPeriod, setDailyNavPeriod, dailyNavBenchmark, setDailyNavBenchmark,
   ddPeriod, setDdPeriod, ddSelectedCurrencies, setDdSelectedCurrencies,
+  allocView, setAllocView, allocCurrency, setAllocCurrency, allocPeriod, setAllocPeriod,
 }: PortfolioTabProps) {
   /**
    * Chart 1 data: Portfolio Value by Year (stacked bar), in millions.
@@ -1743,6 +1748,14 @@ export default function PortfolioTab({
               </div>
             );
           })()}
+
+          {/* ── Asset Allocation over time (share of net worth by class or currency) ── */}
+          <AllocationHistory
+            dailyData={dailyData}
+            view={allocView} setView={setAllocView}
+            currency={allocCurrency} setCurrency={setAllocCurrency}
+            period={allocPeriod} setPeriod={setAllocPeriod}
+          />
 
           {/* Currency toggle buttons — controls which bars appear in Charts 3 & 4; multi-select */}
           <div className="mb-4 flex items-center gap-1">
