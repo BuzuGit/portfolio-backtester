@@ -3,7 +3,8 @@
 
   Answers "how has my mix changed?": each day of the Daily sheet split into asset classes (or
   currencies) as a share of net worth, stacked to 100%. Equities and Metals & Crypto sit at the
-  bottom, so the dark line along the top of the gold band is the "risk-on" share.
+  bottom, so the dark line along the top of the gold band is the "risk-on" share. Beside the
+  chart's right edge, each band's latest share is labelled in its own colour (latestShareBubbles).
 
   Under the chart, a "Then vs Now" strip compares one past day (the start of the period, or the
   day under the pointer) with today, band by band.
