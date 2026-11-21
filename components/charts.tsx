@@ -100,6 +100,9 @@ export interface BubbleDef {
   // Text colour, when white won't read on `color` (light grey, yellow). Left out = the usual rule:
   // the theme's on-black colour on black/ink/slate, white on everything else.
   textColor?: string;
+  // A small second line under the value (the allocation charts' "FI", "Cash"…). A bubble that has
+  // one is drawn taller (BUBBLE_H2); bubbles without one look exactly as before.
+  sublabel?: string;
 }
 
 /** One buy or sell marker on a position's price-history chart.
@@ -183,6 +186,7 @@ export const DivergingBar = (props: {
 };
 
 export const BUBBLE_H = 20;   // height of the bubble rectangle
+export const BUBBLE_H2 = 28;  // height of a two-line bubble (value + sublabel)
 export const BUBBLE_GAP = 2;  // minimum pixel gap between adjacent bubbles
 export const BUBBLE_RX = 4;   // border-radius of rounded corners
 
@@ -207,28 +211,31 @@ export function renderEdgeBubbles(
   // Position bubbles just to the right of the plot area
   const bubbleX = chartWidth - offsetData.right + 4;
 
-  // Build positioned bubbles, filtering out any NaN positions
+  // Build positioned bubbles, filtering out any NaN positions. Each knows its own height:
+  // two-line bubbles (with a sublabel) are taller than plain ones.
   const bubbles = defs
-    .map(d => ({ ...d, yRaw: yAxis.scale(d.value) }))
+    .map(d => ({ ...d, yRaw: yAxis.scale(d.value), h: d.sublabel ? BUBBLE_H2 : BUBBLE_H }))
     .filter(b => !isNaN(b.yRaw));
   if (bubbles.length === 0) return null;
 
   // Sort: highest value at top (smallest yRaw = top of screen)
   bubbles.sort((a, b) => a.yRaw - b.yRaw);
 
-  // Prevent overlap: walk top-to-bottom, push any bubble that's too close downward
-  const minDist = BUBBLE_H + BUBBLE_GAP;
+  // Prevent overlap: walk top-to-bottom, push any bubble that's too close downward.
+  // Two neighbours' centres must be half of each one's height apart, plus the gap.
+  const minDist = (a: { h: number }, b: { h: number }) => (a.h + b.h) / 2 + BUBBLE_GAP;
   for (let i = 1; i < bubbles.length; i++) {
-    if (bubbles[i].yRaw - bubbles[i - 1].yRaw < minDist) {
-      bubbles[i].yRaw = bubbles[i - 1].yRaw + minDist;
+    const need = minDist(bubbles[i - 1], bubbles[i]);
+    if (bubbles[i].yRaw - bubbles[i - 1].yRaw < need) {
+      bubbles[i].yRaw = bubbles[i - 1].yRaw + need;
     }
   }
 
   // Clamp bubbles to stay within the chart's visible plot area
   if (chartHeight) {
-    const yMin = offsetData.top + BUBBLE_H / 2;
-    const yMax = chartHeight - offsetData.bottom - BUBBLE_H / 2;
     for (const b of bubbles) {
+      const yMin = offsetData.top + b.h / 2;
+      const yMax = chartHeight - offsetData.bottom - b.h / 2;
       b.yRaw = Math.max(yMin, Math.min(yMax, b.yRaw));
     }
   }
@@ -236,29 +243,55 @@ export function renderEdgeBubbles(
   // Reverse pass: if bottom-clamping pulled a pushed bubble back up causing
   // overlap again, push upper bubbles upward to restore the gap
   for (let i = bubbles.length - 2; i >= 0; i--) {
-    if (bubbles[i + 1].yRaw - bubbles[i].yRaw < minDist) {
-      bubbles[i].yRaw = bubbles[i + 1].yRaw - minDist;
+    const need = minDist(bubbles[i], bubbles[i + 1]);
+    if (bubbles[i + 1].yRaw - bubbles[i].yRaw < need) {
+      bubbles[i].yRaw = bubbles[i + 1].yRaw - need;
+    }
+  }
+
+  // That upward push can lift the top bubble above the plot (and the SVG cuts it off). If so, put
+  // it back at the top edge and push the ones below it down again. Bubbles that never crossed the
+  // top edge are untouched.
+  if (chartHeight && bubbles[0].yRaw < offsetData.top + bubbles[0].h / 2) {
+    bubbles[0].yRaw = offsetData.top + bubbles[0].h / 2;
+    for (let i = 1; i < bubbles.length; i++) {
+      const need = minDist(bubbles[i - 1], bubbles[i]);
+      if (bubbles[i].yRaw - bubbles[i - 1].yRaw < need) bubbles[i].yRaw = bubbles[i - 1].yRaw + need;
     }
   }
 
   return (
     <g>
-      {bubbles.map((b, i) => (
-        <g key={i}>
-          <rect
-            x={bubbleX} y={b.yRaw - BUBBLE_H / 2}
-            width={bubbleWidth} height={BUBBLE_H}
-            rx={BUBBLE_RX} ry={BUBBLE_RX} fill={b.color}
-          />
-          <text
-            x={bubbleX + bubbleWidth / 2} y={b.yRaw}
-            textAnchor="middle" dominantBaseline="central"
-            fill={b.textColor ?? ([BLACK, INK, SLATE].includes(b.color) ? ON_BLACK : '#ffffff')} fontSize={11} fontWeight={600}
-          >
-            {b.label}
-          </text>
-        </g>
-      ))}
+      {bubbles.map((b, i) => {
+        const fill = b.textColor ?? ([BLACK, INK, SLATE].includes(b.color) ? ON_BLACK : '#ffffff');
+        const cx = bubbleX + bubbleWidth / 2;
+        return (
+          <g key={i}>
+            <rect
+              x={bubbleX} y={b.yRaw - b.h / 2}
+              width={bubbleWidth} height={b.h}
+              rx={BUBBLE_RX} ry={BUBBLE_RX} fill={b.color}
+            />
+            {/* The value; with a sublabel it moves up to make room for the second line */}
+            <text
+              x={cx} y={b.sublabel ? b.yRaw - 5 : b.yRaw}
+              textAnchor="middle" dominantBaseline="central"
+              fill={fill} fontSize={11} fontWeight={600}
+            >
+              {b.label}
+            </text>
+            {b.sublabel && (
+              <text
+                x={cx} y={b.yRaw + 7}
+                textAnchor="middle" dominantBaseline="central"
+                fill={fill} fontSize={9} fontWeight={500}
+              >
+                {b.sublabel}
+              </text>
+            )}
+          </g>
+        );
+      })}
     </g>
   );
 }

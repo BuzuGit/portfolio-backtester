@@ -90,6 +90,14 @@ export function dateAxisTicks(dates: string[]): { ticks: string[]; label: (d: st
 // on the price charts). Both allocation charts use it for the labels and the room beside the plot.
 export const ALLOC_LABEL_W = 40;
 
+// The short name printed under each label's %, at most 4 characters so it fits the 40px label.
+// Currencies (PLN, USD, M&C…) are short already; anything unlisted is cut to its first 4 letters.
+const SHORT_BAND_NAME: Record<string, string> = {
+  'Equities': 'EQ', 'Metals & Crypto': 'M&C', 'Alternatives': 'Alt', 'Real estate': 'RE',
+  'Multi-asset': 'MA', 'Fixed Income': 'FI', 'Cash': 'Cash', 'Crypto': 'Cryp', 'Other': 'Oth',
+};
+export const shortBandName = (name: string) => SHORT_BAND_NAME[name] ?? name.slice(0, 4);
+
 export function latestShareBubbles(chartData: Record<string, unknown>[], bands: { name: string; color: string }[]): BubbleDef[] {
   const last = chartData[chartData.length - 1];
   if (!last) return [];
@@ -99,7 +107,7 @@ export function latestShareBubbles(chartData: Record<string, unknown>[], bands: 
     const v = Number(last[`b${i}`] ?? 0);
     if (v >= 0.05) {
       defs.push({
-        value: below + v / 2, color: b.color, label: `${v.toFixed(1)}%`,
+        value: below + v / 2, color: b.color, label: `${v.toFixed(1)}%`, sublabel: shortBandName(b.name),
         // Black, ink and slate flip with dark mode, which renderEdgeBubbles already handles; every
         // other band colour is the same in both modes, so its text colour can be worked out once
         textColor: [BLACK, INK, SLATE].includes(b.color) ? undefined : readableTextOn(b.color),
