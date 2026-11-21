@@ -20,9 +20,10 @@
 */
 
 // The classes, in the order they are stacked from the bottom of the chart up. Equities and
-// Metals & Crypto go first so the top edge of the M&C band IS the risk-on line.
+// Metals & Crypto go first so the top edge of the M&C band IS the risk-on line. Then from riskier
+// to safer, with Real estate on top (the user's order, set 2026-11-21).
 export const ALLOC_CLASSES = [
-  'Equities', 'Metals & Crypto', 'Alternatives', 'Real estate', 'Multi-asset', 'Fixed Income', 'Cash',
+  'Equities', 'Metals & Crypto', 'Alternatives', 'Multi-asset', 'Fixed Income', 'Cash', 'Real estate',
 ] as const;
 export type AllocClass = typeof ALLOC_CLASSES[number];
 
