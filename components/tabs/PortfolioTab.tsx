@@ -1298,11 +1298,13 @@ export default function PortfolioTab({
             // entirely on a 100 = period start scale, which made the foreign-currency lines
             // look like they had not been rebased at all. The raw price is still a click
             // away in the tooltip.
-            // The small second line says which line each bubble belongs to: NAV, CPI (inflation) or
-            // the benchmark's name (a long name like "40/FI/MF/GLD" doesn't fit, so it says "Bench").
+            // The small second line: under the NAV and inflation values, their CAGR over the period
+            // (the same figures as the CAGR / Ann. Infl. rows in the stats box; under a year both are
+            // plain returns, as there). Under the benchmark, its name (a long name like
+            // "40/FI/MF/GLD" doesn't fit, so it says "Bench").
             const navBubbleDefs: BubbleDef[] = [
-              { value: lastRow.nav,  color: SLATE, label: lastRow.nav.toFixed(2), sublabel: 'NAV' },
-              { value: lastRow.infl, color: INFLATION_COLOR, label: lastRow.infl.toFixed(2), sublabel: 'CPI' },
+              { value: lastRow.nav,  color: SLATE, label: lastRow.nav.toFixed(2), sublabel: `${nominalCAGR.toFixed(1)}%` },
+              { value: lastRow.infl, color: INFLATION_COLOR, label: lastRow.infl.toFixed(2), sublabel: `${annInflation.toFixed(1)}%` },
             ];
             if (benchStats) {
               const bLast = benchMonthly[benchMonthly.length - 1];
