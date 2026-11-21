@@ -25,7 +25,7 @@ import {
   ASSET_CLASS_COLORS, BLACK, CARD, CURRENCY_COLORS, INK, LINE, MUTED, ResponsiveContainer, SEG, SLATE, readableTextOn,
   segBtn,
 } from '@/components/ui';
-import { EdgeBubbles, type BubbleDef } from '@/components/charts';
+import { EdgeBubbles, twoLineLabelFont, type BubbleDef } from '@/components/charts';
 
 export type AllocView = 'class' | 'currency';
 type Ccy = 'PLN' | 'USD' | 'SGD' | 'CHF';
@@ -305,7 +305,7 @@ const AllocationChart = React.memo(function AllocationChart({ chartData, bands, 
             dot={false} activeDot={{ r: 3 }} isAnimationActive={false} />
         )}
         {/* The latest % of each band, in its colour, beside the chart's right edge */}
-        <Customized component={<EdgeBubbles defs={edgeDefs} bubbleWidth={ALLOC_LABEL_W} />} />
+        <Customized component={<EdgeBubbles defs={edgeDefs} bubbleWidth={ALLOC_LABEL_W} fontSize={twoLineLabelFont()} />} />
       </ComposedChart>
     </ResponsiveContainer>
   );

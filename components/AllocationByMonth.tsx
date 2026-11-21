@@ -37,7 +37,7 @@ import {
   ALLOC_LABEL_W, AllocTooltipBox, RISK_LABEL, RISK_LINE, RISK_ROW, ThenVsNow, dateAxisTicks, latestShareBubbles, monthYear,
   type AllocView,
 } from '@/components/AllocationHistory';
-import { EdgeBubbles } from '@/components/charts';
+import { EdgeBubbles, twoLineLabelFont } from '@/components/charts';
 
 export type MonthPeriod = '1Y' | '3Y' | '5Y' | '10Y' | 'Max';
 type Period = MonthPeriod;
@@ -345,7 +345,7 @@ const MonthBars = React.memo(function MonthBars({ chartData, bands, showRisk, re
             dot={false} activeDot={{ r: 3 }} isAnimationActive={false} />
         )}
         {/* The latest % of each band, in its colour, beside the chart's right edge */}
-        <Customized component={<EdgeBubbles defs={edgeDefs} bubbleWidth={ALLOC_LABEL_W} />} />
+        <Customized component={<EdgeBubbles defs={edgeDefs} bubbleWidth={ALLOC_LABEL_W} fontSize={twoLineLabelFont()} />} />
       </ComposedChart>
     </ResponsiveContainer>
   );

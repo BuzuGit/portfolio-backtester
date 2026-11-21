@@ -31,7 +31,7 @@ import {
   ResponsiveContainer, SEG, SHARPE_HINT, SLATE, lossBarLabel, lossLabelRoom, segBtn,
 } from '@/components/ui';
 import {
-  CURRENCY_CPI, DAILY_NAV_BENCHMARKS, DivergingBar, EdgeBubbles, barMillions, barPct, renderEdgeBubbles,
+  CURRENCY_CPI, DAILY_NAV_BENCHMARKS, twoLineLabelFont, DivergingBar, EdgeBubbles, barMillions, barPct, renderEdgeBubbles,
   type BubbleDef, type RechartsCustomizedProps,
 } from '@/components/charts';
 
@@ -41,9 +41,10 @@ import AllocationHistory, { type AllocView } from '@/components/AllocationHistor
 type NavCurrency = 'PLN' | 'USD' | 'SGD' | 'CHF';
 type NavPeriod = '1Y' | '3Y' | '5Y' | 'Max';
 type NavBenchmark = '' | '60/40' | 'World' | 'EQ-MF' | 'EQ-GLD' | '40/FI/MF/GLD';
-// Width of the right-edge labels on Daily NAV and Daily NAV Drawdowns: the widest text, "183.62"
-// or "-22.8%" at 11px, is ~38px, so 44px leaves a little padding (the standard 62px took too much room)
-const DAILY_BUBBLE_W = 44;
+// Width of the right-edge labels on Daily NAV and Daily NAV Drawdowns (the standard 62px took too
+// much room). Phones: 11px text, widest "-22.8%" ~35px → 44px. Desktop: 12px text (twoLineLabelFont),
+// widest "EQ-GLD" ~44px → 50px.
+const dailyBubbleW = () => (isPhoneScreen() ? 44 : 50);
 export type PortfolioCurrency = 'PLN' | 'USD' | 'EUR' | 'CHF' | 'SGD';
 
 export interface PortfolioTabProps {
@@ -1309,7 +1310,7 @@ export default function PortfolioTab({
               navBubbleDefs.push({ value: bLast, color: BENCH_COLOR, label: bLast.toFixed(2), sublabel: benchShort });
             }
             // Narrower than the usual 62px (same font): "183.62" or "-22.8%" only needs ~40px
-            const DailyNavBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, navBubbleDefs, DAILY_BUBBLE_W);
+            const DailyNavBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, navBubbleDefs, dailyBubbleW(), twoLineLabelFont());
 
             // ---- 7b. The stats, shared by the box over the chart (desktop) and the grid
             // under it (phones). 4th/5th entries = the benchmark's value and colour (null =
@@ -1440,7 +1441,7 @@ export default function PortfolioTab({
                     </div>
 
                     <ResponsiveContainer width="100%" height={420}>
-                      <LineChart data={chartData} margin={{ top: 20, right: DAILY_BUBBLE_W + 8, left: 5, bottom: 35 }}>
+                      <LineChart data={chartData} margin={{ top: 20, right: dailyBubbleW() + 8, left: 5, bottom: 35 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke={LINE_FAINT} />
                         <XAxis
                           dataKey="date"
@@ -1715,8 +1716,8 @@ export default function PortfolioTab({
 
                 <div className="bg-white p-4 rounded-lg shadow">
                   <ResponsiveContainer width="100%" height={280}>
-                    {/* Right margin leaves room for the current-drawdown bubbles (DAILY_BUBBLE_W wide) */}
-                    <AreaChart data={ddChartData} margin={{ top: 10, right: DAILY_BUBBLE_W + 8, left: 0, bottom: 0 }}>
+                    {/* Right margin leaves room for the current-drawdown bubbles (dailyBubbleW() wide) */}
+                    <AreaChart data={ddChartData} margin={{ top: 10, right: dailyBubbleW() + 8, left: 0, bottom: 0 }}>
                       <defs>
                         {(['PLN', 'USD', 'SGD', 'CHF'] as const).map(c => (
                           <linearGradient key={c} id={`ddGrad${c}`} x1="0" y1="0" x2="0" y2="1">
@@ -1766,7 +1767,7 @@ export default function PortfolioTab({
                         ) : null
                       )}
                       {/* Current drawdown per currency, beside the right edge */}
-                      <Customized component={<EdgeBubbles defs={ddBubbleDefs} bubbleWidth={DAILY_BUBBLE_W} />} />
+                      <Customized component={<EdgeBubbles defs={ddBubbleDefs} bubbleWidth={dailyBubbleW()} fontSize={twoLineLabelFont()} />} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
