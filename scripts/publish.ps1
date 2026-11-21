@@ -12,8 +12,9 @@
   default branch is, so it does not care that StooqAnalyzer uses "master" while the others
   use "main".
 
-  A repo with tests (a package.json "test" script, or *.test.js files) must pass them first:
-  a failing test stops the publish before anything is committed.
+  A repo with tests (a package.json "test" script, *.test.js files, or test_*.py files in the
+  repo root) must pass them first: a failing test stops the publish before anything is committed.
+  Python tests run as scripts under conda's Python, found the way find_python.bat finds it.
 
   Network calls are retried, because DNS resolution to github.com on this machine fails
   intermittently. Retries live in here rather than in shell loops, since shell loops are what
@@ -193,20 +194,70 @@ Write-Ok "$owner/$repo  ($repoRoot)"
 # Run the repo's tests
 # ---------------------------------------------------------------------------
 # A repo with tests must pass them before anything is committed: a package.json "test" script
-# runs with npm, otherwise *.test.js files (tracked, or new and not ignored) run with node --test.
+# runs with npm, otherwise *.test.js files (tracked, or new and not ignored) run with node --test;
+# and test_*.py files in the repo root each run as a script under Python.
 # A failure stops the publish here, before any branch or commit exists. Repos without tests
 # skip this step.
 
-$testCmd = $null
+# Finds the Python a repo's tests run under. Mirrors find_python.bat in PriceTracker: bare
+# "python" on this machine is the Microsoft Store alias, not a Python, and conda's python.exe
+# cannot load its own OpenSSL DLLs unless its folders are on PATH - every https call then fails
+# with "unknown url type: https", which looks like a network fault and is not.
+function Find-Python {
+    $roots = @("$env:USERPROFILE\anaconda3", "$env:USERPROFILE\miniconda3",
+               "$env:ProgramData\anaconda3", "$env:LOCALAPPDATA\anaconda3")
+    foreach ($root in $roots) {
+        $exe = Join-Path $root "python.exe"
+        if (Test-Path $exe) {
+            $dirs = @($root, "$root\Library\mingw-w64\bin", "$root\Library\usr\bin",
+                      "$root\Library\bin", "$root\Scripts", "$root\bin")
+            $env:PATH = ($dirs -join ";") + ";" + $env:PATH
+            return $exe
+        }
+    }
+    $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($launcher) {
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $exe = & $launcher.Source -3 -c "import sys;print(sys.executable)" 2>$null | Select-Object -First 1
+            $code = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previous
+        }
+        if ($code -eq 0 -and $exe -and (Test-Path $exe.Trim())) { return $exe.Trim() }
+    }
+    return $null
+}
+
+# Each entry is one command: the executable, then its arguments.
+$testRuns = @()
 $pkgPath = Join-Path $repoRoot "package.json"
 if ((Test-Path $pkgPath) -and (Get-Content $pkgPath -Raw | ConvertFrom-Json).scripts.test) {
-    $testCmd = @("npm.cmd", "test")
+    $testRuns += , @("npm.cmd", "test")
 } else {
     $testFiles = Invoke-Git ls-files --cached --others --exclude-standard "*.test.js"
-    if ($testFiles.Ok -and $testFiles.Out) { $testCmd = @("node.exe", "--test", "--test-reporter=tap") }
+    if ($testFiles.Ok -and $testFiles.Out) { $testRuns += , @("node.exe", "--test", "--test-reporter=tap") }
 }
-if ($testCmd) {
-    Write-Step "Running tests ($($testCmd -join ' '))"
+# Python: each test_*.py in the repo root runs as a script, and a non-zero exit is a failure.
+# Not pytest: PriceTracker's tests return a count of failures rather than raising, so pytest
+# would call every one of them a pass.
+$pyTests = Invoke-Git ls-files --cached --others --exclude-standard "test_*.py"
+if ($pyTests.Ok -and $pyTests.Out) {
+    $python = Find-Python
+    if (-not $python) {
+        Fail "This repo has Python tests but no Python was found (looked for anaconda3/miniconda3, then py -3). Nothing was committed."
+    }
+    # Piped output would otherwise use the Windows code page, and one character outside it
+    # fails the test run with a UnicodeEncodeError that has nothing to do with the code.
+    $env:PYTHONIOENCODING = "utf-8"
+    foreach ($file in ($pyTests.Out -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Sort-Object)) {
+        $testRuns += , @($python, $file)
+    }
+}
+foreach ($testCmd in $testRuns) {
+    $shown = ($testCmd | ForEach-Object { Split-Path $_ -Leaf }) -join ' '
+    Write-Step "Running tests ($shown)"
     # Same reason as in Invoke-Git: a test runner writes to stderr, which must not abort the script.
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -219,7 +270,7 @@ if ($testCmd) {
     $summary = ($testOut | Where-Object { $_ -match '^# (pass|fail) \d+' } | ForEach-Object { $_.Substring(2) }) -join ', '
     if ($testCode -ne 0) {
         $testOut | Select-Object -Last 40 | ForEach-Object { Write-Host "    $_" }
-        Fail "Tests failed ($summary). Nothing was committed - fix the code or the test, then publish again."
+        Fail "Tests failed ($(if ($summary) { $summary } else { "exit code $testCode" })). Nothing was committed - fix the code or the test, then publish again."
     }
     Write-Ok $(if ($summary) { $summary } else { "passed" })
 }
