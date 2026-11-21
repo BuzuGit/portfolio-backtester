@@ -1294,13 +1294,16 @@ export default function PortfolioTab({
             // entirely on a 100 = period start scale, which made the foreign-currency lines
             // look like they had not been rebased at all. The raw price is still a click
             // away in the tooltip.
+            // The small second line says which line each bubble belongs to: NAV, CPI (inflation) or
+            // the benchmark's name (a long name like "40/FI/MF/GLD" doesn't fit, so it says "Bench").
             const navBubbleDefs: BubbleDef[] = [
-              { value: lastRow.nav,  color: SLATE, label: lastRow.nav.toFixed(2) },
-              { value: lastRow.infl, color: INFLATION_COLOR, label: lastRow.infl.toFixed(2) },
+              { value: lastRow.nav,  color: SLATE, label: lastRow.nav.toFixed(2), sublabel: 'NAV' },
+              { value: lastRow.infl, color: INFLATION_COLOR, label: lastRow.infl.toFixed(2), sublabel: 'CPI' },
             ];
             if (benchStats) {
               const bLast = benchMonthly[benchMonthly.length - 1];
-              navBubbleDefs.push({ value: bLast, color: BENCH_COLOR, label: bLast.toFixed(2) });
+              const benchShort = benchDef && benchDef.id.length <= 6 ? benchDef.id : 'Bench';
+              navBubbleDefs.push({ value: bLast, color: BENCH_COLOR, label: bLast.toFixed(2), sublabel: benchShort });
             }
             const DailyNavBubbles = (props: RechartsCustomizedProps) => renderEdgeBubbles(props, navBubbleDefs);
 
@@ -1621,7 +1624,8 @@ export default function PortfolioTab({
                 const v = ddChartData[i][c];
                 if (v === undefined) continue;
                 // At a new high the drawdown is 0; print "0.0%", not "-0.0%"
-                ddBubbleDefs.push({ value: v, color: DD_COLORS[c], label: `${Math.abs(v) < 0.05 ? '0.0' : v.toFixed(1)}%` });
+                // (second line: which currency it is)
+                ddBubbleDefs.push({ value: v, color: DD_COLORS[c], label: `${Math.abs(v) < 0.05 ? '0.0' : v.toFixed(1)}%`, sublabel: c });
                 break;
               }
             }
