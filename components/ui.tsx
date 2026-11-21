@@ -247,6 +247,8 @@ export const ASSET_CLASS_COLORS: Record<string, string> = {
   // and Skandia + StashAway): mid grey for property (the user's pick, 2026-11-20), steel blue for
   // the mixed funds.
   'Real estate': 'var(--c-class-re)', 'Multi-asset': CHART_PALETTE.blue,
+  // The Lookup sheet's PortfolioClass spells it with a capital E; same grey on the Positions tab
+  'Real Estate': 'var(--c-class-re)',
   // Cash is deliberately the one grey in the set. It is not an investment competing with the
   // others for attention, and a muted slice reads as "not at work yet" at a glance.
   'Cash': 'var(--c-cash)',

@@ -92,11 +92,12 @@ export const ALLOC_LABEL_W = 40;
 
 // The short name printed under each label's %, at most 4 characters so it fits the 40px label.
 // Currencies (PLN, USD, M&C…) are short already; anything unlisted is cut to its first 4 letters.
+// Keys are lower case so "Real Estate" (Lookup sheet) and "Real estate" (Daily sheet) both match.
 const SHORT_BAND_NAME: Record<string, string> = {
-  'Equities': 'EQ', 'Metals & Crypto': 'M&C', 'Alternatives': 'Alt', 'Real estate': 'RE',
-  'Multi-asset': 'MA', 'Fixed Income': 'FI', 'Cash': 'Cash', 'Crypto': 'Cryp', 'Other': 'Oth',
+  'equities': 'EQ', 'metals & crypto': 'M&C', 'alternatives': 'Alt', 'real estate': 'RE',
+  'multi-asset': 'MA', 'fixed income': 'FI', 'cash': 'Cash', 'crypto': 'Cryp', 'other': 'Oth',
 };
-export const shortBandName = (name: string) => SHORT_BAND_NAME[name] ?? name.slice(0, 4);
+export const shortBandName = (name: string) => SHORT_BAND_NAME[name.toLowerCase()] ?? name.slice(0, 4);
 
 export function latestShareBubbles(chartData: Record<string, unknown>[], bands: { name: string; color: string }[]): BubbleDef[] {
   const last = chartData[chartData.length - 1];

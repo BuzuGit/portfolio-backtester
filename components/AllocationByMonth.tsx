@@ -158,7 +158,8 @@ export default function AllocationByMonth({
   const bands = useMemo((): Band[] => {
     const order = view === 'class' ? CLASS_ORDER : CCY_ORDER;
     const rank = (k: string) => {
-      const i = order.indexOf(k);
+      // Ignoring capitals: the Lookup sheet says "Real Estate", the list above "Real estate"
+      const i = order.findIndex(o => o.toLowerCase() === k.toLowerCase());
       return i >= 0 ? i : (view === 'class' ? CLASS_ORDER.indexOf('Fixed Income') - 0.5 : order.length);
     };
     return Array.from(new Set(shown.flatMap(m => Object.keys(m.byBand).filter(k => m.byBand[k] > 0))))
