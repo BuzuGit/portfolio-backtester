@@ -45,7 +45,9 @@ const PERIODS: readonly Period[] = ['1Y', '3Y', '5Y', '10Y', 'Max'];
 const CASH = 'Cash';
 // Stacking order, bottom up. Equities and Metals & Crypto first, so with Group M&C on the
 // risk-on line runs along the top of the M&C band. Anything unlisted goes before Fixed Income.
-const CLASS_ORDER = ['Equities', METALS_CRYPTO_LABEL, 'Crypto', 'Other', 'Alternatives', 'Fixed Income', CASH];
+// Same order as the Portfolio tab's Asset Allocation (lib/allocation ALLOC_CLASSES), with Real
+// estate on top.
+const CLASS_ORDER = ['Equities', METALS_CRYPTO_LABEL, 'Crypto', 'Other', 'Alternatives', 'Multi-asset', 'Fixed Income', CASH, 'Real estate'];
 const CCY_ORDER = ['PLN', 'USD', 'SGD', 'EUR', 'CHF', METALS_CRYPTO_CCY];
 const FALLBACK_COLOR = '#94a3b8';
 
