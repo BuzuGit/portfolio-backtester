@@ -89,8 +89,12 @@ export type RechartsCustomizedProps = {
 /** Right-edge bubbles as a component, for `<Customized component={<EdgeBubbles defs={...} />} />`.
  *  Recharts clones the element and passes in the chart geometry. Defined at module scope so it
  *  keeps one identity across renders (see DivergingBar below for why that matters). */
-export const EdgeBubbles = (props: Partial<RechartsCustomizedProps> & { defs: BubbleDef[]; bubbleWidth?: number }) =>
-  renderEdgeBubbles(props as RechartsCustomizedProps, props.defs, props.bubbleWidth);
+export const EdgeBubbles = (props: Partial<RechartsCustomizedProps> & { defs: BubbleDef[]; bubbleWidth?: number; fontSize?: number }) =>
+  renderEdgeBubbles(props as RechartsCustomizedProps, props.defs, props.bubbleWidth, props.fontSize);
+
+/** Text size for the two-line labels on Daily NAV, Daily NAV Drawdowns and both allocation charts:
+ *  12px for both lines on desktop; on phones undefined = the usual 11px value over a 9px name. */
+export const twoLineLabelFont = (): number | undefined => (isPhoneScreen() ? undefined : 12);
 
 /** Definition for a single right-edge bubble (colored label at chart's right edge). */
 export interface BubbleDef {
@@ -202,11 +206,20 @@ export function renderEdgeBubbles(
   defs: BubbleDef[],
   // Narrower bubbles for short labels ("24.9%"): the allocation charts use ~40px. Default BUBBLE_W.
   bubbleWidth: number = BUBBLE_W,
+  // One text size for BOTH lines (value and sublabel). Left out = 11px value, 9px sublabel.
+  fontSize?: number,
 ): JSX.Element | null {
   const { yAxisMap, offset: offsetData, width: chartWidth, height: chartHeight } = props;
   if (!yAxisMap || !offsetData || !chartWidth) return null;
   const yAxis = Object.values(yAxisMap)[0];
   if (!yAxis?.scale) return null;
+
+  // Text sizes, and where the two lines sit relative to the bubble's centre
+  const valueSize = fontSize ?? 11;
+  const subSize = fontSize ?? 9;
+  const twoLineH = fontSize ? 2 * fontSize + 6 : BUBBLE_H2;   // 12px text → 30px tall
+  const valueDy = fontSize ? -(fontSize / 2 + 0.5) : -5;
+  const subDy = fontSize ? fontSize / 2 + 1.5 : 7;
 
   // Position bubbles just to the right of the plot area
   const bubbleX = chartWidth - offsetData.right + 4;
@@ -214,7 +227,7 @@ export function renderEdgeBubbles(
   // Build positioned bubbles, filtering out any NaN positions. Each knows its own height:
   // two-line bubbles (with a sublabel) are taller than plain ones.
   const bubbles = defs
-    .map(d => ({ ...d, yRaw: yAxis.scale(d.value), h: d.sublabel ? BUBBLE_H2 : BUBBLE_H }))
+    .map(d => ({ ...d, yRaw: yAxis.scale(d.value), h: d.sublabel ? twoLineH : BUBBLE_H }))
     .filter(b => !isNaN(b.yRaw));
   if (bubbles.length === 0) return null;
 
@@ -274,17 +287,17 @@ export function renderEdgeBubbles(
             />
             {/* The value; with a sublabel it moves up to make room for the second line */}
             <text
-              x={cx} y={b.sublabel ? b.yRaw - 5 : b.yRaw}
+              x={cx} y={b.sublabel ? b.yRaw + valueDy : b.yRaw}
               textAnchor="middle" dominantBaseline="central"
-              fill={fill} fontSize={11} fontWeight={600}
+              fill={fill} fontSize={valueSize} fontWeight={600}
             >
               {b.label}
             </text>
             {b.sublabel && (
               <text
-                x={cx} y={b.yRaw + 7}
+                x={cx} y={b.yRaw + subDy}
                 textAnchor="middle" dominantBaseline="central"
-                fill={fill} fontSize={9} fontWeight={500}
+                fill={fill} fontSize={subSize} fontWeight={500}
               >
                 {b.sublabel}
               </text>
