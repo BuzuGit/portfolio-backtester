@@ -27,8 +27,9 @@ import { CURRENCY_OPTIONS, CURRENCY_SYMBOLS } from '@/components/options';
 import {
   ASSET_CLASS_COLORS, BLACK, BTN_SECOND, CAGR_LOT_HINT, CHART_PALETTE, CURRENCY_COLORS, FIELD, GAIN, HALO, INK, LINE,
   LOSS, METALS_CRYPTO_CCY, METALS_CRYPTO_LABEL, MUTED, OLIVE_LABEL, ON_BLACK, ResponsiveContainer, SEG, SLATE,
-  WEIGHT_BAR, WINE_LABEL, XIRR_HINT, formatPrice, readableTextOn, segBtn,
+  PINNED_FILTERS, WEIGHT_BAR, WINE_LABEL, XIRR_HINT, formatPrice, readableTextOn, segBtn,
 } from '@/components/ui';
+import { PhoneChoice } from '@/components/PhoneSheet';
 import {
   DateAxisTick, collapseTradePrices, computePnlZeroFraction, mergeComparisonData, pushTradePrice, renderEdgeBubbles,
   type BubbleDef, type RechartsCustomizedProps, type TradeDot,
@@ -41,6 +42,14 @@ import AllocationByMonth, { type MonthPeriod } from '@/components/AllocationByMo
 import type { AllocView } from '@/components/AllocationHistory';
 
 type SetState<T> = React.Dispatch<React.SetStateAction<T>>;
+
+// The order asset classes are listed in, safest to riskiest: in the By Asset Class table, the
+// Open Positions sort and the class buttons at the top of the tab. Cash first (the least risky
+// thing you hold); anything unlisted (e.g. Real Estate) goes last.
+const ASSET_CLASS_ORDER: Record<string, number> = {
+  'Cash': -1,
+  'Fixed Income': 0, 'Crypto': 1, 'Other': 1, 'Metals & Crypto': 1, 'Alternatives': 2, 'Equities': 3,
+};
 
 export interface PositionsTabProps {
   assetData: AssetRow[];
@@ -1173,7 +1182,10 @@ export default function PositionsTab({
           Currency: buttons on desktop AND phones — only four choices, so they fit on a
           phone's width and a slide-up panel would just be an extra tap. "Native" = no
           conversion, each position in its own currency. */}
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mb-4 max-md:gap-x-2">
+      {/* Pinned while scrolling, exactly like the Markets tab's filter row (PINNED_FILTERS).
+          Phones: not pinned ("max-md:static"), it scrolls away and leaves the small screen to
+          the cards, as on Markets. */}
+      <div className={`${PINNED_FILTERS} max-md:static flex flex-wrap items-center gap-x-6 gap-y-2 mb-4 max-md:gap-x-2`}>
         <div className="flex items-center gap-1">
           <span className="text-xs text-gray-500 mr-1 max-md:hidden" title="Convert all position values to this currency for comparison">Currency:</span>
           <span className={SEG}>
@@ -1189,6 +1201,50 @@ export default function PositionsTab({
             ))}
           </span>
         </div>
+
+        {/* Asset class buttons: the same filter as clicking a row of By Asset Class (and they
+            light up when you do). One class at a time; click it again, or the clear-filters
+            button, to see everything. The classes and their order are By Asset Class's: open
+            positions in the Lookup tab, sorted by the "Group M&C" rule, plus Cash while any
+            account holds some. Phones: one "Class" box opening a slide-up panel. */}
+        {(() => {
+          const lookupInfo = new Map(assetLookup.map(a => [a.ticker, a]));
+          const classOfTicker = (t: string) => {
+            const a = lookupInfo.get(t);
+            return a ? (groupMetalsCrypto ? portfolioClassOf(a) : (a.assetClass || 'Other')) : null;
+          };
+          const present = new Set<string>();
+          for (const t of getOpenTickers()) { const c = classOfTicker(t); if (c) present.add(c); }
+          if (cashAccounts.some(c => Math.abs(c.balance) > 0.005)) present.add('Cash');
+          const classes = Array.from(present).sort((a, b) =>
+            (ASSET_CLASS_ORDER[a] ?? 99) - (ASSET_CLASS_ORDER[b] ?? 99) || a.localeCompare(b));
+          if (classes.length === 0) return null;
+          return (
+            <>
+              <div className="hidden max-md:flex w-full">
+                <PhoneChoice
+                  label="Class"
+                  options={[{ value: '', label: 'All classes' }, ...classes.map(c => ({ value: c, label: c }))]}
+                  selected={openAssetClassFilter ?? ''}
+                  onPick={v => setOpenAssetClassFilter(v || null)}
+                />
+              </div>
+              <div className="flex items-center gap-1 max-md:hidden">
+                <span className="text-xs text-gray-500 mr-1">Class:</span>
+                <span className={SEG}>
+                  {classes.map(c => (
+                    <button
+                      key={c}
+                      onClick={() => setOpenAssetClassFilter(prev => (prev === c ? null : c))}
+                      className={segBtn(openAssetClassFilter === c)}
+                      title={openAssetClassFilter === c ? 'Click again to show every class' : `Show only ${c}`}
+                    >{c}</button>
+                  ))}
+                </span>
+              </div>
+            </>
+          );
+        })()}
 
         {/* "Group M&C" toggle — when on, classes come from the Lookup tab's PortfolioClass
             column, so gold, silver and crypto become "Metals & Crypto" as both an asset
@@ -1212,25 +1268,28 @@ export default function PositionsTab({
         </span>
 
         {/* Clear all filters (the class / currency / account picked by clicking a row or slice in
-            the cards below) in one click: the same funnel-with-a-cross button as the Cash Flows
-            app. Dimmed while no filter is on. Phones: 38px, an easier tap; there's no room for it
-            beside Group M&C, so it only appears (on a line of its own) while a filter is on. */}
+            the cards below) in one click, with the Cash Flows app's funnel-with-a-cross icon. Drawn
+            like every other control in the app: the shared grey strip (SEG) holding one segBtn,
+            as Group M&C is. Faded while no filter is on. Phones: there's no room for it beside
+            Group M&C, so it only appears (on a line of its own) while a filter is on. */}
         {(() => {
           const anyFilter = !!(openAssetClassFilter || openCurrencyFilter || openAccountFilter);
           return (
-            <button
-              type="button"
-              onClick={() => { setOpenAssetClassFilter(null); setOpenCurrencyFilter(null); setOpenAccountFilter(null); }}
-              disabled={!anyFilter}
-              title={anyFilter ? 'Clear all filters' : 'No filters on'}
-              aria-label="Clear all filters"
-              className={`grid place-items-center w-8 h-8 max-md:w-[38px] max-md:h-[38px] p-0 border border-gray-300 rounded-lg bg-white text-gray-500 ${anyFilter ? 'hover:text-slate-800 hover:border-slate-500 cursor-pointer' : 'opacity-40 cursor-default max-md:hidden'}`}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M15 6.5V4.5A1.5 1.5 0 0 0 13.5 3h-10A1.5 1.5 0 0 0 2 4.5v1.2l6.5 6.8v7A1.5 1.5 0 0 0 10 21h1.5a1.5 1.5 0 0 0 1.5-1.5V18" />
-                <path d="M15.5 9.5l6 6M21.5 9.5l-6 6" />
-              </svg>
-            </button>
+            <span className={`${SEG} ${anyFilter ? '' : 'max-md:hidden'}`}>
+              <button
+                type="button"
+                onClick={() => { setOpenAssetClassFilter(null); setOpenCurrencyFilter(null); setOpenAccountFilter(null); }}
+                disabled={!anyFilter}
+                title={anyFilter ? 'Clear all filters' : 'No filters on'}
+                aria-label="Clear all filters"
+                className={`${segBtn(false)} inline-flex items-center justify-center disabled:opacity-40 disabled:hover:bg-transparent`}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M15 6.5V4.5A1.5 1.5 0 0 0 13.5 3h-10A1.5 1.5 0 0 0 2 4.5v1.2l6.5 6.8v7A1.5 1.5 0 0 0 10 21h1.5a1.5 1.5 0 0 0 1.5-1.5V18" />
+                  <path d="M15.5 9.5l6 6M21.5 9.5l-6 6" />
+                </svg>
+              </button>
+            </span>
           );
         })()}
       </div>
@@ -1339,12 +1398,8 @@ export default function PositionsTab({
         });
 
         // Sort open positions by asset class: Fixed Income → M&C → Alternatives → Equities
-        const assetClassOrder: Record<string, number> = {
-          // Cash sorts first: it is the least risky thing you hold, and the list runs
-          // from safest to riskiest.
-          'Cash': -1,
-          'Fixed Income': 0, 'Crypto': 1, 'Other': 1, 'Metals & Crypto': 1, 'Alternatives': 2, 'Equities': 3,
-        };
+        // (ASSET_CLASS_ORDER, shared with the class buttons at the top of the tab)
+        const assetClassOrder = ASSET_CLASS_ORDER;
         // (The sort itself runs below, once effectiveClass exists: rows are ordered by the
         // class they are SHOWN under, which follows the "Group M&C" toggle.)
 
