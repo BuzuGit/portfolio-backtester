@@ -13,7 +13,7 @@
 import React from 'react';
 import {
   LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Area, ReferenceDot,
-  ReferenceLine, AreaChart, Customized, PieChart, Pie,
+  ReferenceLine, AreaChart, Customized, PieChart, Pie, LabelList,
 } from 'recharts';
 import type { AssetLookup, AssetRow, ClosedPositionRow, LedgerRow, TransactionRow, UnitFee } from '@/lib/fetchData';
 import { unitFeeQty } from '@/lib/fetchData';
@@ -27,7 +27,8 @@ import { CURRENCY_OPTIONS, CURRENCY_SYMBOLS } from '@/components/options';
 import {
   ASSET_CLASS_COLORS, BLACK, BTN_SECOND, CAGR_LOT_HINT, CHART_PALETTE, CURRENCY_COLORS, FIELD, GAIN, HALO, INK, LINE,
   LOSS, METALS_CRYPTO_CCY, METALS_CRYPTO_LABEL, MUTED, OLIVE_LABEL, ON_BLACK, ResponsiveContainer, SEG, SLATE,
-  PINNED_FILTERS, WEIGHT_BAR, WINE_LABEL, XIRR_HINT, formatPrice, readableTextOn, segBtn,
+  PINNED_FILTERS, WEIGHT_BAR, WINE_LABEL, XIRR_HINT, barLabelRoom, barValueLabel, formatPrice, readableTextOn, segBtn,
+  shortLabelCount, shortLabelMoney,
 } from '@/components/ui';
 import { PhoneChoice } from '@/components/PhoneSheet';
 import {
@@ -43,6 +44,11 @@ import type { AllocView } from '@/components/AllocationHistory';
 import IncomeChart, { type IncomeBy, type IncomeMeasure } from '@/components/IncomeChart';   // dividends + interest received
 
 type SetState<T> = React.Dispatch<React.SetStateAction<T>>;
+
+// The shares held above each bar of a position's Shares Held chart, by the app-wide bar label
+// rule (ui.tsx barValueLabel): sized by the bar count, none over 100 bars
+const sharesHeldLabel = (rows: { shares?: number }[]) =>
+  barValueLabel(rows.length, shortLabelCount, rows.map(r => r.shares ?? 0));
 
 // The order asset classes are listed in, safest to riskiest: in the By Asset Class table, the
 // Open Positions sort and the class buttons at the top of the tab. Cash first (the least risky
@@ -2808,6 +2814,12 @@ export default function PositionsTab({
                 // category (interest, dividends) gets one clean set of bars rather than a
                 // legend promising an "Out" series that is flat zero.
                 const hasIn = catIn > 0, hasOut = catOut > 0;
+                // Bar labels by the app-wide rule (ui.tsx barValueLabel): In and Out stand side
+                // by side, so each drawn bar counts; none over 100 bars
+                const flowSeries = Number(hasIn) + Number(hasOut);
+                const flowBarCount = monthlyData.length * flowSeries;
+                const flowLabel = barValueLabel(flowBarCount, shortLabelMoney,
+                  monthlyData.flatMap(d => [hasIn ? d.inflow : 0, hasOut ? d.outflow : 0]), undefined, flowSeries > 1 ? { gap: 4 } : {});
 
                 return (
                   <div className="mt-4 pt-4 border-t border-gray-200">
@@ -2825,7 +2837,7 @@ export default function PositionsTab({
                           Monthly total{hasIn && hasOut ? 's' : ''} · {monthlyData.length} month{monthlyData.length === 1 ? '' : 's'} from {monthlyData[0].month} to {monthlyData[monthlyData.length - 1].month}
                         </div>
                         <ResponsiveContainer width="100%" height={180}>
-                          <BarChart data={monthlyData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                          <BarChart data={monthlyData} margin={{ top: Math.max(5, flowLabel ? barLabelRoom(flowBarCount) : 0), right: 20, left: 0, bottom: 5 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={LINE} vertical={false} />
                             {/* minTickGap thins the labels automatically, so 86 months of
                                 history stays readable without hand-tuning an interval */}
@@ -2843,8 +2855,16 @@ export default function PositionsTab({
                             {/* Both series shown only when the category really moves both
                                 ways (FX conversions, transfers). Green in, red out — the
                                 same language as the In/Out columns in the table below. */}
-                            {hasIn && <Bar dataKey="inflow" name="In" fill={GAIN} isAnimationActive={false} />}
-                            {hasOut && <Bar dataKey="outflow" name="Out" fill={LOSS} isAnimationActive={false} />}
+                            {hasIn && (
+                              <Bar dataKey="inflow" name="In" fill={GAIN} isAnimationActive={false}>
+                                {flowLabel && <LabelList dataKey="inflow" content={flowLabel} />}
+                              </Bar>
+                            )}
+                            {hasOut && (
+                              <Bar dataKey="outflow" name="Out" fill={LOSS} isAnimationActive={false}>
+                                {flowLabel && <LabelList dataKey="outflow" content={flowLabel} />}
+                              </Bar>
+                            )}
                             {hasIn && hasOut && <Legend wrapperStyle={{ fontSize: 11 }} />}
                           </BarChart>
                         </ResponsiveContainer>
@@ -3617,12 +3637,14 @@ export default function PositionsTab({
                 <div className="mt-4">
                   <h5 className="text-xs font-semibold text-gray-600 mb-1 px-2">Shares Held</h5>
                   <ResponsiveContainer width="100%" height={150}>
-                    <BarChart data={mergedChartData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
+                    <BarChart data={mergedChartData} margin={{ top: Math.max(5, sharesHeldLabel(mergedChartData) ? barLabelRoom(mergedChartData.length) : 0), right: 70, left: -5, bottom: 15 }}>
                       {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                       <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                       <YAxis tick={{ fontSize: 9 }} width={40} domain={[0, 'auto']} />
                       <Tooltip content={<SharesHeldTooltip />} cursor={{ fill: 'rgba(0,0,0,0.06)' }} />
-                      <Bar dataKey="shares" name="Shares" fill={BLACK} isAnimationActive={false} />
+                      <Bar dataKey="shares" name="Shares" fill={BLACK} isAnimationActive={false}>
+                        {sharesHeldLabel(mergedChartData) && <LabelList dataKey="shares" content={sharesHeldLabel(mergedChartData)} />}
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -4579,12 +4601,14 @@ export default function PositionsTab({
                 <div className="mt-4">
                   <h5 className="text-xs font-semibold text-gray-600 mb-1 px-2">Shares Held</h5>
                   <ResponsiveContainer width="100%" height={150}>
-                    <BarChart data={mergedChartData} margin={{ top: 5, right: 70, left: -5, bottom: 15 }}>
+                    <BarChart data={mergedChartData} margin={{ top: Math.max(5, sharesHeldLabel(mergedChartData) ? barLabelRoom(mergedChartData.length) : 0), right: 70, left: -5, bottom: 15 }}>
                       {/* No CartesianGrid on purpose: the position detail charts are gridless, like the Monthly tab. The axis labels carry the levels. */}
                       <XAxis dataKey="date" tick={<DateAxisTick x={0} y={0} payload={{ value: '' }} />} height={35} />
                       <YAxis tick={{ fontSize: 9 }} width={40} domain={[0, 'auto']} />
                       <Tooltip content={<SharesHeldTooltip />} cursor={{ fill: 'rgba(0,0,0,0.06)' }} />
-                      <Bar dataKey="shares" name="Shares" fill={BLACK} isAnimationActive={false} />
+                      <Bar dataKey="shares" name="Shares" fill={BLACK} isAnimationActive={false}>
+                        {sharesHeldLabel(mergedChartData) && <LabelList dataKey="shares" content={sharesHeldLabel(mergedChartData)} />}
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

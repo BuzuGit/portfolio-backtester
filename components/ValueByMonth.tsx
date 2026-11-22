@@ -18,7 +18,7 @@
   are kept in the main screen, so they survive switching tabs.
 */
 import React, { useCallback, useMemo, useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, Customized } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, Customized, LabelList } from 'recharts';
 import type { LedgerMonth } from '@/lib/ledgerAllocation';
 import { localTodayIso } from '@/lib/fetchData';
 import { isPhoneScreen } from '@/lib/savedSheet';
@@ -26,7 +26,7 @@ import { MONTH_ABBR, periodStartIso } from '@/lib/dates';
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   ASSET_CLASS_COLORS, CARD, CHART_PALETTE, GAIN, INK, LINE, LOSS, MUTED, RETURN_MAP_ASSET_COLORS, ResponsiveContainer, SEG,
-  SLATE, readableTextOn, segBtn,
+  SLATE, barLabelRoom, barValueLabel, readableTextOn, segBtn, shortLabelMoney,
 } from '@/components/ui';
 import { EdgeBubbles, phoneAxisMoney, twoLineLabelFont, type BubbleDef } from '@/components/charts';
 import { RISK_ROW, dateAxisTicks, monthYear } from '@/components/AllocationHistory';
@@ -470,11 +470,16 @@ const ValueBars = React.memo(function ValueBars({ shown, groups, totalColor, sha
     // Slate flips with dark mode and the bubble code already handles it; a class colour doesn't
     textColor: totalColor === SLATE ? undefined : readableTextOn(totalColor),
   }];
+  // The month's total above each column, by the app-wide rule (ui.tsx barValueLabel): one label
+  // per stacked column, on the top series; none over 100 months. Not in the % view, where every
+  // column adds up to 100% and the label would say nothing.
+  const totalLabel = share ? undefined
+    : barValueLabel(shown.length, shortLabelMoney, shown.map(p => p.value), i => shown[i]?.value ?? 0, touching ? { gap: 0 } : {});
   return (
     <ResponsiveContainer width="100%" height={phone ? 240 : 300}>
       <BarChart
         data={data}
-        margin={{ top: 10, right: LABEL_W + 8, left: 0, bottom: 0 }}
+        margin={{ top: Math.max(10, totalLabel ? barLabelRoom(shown.length) : 0), right: LABEL_W + 8, left: 0, bottom: 0 }}
         barCategoryGap={touching ? 0 : shown.length > 60 ? '10%' : '20%'}
         onMouseMove={(s: { activeLabel?: string | number }) => { if (s?.activeLabel) onHover(String(s.activeLabel)); }}
         onMouseLeave={() => onHover(null)}
@@ -486,7 +491,9 @@ const ValueBars = React.memo(function ValueBars({ shown, groups, totalColor, sha
         <Tooltip cursor={{ fill: 'rgba(148,163,184,0.15)' }} content={renderTooltip} />
         {groups.map((g, i) => (
           <Bar key={g.name} dataKey={`g${i}`} name={g.label} stackId="value" fill={g.color} isAnimationActive={false}
-            stroke={touching ? g.color : undefined} strokeWidth={touching ? 1 : 0} />
+            stroke={touching ? g.color : undefined} strokeWidth={touching ? 1 : 0}>
+            {totalLabel && i === groups.length - 1 && <LabelList content={totalLabel} />}
+          </Bar>
         ))}
         {/* The latest total beside the right edge, like the allocation charts' latest % */}
         <Customized component={<EdgeBubbles defs={edgeDefs} bubbleWidth={LABEL_W} fontSize={twoLineLabelFont()} />} />

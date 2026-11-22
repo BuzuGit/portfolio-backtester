@@ -14,8 +14,8 @@ import type { AssetRow, AssetLookup } from '@/lib/fetchData';
 import type { DateRange } from '@/lib/backtest';
 import { trendFollowingAnalysis, calculateTrendMonthlyReturns, getTrendAnnualReturnsChartData } from '@/lib/trend';
 import {
-  CHART_PALETTE, GAIN, LOSS, LOSS_AREA, MUTED_LABEL, SMA_COLOR, TREND_COLOR, FIELD, PINNED_FILTERS,
-  SHARPE_HINT_RF, lossBarLabel, lossLabelRoom, ResponsiveContainer,
+  CHART_PALETTE, GAIN, LOSS, LOSS_AREA, SMA_COLOR, TREND_COLOR, FIELD, PINNED_FILTERS,
+  SHARPE_HINT_RF, barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, ResponsiveContainer,
 } from '@/components/ui';
 
 // Risk-free rate options (0% to 5%, 0.5% steps): the cash the strategy earns while out of the
@@ -496,6 +496,14 @@ export default function TrendFollowingTab({
                   const chartData = getTrendAnnualReturnsChartData(trendMonthlyReturns);
 
                   if (chartData.length === 0) return null;
+                  // Bar labels by the app-wide rule (ui.tsx barValueLabel): two bars a year side
+                  // by side, each counted. The axis stays hidden while the labels carry the
+                  // numbers, and appears when they won't fit.
+                  const pctLabel = (v: number) => `${v.toFixed(1)}%`;
+                  const labelValues = chartData.flatMap(d => [Number(d['Buy & Hold']), Number(d['Trend Following'])]);
+                  const barCount = chartData.length * 2;
+                  const valueLabel = barValueLabel(barCount, pctLabel, labelValues, undefined, { gap: 4 });
+                  const labelled = !!valueLabel && barLabelsFit(barCount, pctLabel, labelValues, 2);
 
                   return (
                     <>
@@ -504,12 +512,12 @@ export default function TrendFollowingTab({
                         <ResponsiveContainer width="100%" height={300}>
                           <BarChart
                             data={chartData}
-                            margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
+                            margin={{ top: Math.max(10, barLabelRoom(barCount)), right: 5, left: 5, bottom: 5 }}
                           >
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="year" />
-                            <YAxis hide domain={['auto', 'auto']}
-                              padding={{ bottom: lossLabelRoom(chartData.some(d => Number(d['Buy & Hold']) < 0 || Number(d['Trend Following']) < 0), 10) }} />
+                            <YAxis hide={labelled} domain={['auto', 'auto']} tick={{ fontSize: 11 }} width={40} tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+                              padding={{ bottom: barLossRoom(barCount, labelValues.some(v => v < 0)) }} />
                             <Tooltip
                               formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                               labelFormatter={(label) => `Year: ${label}`}
@@ -517,29 +525,11 @@ export default function TrendFollowingTab({
                             <Legend />
                             {/* Buy & Hold bars - Blue */}
                             <Bar dataKey="Buy & Hold" fill={CHART_PALETTE.blue}>
-                              <LabelList
-                                dataKey="Buy & Hold"
-                                position="top"
-                                formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                                style={{ fontSize: '10px', fill: MUTED_LABEL }}
-                              />
-                              <LabelList
-                                dataKey="Buy & Hold"
-                                content={lossBarLabel((value: number) => `${value.toFixed(1)}%`, { fontSize: '10px', fill: LOSS })}
-                              />
+                              {valueLabel && <LabelList dataKey="Buy & Hold" content={valueLabel} />}
                             </Bar>
                             {/* Trend Following bars - teal (TREND_COLOR) */}
                             <Bar dataKey="Trend Following" fill={TREND_COLOR}>
-                              <LabelList
-                                dataKey="Trend Following"
-                                position="top"
-                                formatter={(value: number) => value >= 0 ? `${value.toFixed(1)}%` : ''}
-                                style={{ fontSize: '10px', fill: MUTED_LABEL }}
-                              />
-                              <LabelList
-                                dataKey="Trend Following"
-                                content={lossBarLabel((value: number) => `${value.toFixed(1)}%`, { fontSize: '10px', fill: LOSS })}
-                              />
+                              {valueLabel && <LabelList dataKey="Trend Following" content={valueLabel} />}
                             </Bar>
                           </BarChart>
                         </ResponsiveContainer>

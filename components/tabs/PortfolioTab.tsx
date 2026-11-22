@@ -27,8 +27,8 @@ import { CURRENCY_SYMBOLS } from '@/components/options';
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   BLACK, BTN_SECOND, CAGR_HINT, CARD_GLASS, CHART_PALETTE, CURRENCY_COLORS, FIELD, GAIN, INFLATION_COLOR, INK_SOFT,
-  LINE, LINE_FAINT, LINE_MID, LOSS, LOSS_TOTAL, MUTED, MUTED_LABEL, ON_BLACK, PHONE_SCROLL_ROW, PROFIT_COLOR,
-  ResponsiveContainer, SEG, SHARPE_HINT, SLATE, lossBarLabel, lossLabelRoom, segBtn,
+  LINE, LINE_FAINT, LINE_MID, LOSS, LOSS_TOTAL, MUTED, ON_BLACK, PHONE_SCROLL_ROW, PROFIT_COLOR,
+  ResponsiveContainer, SEG, SHARPE_HINT, SLATE, barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, segBtn, shortLabelMoney,
 } from '@/components/ui';
 import {
   CURRENCY_CPI, DAILY_NAV_BENCHMARKS, twoLineLabelFont, DivergingBar, EdgeBubbles, barMillions, barPct, renderEdgeBubbles,
@@ -239,19 +239,23 @@ export default function PortfolioTab({
           {(() => {
             // Pre-compute chart data so the custom label renderer can access it by index
             const valueChartData = getPortfolioValueChartData();
-            // Phones: a slice thinner than its label (under ~4.5% of the tallest bar, about
-            // 12px there) gets no label inside it; the "0.0M"s of the early years otherwise
-            // pile on top of each other. The total above every bar stays.
-            const minInnerLabel = isPhoneScreen()
-              ? 0.045 * Math.max(0, ...valueChartData.map(d => d.contrCumulative + d.profitCumulative))
-              : 0;
+            // A slice thinner than its label (under ~4.5% of the tallest bar on a phone, about
+            // 12px there; ~6% on a wider screen, about 16px for the 15px figure) gets no label
+            // inside it; the "0.0M"s of the early years otherwise pile on top of each other
+            // and onto the total above the bar. The total above every bar stays.
+            const minInnerLabel = (isPhoneScreen() ? 0.045 : 0.06)
+              * Math.max(0, ...valueChartData.map(d => d.contrCumulative + d.profitCumulative));
+            // The total above each column, by the app-wide rule (ui.tsx barValueLabel): one
+            // label per stacked column, sized by how many years the chart shows
+            const valueTotals = valueChartData.map(d => d.contrCumulative + d.profitCumulative);
+            const valueTotalLabel = barValueLabel(valueChartData.length, v => `${barMillions(v)}M`, valueTotals, i => valueTotals[i] ?? 0);
             return (
               <div className="bg-white p-4 rounded-lg shadow mb-4 phone-bar-labels">
                 <h3 className="text-md font-semibold text-gray-700 mb-2">Portfolio Value by Year ({CURRENCY_SYMBOLS[portfolioCurrency]})</h3>
                 <ResponsiveContainer width="100%" height={350}>
                   <BarChart
                     data={valueChartData}
-                    margin={{ top: 30, right: 5, left: 5, bottom: 5 }}
+                    margin={{ top: Math.max(10, barLabelRoom(valueChartData.length)), right: 5, left: 5, bottom: 5 }}
                   >
                     <XAxis dataKey="year" tick={{ fontSize: 11 }} />
                     <YAxis hide domain={[0, 'dataMax + 0.3']} />
@@ -280,28 +284,8 @@ export default function PortfolioTab({
                         formatter={(value: number) => value !== 0 && Math.abs(value) >= minInnerLabel ? `${barMillions(value)}M` : ''}
                         style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
                       />
-                      {/* Total (contributions + profit) above the bar — uses custom renderer */}
-                      {/* to read the full data entry and compute the sum */}
-                      <LabelList
-                        dataKey="profitCumulative"
-                        position="top"
-                        content={(props: any) => {
-                          const { x, y, width, index } = props as { x: number; y: number; width: number; index: number };
-                          const entry = valueChartData[index];
-                          if (!entry) return null;
-                          const total = entry.contrCumulative + entry.profitCumulative;
-                          return (
-                            <text
-                              x={x + width / 2}
-                              y={y - 18}
-                              textAnchor="middle"
-                              style={{ fontSize: '13px', fill: INK_SOFT, fontWeight: 700 }}
-                            >
-                              {barMillions(total)}M
-                            </text>
-                          );
-                        }}
-                      />
+                      {/* Total (contributions + profit) above the column */}
+                      {valueTotalLabel && <LabelList dataKey="profitCumulative" content={valueTotalLabel} />}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -322,18 +306,23 @@ export default function PortfolioTab({
             // only ~25px wide. To fit: the numbers on the bars at 10px ("phone-bar-labels"
             // in globals.css), the total above each bar without the currency (the title has
             // it), every year label shown at 10px, and a slice thinner than its label (under
-            // ~4.5% of the tallest bar) gets no number inside it, as in the chart above.
+            // ~4.5% of the tallest bar; ~6% on a wider screen) gets no number inside it, as in
+            // the chart above.
             const phone = isPhoneScreen();
-            const minInnerLabel = phone
-              ? 0.045 * Math.max(0, ...cpChartData.map(d => Math.abs(d.growthTotal)))
-              : 0;
+            const minInnerLabel = (phone ? 0.045 : 0.06)
+              * Math.max(0, ...cpChartData.map(d => Math.abs(d.growthTotal)));
+            // The year's growth (contributions + profit) above each column, by the app-wide
+            // rule (ui.tsx barValueLabel). It rides on the top series, which always ends at the
+            // column's top, so it stays above the column even in a loss year (alwaysAbove).
+            const cpTotalLabel = barValueLabel(cpChartData.length, shortLabelMoney, cpChartData.map(d => d.growthTotal),
+              i => cpChartData[i]?.growthTotal ?? 0, { alwaysAbove: true, ...(phone ? { gap: 1 } : {}) });
             return (
           <div className="bg-white p-4 rounded-lg shadow mb-4 phone-bar-labels">
             <h3 className="text-md font-semibold text-gray-700 mb-2">Contributions and Profit by Year ({CURRENCY_SYMBOLS[portfolioCurrency]})</h3>
             <ResponsiveContainer width="100%" height={350}>
               <ComposedChart
                 data={cpChartData}
-                margin={{ top: 30, right: 5, left: 5, bottom: 5 }}
+                margin={{ top: Math.max(10, barLabelRoom(cpChartData.length)), right: 5, left: 5, bottom: 5 }}
                 // Phones: bars only 2px apart (1px each side, instead of 10% of a year's
                 // width), so the numbers inside them ("414k") stay within their bar
                 barCategoryGap={phone ? 1 : undefined}
@@ -406,25 +395,8 @@ export default function PortfolioTab({
                     }}
                     style={{ fontSize: '15px', fill: '#000', fontWeight: 700 }}
                   />
-                  {/* Growth total (contributions + profit) above the bar */}
-                  <LabelList
-                    dataKey="profitPositive"
-                    position="top"
-                    content={(props: any) => {
-                      const { x, y, width, index } = props as { x: number; y: number; width: number; index: number };
-                      const entry = cpChartData[index];
-                      if (!entry || typeof x !== 'number' || typeof y !== 'number' || typeof width !== 'number') return null;
-                      const sym = CURRENCY_SYMBOLS[portfolioCurrency];
-                      const v = entry.growthTotal;
-                      const unit = phone ? '' : ` ${sym}`;
-                      const label = Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k${unit}` : `${Math.round(v).toLocaleString()}${unit}`;
-                      return (
-                        <text x={x + width / 2} y={y - 10} textAnchor="middle" style={{ fontSize: '13px', fill: INK_SOFT, fontWeight: 700 }}>
-                          {label}
-                        </text>
-                      );
-                    }}
-                  />
+                  {/* Growth total (contributions + profit) above the column */}
+                  {cpTotalLabel && <LabelList dataKey="profitPositive" content={cpTotalLabel} />}
                 </Bar>
               </ComposedChart>
             </ResponsiveContainer>
@@ -1843,16 +1815,26 @@ export default function PortfolioTab({
                 </h3>
               );
             })()}
-            {(() => { const returnsRows = getReturnsChartData(); return (
+            {(() => {
+              const returnsRows = getReturnsChartData();
+              // Values above (below, for a loss) every bar, by the app-wide rule (ui.tsx
+              // barValueLabel): the currencies stand side by side, so each bar counts.
+              const keys = (['PLN', 'USD', 'SGD'] as const).filter(c => selectedReturnCurrencies.includes(c)).map(c => `Return ${c}`);
+              const values = returnsRows.flatMap(d => keys.map(k => Number(d[k as keyof typeof d])));
+              const barCount = returnsRows.length * keys.length;
+              const valueLabel = barValueLabel(barCount, barPct, values, undefined, keys.length > 1 ? { gap: 4 } : {});
+              // The axis stays hidden while the labels carry the numbers; shown when they won't fit
+              const labelled = !!valueLabel && barLabelsFit(barCount, barPct, values, keys.length);
+              return (
             <ResponsiveContainer width="100%" height={350}>
               <BarChart
                 data={returnsRows}
-                margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
+                margin={{ top: Math.max(10, barLabelRoom(barCount)), right: 5, left: 5, bottom: 5 }}
               >
                 <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                {/* padding: room under the lowest bar for its loss label (lossBarLabel) */}
-                <YAxis hide domain={['auto', 'auto']}
-                  padding={{ bottom: lossLabelRoom(returnsRows.some(d => ['Return PLN', 'Return USD', 'Return SGD'].some(k => Number(d[k as keyof typeof d]) < 0)), 14) }} />
+                {/* padding: room under the lowest bar for its loss label */}
+                <YAxis hide={labelled} domain={['auto', 'auto']} tick={{ fontSize: 11 }} width={40} tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+                  padding={{ bottom: barLossRoom(barCount, values.some(v => v < 0)) }} />
                 <Tooltip
                   formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                   labelFormatter={(label) => `Year: ${label}`}
@@ -1860,65 +1842,47 @@ export default function PortfolioTab({
                 <Legend />
                 {selectedReturnCurrencies.includes('PLN') && (
                   <Bar dataKey="Return PLN" fill={CURRENCY_COLORS.PLN}>
-                    <LabelList
-                      dataKey="Return PLN"
-                      position="top"
-                      formatter={(value: number) => value >= 0 ? barPct(value) : ''}
-                      style={{ fontSize: '14px', fontWeight: 600, fill: MUTED_LABEL }}
-                    />
-                    <LabelList
-                      dataKey="Return PLN"
-                      content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
-                    />
+                    {valueLabel && <LabelList dataKey="Return PLN" content={valueLabel} />}
                   </Bar>
                 )}
                 {selectedReturnCurrencies.includes('USD') && (
                   <Bar dataKey="Return USD" fill={CURRENCY_COLORS.USD}>
-                    <LabelList
-                      dataKey="Return USD"
-                      position="top"
-                      formatter={(value: number) => value >= 0 ? barPct(value) : ''}
-                      style={{ fontSize: '14px', fontWeight: 600, fill: MUTED_LABEL }}
-                    />
-                    <LabelList
-                      dataKey="Return USD"
-                      content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
-                    />
+                    {valueLabel && <LabelList dataKey="Return USD" content={valueLabel} />}
                   </Bar>
                 )}
                 {selectedReturnCurrencies.includes('SGD') && (
                   <Bar dataKey="Return SGD" fill={CURRENCY_COLORS.SGD}>
-                    <LabelList
-                      dataKey="Return SGD"
-                      position="top"
-                      formatter={(value: number) => value >= 0 ? barPct(value) : ''}
-                      style={{ fontSize: '14px', fontWeight: 600, fill: MUTED_LABEL }}
-                    />
-                    <LabelList
-                      dataKey="Return SGD"
-                      content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
-                    />
+                    {valueLabel && <LabelList dataKey="Return SGD" content={valueLabel} />}
                   </Bar>
                 )}
               </BarChart>
             </ResponsiveContainer>
-            ); })()}
+              );
+            })()}
           </div>
 
           {/* Chart 4: Growth by Year — grouped bar chart */}
           {/* Bars shown/hidden based on selectedReturnCurrencies */}
           <div className="bg-white p-4 rounded-lg shadow mb-4 phone-bar-labels">
             <h3 className="text-md font-semibold text-gray-700 mb-2">Growth by Year (%)</h3>
-            {(() => { const growthRows = getGrowthByYearChartData(); return (
+            {(() => {
+              const growthRows = getGrowthByYearChartData();
+              // Labels by the app-wide rule, as in Returns by Year above
+              const keys = (['PLN', 'USD', 'SGD'] as const).filter(c => selectedReturnCurrencies.includes(c)).map(c => `Growth ${c}` as const);
+              const values = growthRows.flatMap(d => keys.map(k => d[k]));
+              const barCount = growthRows.length * keys.length;
+              const valueLabel = barValueLabel(barCount, barPct, values, undefined, keys.length > 1 ? { gap: 4 } : {});
+              const labelled = !!valueLabel && barLabelsFit(barCount, barPct, values, keys.length);
+              return (
             <ResponsiveContainer width="100%" height={350}>
               <BarChart
                 data={growthRows}
-                margin={{ top: 20, right: 5, left: 5, bottom: 5 }}
+                margin={{ top: Math.max(10, barLabelRoom(barCount)), right: 5, left: 5, bottom: 5 }}
               >
                 <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                {/* padding: room under the lowest bar for its loss label (lossBarLabel) */}
-                <YAxis hide domain={['auto', 'auto']}
-                  padding={{ bottom: lossLabelRoom(growthRows.some(d => d['Growth PLN'] < 0 || d['Growth USD'] < 0 || d['Growth SGD'] < 0), 14) }} />
+                {/* padding: room under the lowest bar for its loss label */}
+                <YAxis hide={labelled} domain={['auto', 'auto']} tick={{ fontSize: 11 }} width={40} tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+                  padding={{ bottom: barLossRoom(barCount, values.some(v => v < 0)) }} />
                 <Tooltip
                   formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
                   labelFormatter={(label) => `Year: ${label}`}
@@ -1926,49 +1890,23 @@ export default function PortfolioTab({
                 <Legend />
                 {selectedReturnCurrencies.includes('PLN') && (
                   <Bar dataKey="Growth PLN" fill={CURRENCY_COLORS.PLN}>
-                    <LabelList
-                      dataKey="Growth PLN"
-                      position="top"
-                      formatter={(value: number) => value >= 0 ? barPct(value) : ''}
-                      style={{ fontSize: '14px', fontWeight: 600, fill: MUTED_LABEL }}
-                    />
-                    <LabelList
-                      dataKey="Growth PLN"
-                      content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
-                    />
+                    {valueLabel && <LabelList dataKey="Growth PLN" content={valueLabel} />}
                   </Bar>
                 )}
                 {selectedReturnCurrencies.includes('USD') && (
                   <Bar dataKey="Growth USD" fill={CURRENCY_COLORS.USD}>
-                    <LabelList
-                      dataKey="Growth USD"
-                      position="top"
-                      formatter={(value: number) => value >= 0 ? barPct(value) : ''}
-                      style={{ fontSize: '14px', fontWeight: 600, fill: MUTED_LABEL }}
-                    />
-                    <LabelList
-                      dataKey="Growth USD"
-                      content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
-                    />
+                    {valueLabel && <LabelList dataKey="Growth USD" content={valueLabel} />}
                   </Bar>
                 )}
                 {selectedReturnCurrencies.includes('SGD') && (
                   <Bar dataKey="Growth SGD" fill={CURRENCY_COLORS.SGD}>
-                    <LabelList
-                      dataKey="Growth SGD"
-                      position="top"
-                      formatter={(value: number) => value >= 0 ? barPct(value) : ''}
-                      style={{ fontSize: '14px', fontWeight: 600, fill: MUTED_LABEL }}
-                    />
-                    <LabelList
-                      dataKey="Growth SGD"
-                      content={lossBarLabel((value: number) => barPct(value), { fontSize: '14px', fontWeight: 600, fill: LOSS })}
-                    />
+                    {valueLabel && <LabelList dataKey="Growth SGD" content={valueLabel} />}
                   </Bar>
                 )}
               </BarChart>
             </ResponsiveContainer>
-            ); })()}
+              );
+            })()}
           </div>
         </>
       )}

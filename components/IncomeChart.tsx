@@ -18,7 +18,7 @@
   rates. Choices live in the main screen, so they survive switching tabs.
 */
 import React, { useCallback, useMemo, useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, Customized } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, Customized, LabelList } from 'recharts';
 import type { AssetLookup, AssetRow, LedgerRow } from '@/lib/fetchData';
 import { localTodayIso } from '@/lib/fetchData';
 import { FX_TICKER_MAP } from '@/lib/backtest';
@@ -27,7 +27,9 @@ import { paymentYields } from '@/lib/incomeYield';
 import { isPhoneScreen } from '@/lib/savedSheet';
 import { MONTH_ABBR, periodStartIso } from '@/lib/dates';
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
-import { CARD, GAIN, INK, LINE, LOSS, MUTED, ResponsiveContainer, SEG, SLATE, segBtn } from '@/components/ui';
+import {
+  CARD, GAIN, INK, LINE, LOSS, MUTED, ResponsiveContainer, SEG, SLATE, barLabelRoom, barValueLabel, segBtn, shortLabelMoney,
+} from '@/components/ui';
 import { EdgeBubbles, phoneAxisMoney, twoLineLabelFont, type BubbleDef } from '@/components/charts';
 import { RISK_ROW } from '@/components/AllocationHistory';
 import { GROUP_COLORS } from '@/components/ValueByMonth';
@@ -49,8 +51,9 @@ const LABEL_W = 50;   // the latest-bar label beside the right edge
 
 // 1234567.8 -> "1,234,568"
 const money = (v: number) => Math.round(v).toLocaleString('en-US');
+// Short money for labels: "640", "8.4k", "80.8k", "245k", "1.23M"
 const shortMoney = (v: number) =>
-  Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : Math.abs(v) >= 1e3 ? `${(v / 1e3).toFixed(Math.abs(v) >= 1e4 ? 0 : 1)}k` : String(Math.round(v));
+  Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : Math.abs(v) >= 1e3 ? `${(v / 1e3).toFixed(Math.abs(v) >= 1e5 ? 0 : 1)}k` : String(Math.round(v));
 const signedMoney = (v: number) => `${v >= 0 ? '+' : '−'}${money(Math.abs(v))}`;
 
 // "2026-11" -> the bucket it falls in: "2026-11" (month), "2026-Q4" (quarter) or "2026" (year)
@@ -548,11 +551,20 @@ const IncomeBars = React.memo(function IncomeBars({ bars, payers, by, yieldMode,
   const last = bars[bars.length - 1];
   // (no label when the bars add up several currencies: the sum would mean nothing)
   const edgeDefs: BubbleDef[] = unit ? [{ value: last.total, color: SLATE, label: shortMoney(last.total) }] : [];
+  // Values above the bars, by the app-wide rule (ui.tsx barValueLabel: 16 / 12 / 10px for up to
+  // 24 / 60 / 100 bars, none beyond). Amounts: one label per stacked column, its total, on top.
+  // Yields: the bars stand side by side, so each bar counts and gets its own label. None when
+  // Native adds several currencies (the total would mean nothing).
+  const barCount = yieldMode ? bars.length * payers.length : bars.length;
+  const valueLabel = yieldMode
+    ? barValueLabel(barCount, v => `${v.toFixed(1)}%`, bars.flatMap(b => payers.map(p => b.byPayer[p.key] ?? 0)), undefined,
+      payers.length > 1 ? { gap: 4 } : {})
+    : unit ? barValueLabel(barCount, shortLabelMoney, bars.map(b => b.total), i => bars[i]?.total ?? 0) : undefined;
   return (
     <ResponsiveContainer width="100%" height={phone ? 240 : 300}>
       <BarChart
         data={data}
-        margin={{ top: 10, right: LABEL_W + 8, left: 0, bottom: 0 }}
+        margin={{ top: Math.max(10, valueLabel ? barLabelRoom(barCount) : 0), right: LABEL_W + 8, left: 0, bottom: 0 }}
         barCategoryGap={touching ? 0 : bars.length > 60 ? '10%' : '20%'}
         onMouseMove={(s: { activeLabel?: string | number }) => { if (s?.activeLabel) onHover(String(s.activeLabel)); }}
         onMouseLeave={() => onHover(null)}
@@ -564,7 +576,10 @@ const IncomeBars = React.memo(function IncomeBars({ bars, payers, by, yieldMode,
         <Tooltip cursor={{ fill: 'rgba(148,163,184,0.15)' }} content={renderTooltip} />
         {payers.map((p, i) => (
           <Bar key={p.key} dataKey={`p${i}`} name={p.label} stackId={yieldMode ? undefined : 'income'} fill={p.color} isAnimationActive={false}
-            stroke={touching ? p.color : undefined} strokeWidth={touching ? 1 : 0} />
+            stroke={touching ? p.color : undefined} strokeWidth={touching ? 1 : 0}>
+            {/* Yields: every bar labelled. Amounts: only the top series, carrying the column total. */}
+            {valueLabel && (yieldMode || i === payers.length - 1) && <LabelList content={valueLabel} />}
+          </Bar>
         ))}
         {/* The latest bar's total (the current month / quarter / year so far); amounts only */}
         {!yieldMode && <Customized component={<EdgeBubbles defs={edgeDefs} bubbleWidth={LABEL_W} fontSize={twoLineLabelFont()} />} />}
