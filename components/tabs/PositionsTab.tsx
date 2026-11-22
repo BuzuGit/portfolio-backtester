@@ -40,7 +40,7 @@ import {
 } from '@/components/positionsParts';
 import AllocationByMonth, { type MonthPeriod } from '@/components/AllocationByMonth';   // the mix at every month-end
 import type { AllocView } from '@/components/AllocationHistory';
-import IncomeChart, { type IncomeBy } from '@/components/IncomeChart';   // dividends + interest received
+import IncomeChart, { type IncomeBy, type IncomeMeasure } from '@/components/IncomeChart';   // dividends + interest received
 
 type SetState<T> = React.Dispatch<React.SetStateAction<T>>;
 
@@ -72,6 +72,7 @@ export interface PositionsTabProps {
   posIncomeBy: IncomeBy; setPosIncomeBy: (b: IncomeBy) => void;
   posIncomePeriod: MonthPeriod; setPosIncomePeriod: (p: MonthPeriod) => void;
   posIncomeExcluded: string[]; setPosIncomeExcluded: SetState<string[]>;
+  posIncomeMeasure: IncomeMeasure; setPosIncomeMeasure: (m: IncomeMeasure) => void;
   calculateXIRR: (cashFlows: { date: Date; amount: number }[]) => number | null;
   getClosedTransactions: (ticker: string) => ClosedPositionRow[];
   getOpenPurchases: (ticker: string) => TransactionRow[];
@@ -114,6 +115,7 @@ export default function PositionsTab({
   allCashAccounts, posAllocView, setPosAllocView, posAllocPeriod, setPosAllocPeriod, posValuePeriod, setPosValuePeriod,
   posValueExcluded, setPosValueExcluded, posValueMode, setPosValueMode,
   incomeRows, posIncomeBy, setPosIncomeBy, posIncomePeriod, setPosIncomePeriod, posIncomeExcluded, setPosIncomeExcluded,
+  posIncomeMeasure, setPosIncomeMeasure,
   calculateXIRR, getClosedTransactions, getOpenPurchases, getOpenDividends, tableSort, sortPropsFor,
   closedSelectAllRef, openSelectAllRef, positionsCurrency, setPositionsCurrency, groupMetalsCrypto,
   setGroupMetalsCrypto, cashCategory, setCashCategory, cashSelected, setCashSelected, openAccountFilter,
@@ -2117,6 +2119,7 @@ export default function PositionsTab({
               positionsCurrency={positionsCurrency}
               by={posIncomeBy} setBy={setPosIncomeBy} period={posIncomePeriod} setPeriod={setPosIncomePeriod}
               excluded={posIncomeExcluded} setExcluded={setPosIncomeExcluded}
+              measure={posIncomeMeasure} setMeasure={setPosIncomeMeasure}
             />
 
             {/* === Cash Table === */}
