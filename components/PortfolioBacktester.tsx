@@ -37,7 +37,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 're
 // Switches off chart animation app-wide: every chart draws instantly (see the file for why/how)
 import '@/lib/noChartAnimation';
 import { RefreshCw, Menu, X, FlaskConical, Globe, Briefcase, Layers, CalendarDays, CalendarRange, ArrowDownWideNarrow, LineChart as LineChartIcon, TrendingUp, Grid3x3, Moon, Sun, ChevronDown } from 'lucide-react';
-import { fetchSheetData, SheetUnreachableError, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData, unitFeeQty } from '@/lib/fetchData';
+import { fetchSheetData, SheetUnreachableError, localTodayIso, AssetRow, AssetLookup, YearsRow, ClosedPositionRow, TransactionRow, DailyNavRow, PresetPortfolio, FLOW_PURCHASE, FLOW_DIVIDEND, ParsedData, unitFeeQty, type LedgerRow } from '@/lib/fetchData';
 import { isPhoneScreen, readSavedSheet, saveSheet } from '@/lib/savedSheet';
 import { BottomSheet, PhoneCheckSheet, PhoneSelectSheets } from '@/components/PhoneSheet';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
@@ -565,6 +565,12 @@ const PortfolioBacktester = () => {
   const [posValueExcluded, setPosValueExcluded] = useState<Record<string, string[]>>({});
   // ...and whether it shows money (the default) or % of the portfolio
   const [posValueMode, setPosValueMode] = useState<'value' | 'share'>('value');
+  // The Positions tab's Income chart: the ledger's dividend + interest rows, and its choices
+  // (bars per month / quarter / year, the period, and the payers unticked)
+  const [incomeRows, setIncomeRows] = useState<LedgerRow[]>([]);
+  const [posIncomeBy, setPosIncomeBy] = useState<'month' | 'quarter' | 'year'>('year');
+  const [posIncomePeriod, setPosIncomePeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y' | 'Max'>('Max');
+  const [posIncomeExcluded, setPosIncomeExcluded] = useState<string[]>([]);
   // Which cash balance the user drilled into, keyed "account|currency".
   // Empty string = showing the summary list, mirroring openSelectedTicker above.
   const [cashSelected, setCashSelected] = useState<string>('');
@@ -888,6 +894,9 @@ const PortfolioBacktester = () => {
       setPositionsModel(model);
       setCashAccounts(cash);
       setAllCashAccounts(allCash);
+      // Every dividend and interest payment (~380 rows), for the Positions tab's Income chart.
+      // Only these rows are kept: the rest of the ledger lives on in the models above.
+      setIncomeRows(fetchedLedgerData.filter(r => r.flow === 'Dividend' || r.flow === 'Interest'));
       setClosedData(effectiveClosed);
       setTransactionData(effectiveTransactions);
       setDailyData(fetchedDailyData);
@@ -3063,6 +3072,9 @@ const PortfolioBacktester = () => {
               posValuePeriod={posValuePeriod} setPosValuePeriod={setPosValuePeriod}
               posValueExcluded={posValueExcluded} setPosValueExcluded={setPosValueExcluded}
               posValueMode={posValueMode} setPosValueMode={setPosValueMode}
+              incomeRows={incomeRows} posIncomeBy={posIncomeBy} setPosIncomeBy={setPosIncomeBy}
+              posIncomePeriod={posIncomePeriod} setPosIncomePeriod={setPosIncomePeriod}
+              posIncomeExcluded={posIncomeExcluded} setPosIncomeExcluded={setPosIncomeExcluded}
               calculateXIRR={calculateXIRR} getClosedTransactions={getClosedTransactions}
               getOpenPurchases={getOpenPurchases} getOpenDividends={getOpenDividends}
               tableSort={tableSort} sortPropsFor={sortPropsFor}

@@ -15,7 +15,7 @@ import {
   LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Area, ReferenceDot,
   ReferenceLine, AreaChart, Customized, PieChart, Pie,
 } from 'recharts';
-import type { AssetLookup, AssetRow, ClosedPositionRow, TransactionRow, UnitFee } from '@/lib/fetchData';
+import type { AssetLookup, AssetRow, ClosedPositionRow, LedgerRow, TransactionRow, UnitFee } from '@/lib/fetchData';
 import { unitFeeQty } from '@/lib/fetchData';
 import type { PositionsModel } from '@/lib/positions';
 import type { CashAccountBalance } from '@/lib/cash';
@@ -40,6 +40,7 @@ import {
 } from '@/components/positionsParts';
 import AllocationByMonth, { type MonthPeriod } from '@/components/AllocationByMonth';   // the mix at every month-end
 import type { AllocView } from '@/components/AllocationHistory';
+import IncomeChart, { type IncomeBy } from '@/components/IncomeChart';   // dividends + interest received
 
 type SetState<T> = React.Dispatch<React.SetStateAction<T>>;
 
@@ -66,6 +67,11 @@ export interface PositionsTabProps {
   posValuePeriod: MonthPeriod; setPosValuePeriod: (p: MonthPeriod) => void;
   posValueExcluded: Record<string, string[]>; setPosValueExcluded: SetState<Record<string, string[]>>;
   posValueMode: 'value' | 'share'; setPosValueMode: (m: 'value' | 'share') => void;
+  // The Income chart: the ledger's dividend + interest rows, and its choices
+  incomeRows: LedgerRow[];
+  posIncomeBy: IncomeBy; setPosIncomeBy: (b: IncomeBy) => void;
+  posIncomePeriod: MonthPeriod; setPosIncomePeriod: (p: MonthPeriod) => void;
+  posIncomeExcluded: string[]; setPosIncomeExcluded: SetState<string[]>;
   calculateXIRR: (cashFlows: { date: Date; amount: number }[]) => number | null;
   getClosedTransactions: (ticker: string) => ClosedPositionRow[];
   getOpenPurchases: (ticker: string) => TransactionRow[];
@@ -106,7 +112,9 @@ export interface PositionsTabProps {
 export default function PositionsTab({
   assetData, assetLookup, closedData, transactionData, positionsModel, cashAccounts, edoMissingBanner,
   allCashAccounts, posAllocView, setPosAllocView, posAllocPeriod, setPosAllocPeriod, posValuePeriod, setPosValuePeriod,
-  posValueExcluded, setPosValueExcluded, posValueMode, setPosValueMode, calculateXIRR, getClosedTransactions, getOpenPurchases, getOpenDividends, tableSort, sortPropsFor,
+  posValueExcluded, setPosValueExcluded, posValueMode, setPosValueMode,
+  incomeRows, posIncomeBy, setPosIncomeBy, posIncomePeriod, setPosIncomePeriod, posIncomeExcluded, setPosIncomeExcluded,
+  calculateXIRR, getClosedTransactions, getOpenPurchases, getOpenDividends, tableSort, sortPropsFor,
   closedSelectAllRef, openSelectAllRef, positionsCurrency, setPositionsCurrency, groupMetalsCrypto,
   setGroupMetalsCrypto, cashCategory, setCashCategory, cashSelected, setCashSelected, openAccountFilter,
   setOpenAccountFilter, openAssetClassFilter, setOpenAssetClassFilter, openCurrencyFilter, setOpenCurrencyFilter,
@@ -2101,6 +2109,15 @@ export default function PositionsTab({
                 valueMode={posValueMode} setValueMode={setPosValueMode}
               />
             )}
+
+            {/* === Income: dividends and interest received, by month / quarter / year === */}
+            <IncomeChart
+              rows={incomeRows} assetData={assetData} assetLookup={assetLookup} groupMetalsCrypto={groupMetalsCrypto}
+              tickerAccounts={tickerPurchaseAccounts} classFilter={openAssetClassFilter} accountFilter={openAccountFilter}
+              positionsCurrency={positionsCurrency}
+              by={posIncomeBy} setBy={setPosIncomeBy} period={posIncomePeriod} setPeriod={setPosIncomePeriod}
+              excluded={posIncomeExcluded} setExcluded={setPosIncomeExcluded}
+            />
 
             {/* === Cash Table === */}
             {/* Sits above Open Positions because it answers the prior question:
