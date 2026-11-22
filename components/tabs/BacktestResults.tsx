@@ -18,7 +18,7 @@ import { getPairedMonthlyReturns, getRollingCorrelationData, pearsonCorrelation 
 import { PhoneChoice } from '@/components/PhoneSheet';
 import {
   BLACK, CAGR_HINT, FIELD, GAIN, LOSS, MUTED, ResponsiveContainer, SEG, SHARPE_HINT, SLATE,
-  barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, formatPrice, segBtn,
+  MeasuredWidth, barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, formatPrice, segBtn,
 } from '@/components/ui';
 import {
   CORRELATION_WINDOWS, RETURNS_PERIOD_CHOICES, ROLLING_RETURN_YEARS, STREAK_VIEWS, UpMonthsSummary, phoneAxisMoney,
@@ -270,7 +270,10 @@ export default function BacktestResults({
           const labelFormat = streak ? (v: number) => String(v) : (v: number) => `${v.toFixed(1)}%`;
           const labelValues = rows.flatMap(r => backtestResults.map(res => Number(r[res.portfolio.name])));
           const valueLabel = barValueLabel(barCount, labelFormat, labelValues, undefined, singleSeries ? {} : { gap: 4 });
-          const showLabels = !!valueLabel && barLabelsFit(barCount, labelFormat, labelValues, backtestResults.length);
+          // Whether they will draw, from the chart's measured width (less its 5px margins and the
+          // 40px axis), so the hidden axis follows window resizes
+          const labelsFit = (width: number) =>
+            !!valueLabel && barLabelsFit(barCount, labelFormat, labelValues, width - 50, { perGroup: backtestResults.length });
           const heading = backtestReturnsPeriod === 'annual' ? 'Annual Returns'
             : backtestReturnsPeriod === 'monthly' ? 'Monthly Returns'
             : backtestReturnsPeriod === 'quarterly' ? 'Quarterly Returns'
@@ -349,6 +352,9 @@ export default function BacktestResults({
                     .map(row => ({ label: row.label, count: Number(row[r.portfolio.name]) })),
                 }))} />
               )}
+              <MeasuredWidth>{width => {
+              const showLabels = labelsFit(width);
+              return (
               <ResponsiveContainer width="100%" height={300}>
                 {/* No CartesianGrid, matching the Monthly tab's returns chart */}
                 <BarChart data={rows} margin={{ top: Math.max(10, valueLabel ? barLabelRoom(barCount) : 0), right: 5, left: 5, bottom: 5 }}>
@@ -426,6 +432,8 @@ export default function BacktestResults({
                   ))}
                 </BarChart>
               </ResponsiveContainer>
+              );
+              }}</MeasuredWidth>
               </>
               )}
               {/* The Δ table further down always shows CALENDAR YEARS, whatever this

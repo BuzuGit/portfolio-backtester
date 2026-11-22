@@ -420,9 +420,9 @@ export default function MarketsTab({
       return rows.map(r => {
         const data = r.history!.filter(h => inRange(h.date)).map(h => ({ date: h.date, v: h.v }));
         // Bar labels by the app-wide rule (ui.tsx barValueLabel): e.g. 1Y = 13 bars at 16px,
-        // Max = hundreds of bars and none. Bars sit 1px apart (barCategoryGap 1). Where "2.7%"
-        // is too wide (5Y), the rule shortens it to "2.7".
-        const valueLabel = barValueLabel(data.length, v => `${v.toFixed(dp)}%`, data.map(d => d.v), undefined, { gap: 1 });
+        // Max = hundreds of bars and none. barCategoryGap={1} leaves 1px each side of a bar, so
+        // 2px between neighbours. Where "2.7%" is too wide (5Y), the rule shortens it to "2.7".
+        const valueLabel = barValueLabel(data.length, v => `${v.toFixed(dp)}%`, data.map(d => d.v), undefined, { gap: 2 });
         return (
           <tr key={`chart-${r.ticker}`}><td colSpan={colCount} className="pt-2 pb-4 px-1">
             {header}

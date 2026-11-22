@@ -556,10 +556,13 @@ const IncomeBars = React.memo(function IncomeBars({ bars, payers, by, yieldMode,
   // Yields: the bars stand side by side, so each bar counts and gets its own label. None when
   // Native adds several currencies (the total would mean nothing).
   const barCount = yieldMode ? bars.length * payers.length : bars.length;
+  // The empty share of each category beside its bars, matching barCategoryGap below (touching
+  // bars on a phone: none), so the labels get exactly the room there is
+  const categoryGap = touching ? 0 : bars.length > 60 ? 0.1 : 0.2;
   const valueLabel = yieldMode
     ? barValueLabel(barCount, v => `${v.toFixed(1)}%`, bars.flatMap(b => payers.map(p => b.byPayer[p.key] ?? 0)), undefined,
-      payers.length > 1 ? { gap: 4 } : {})
-    : unit ? barValueLabel(barCount, shortLabelMoney, bars.map(b => b.total), i => bars[i]?.total ?? 0) : undefined;
+      payers.length > 1 ? { gap: 4 } : { categoryGap })
+    : unit ? barValueLabel(barCount, shortLabelMoney, bars.map(b => b.total), i => bars[i]?.total ?? 0, { categoryGap }) : undefined;
   return (
     <ResponsiveContainer width="100%" height={phone ? 240 : 300}>
       <BarChart
