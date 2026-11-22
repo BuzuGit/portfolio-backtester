@@ -75,12 +75,15 @@ export interface AllocationByMonthProps {
   view: AllocView; setView: (v: AllocView) => void;
   period: Period; setPeriod: (p: Period) => void;
   valuePeriod: Period; setValuePeriod: (p: Period) => void;   // the Value by Month-end chart's own period
+  // Value by Month-end: exposure groups left out, per class
+  valueExcluded: Record<string, string[]>;
+  setValueExcluded: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
 }
 
 export default function AllocationByMonth({
   assetData, assetLookup, positionsModel, allCashAccounts, groupMetalsCrypto, tickerAccounts,
   accountFilter, currencyFilter, classFilter, positionsCurrency, view, setView, period, setPeriod,
-  valuePeriod, setValuePeriod,
+  valuePeriod, setValuePeriod, valueExcluded, setValueExcluded,
 }: AllocationByMonthProps) {
   const [hoverDate, setHoverDate] = useState<string | null>(null);
 
@@ -93,7 +96,9 @@ export default function AllocationByMonth({
 
   // A holding's class and currency. Same rules as the cards above (effectiveClass /
   // effectiveCurrency there). Shared with the Value by Month-end chart below this one.
-  const { classOf, ccyOf } = useMemo(() => ({
+  const { classOf, ccyOf, exposureOf } = useMemo(() => ({
+    // The Lookup tab's Exposure ('' when not given): Value by Month-end's groups
+    exposureOf: (t: string) => info.get(t)?.exposure || '',
     classOf: (t: string) => {
       const a = info.get(t);
       if (!a) return 'Other';
@@ -314,9 +319,10 @@ export default function AllocationByMonth({
 
     {/* The same month-ends in money rather than %: all assets, or only the filtered class */}
     <ValueByMonth
-      months={months} classOf={classOf} ccyOf={ccyOf} tickerAccounts={tickerAccounts}
+      months={months} classOf={classOf} ccyOf={ccyOf} exposureOf={exposureOf} tickerAccounts={tickerAccounts}
       accountFilter={accountFilter} currencyFilter={currencyFilter} classFilter={classFilter}
       amountCcy={amountCcy} period={valuePeriod} setPeriod={setValuePeriod}
+      excluded={valueExcluded} setExcluded={setValueExcluded}
     />
     </>
   );

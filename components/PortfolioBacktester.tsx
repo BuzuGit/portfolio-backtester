@@ -561,6 +561,8 @@ const PortfolioBacktester = () => {
   const [lookupWarnings, setLookupWarnings] = useState<string[]>([]);
   // The Positions tab's Value by Month-end chart has its own period
   const [posValuePeriod, setPosValuePeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y' | 'Max'>('Max');
+  // ...and the exposure groups unticked on it, remembered per class ("Equities" -> ["Sector"])
+  const [posValueExcluded, setPosValueExcluded] = useState<Record<string, string[]>>({});
   // Which cash balance the user drilled into, keyed "account|currency".
   // Empty string = showing the summary list, mirroring openSelectedTicker above.
   const [cashSelected, setCashSelected] = useState<string>('');
@@ -3057,6 +3059,7 @@ const PortfolioBacktester = () => {
               posAllocView={posAllocView} setPosAllocView={setPosAllocView}
               posAllocPeriod={posAllocPeriod} setPosAllocPeriod={setPosAllocPeriod}
               posValuePeriod={posValuePeriod} setPosValuePeriod={setPosValuePeriod}
+              posValueExcluded={posValueExcluded} setPosValueExcluded={setPosValueExcluded}
               calculateXIRR={calculateXIRR} getClosedTransactions={getClosedTransactions}
               getOpenPurchases={getOpenPurchases} getOpenDividends={getOpenDividends}
               tableSort={tableSort} sortPropsFor={sortPropsFor}

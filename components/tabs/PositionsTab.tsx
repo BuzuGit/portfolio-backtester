@@ -55,6 +55,7 @@ export interface PositionsTabProps {
   posAllocView: AllocView; setPosAllocView: (v: AllocView) => void;
   posAllocPeriod: MonthPeriod; setPosAllocPeriod: (p: MonthPeriod) => void;
   posValuePeriod: MonthPeriod; setPosValuePeriod: (p: MonthPeriod) => void;
+  posValueExcluded: Record<string, string[]>; setPosValueExcluded: SetState<Record<string, string[]>>;
   calculateXIRR: (cashFlows: { date: Date; amount: number }[]) => number | null;
   getClosedTransactions: (ticker: string) => ClosedPositionRow[];
   getOpenPurchases: (ticker: string) => TransactionRow[];
@@ -95,7 +96,7 @@ export interface PositionsTabProps {
 export default function PositionsTab({
   assetData, assetLookup, closedData, transactionData, positionsModel, cashAccounts, edoMissingBanner,
   allCashAccounts, posAllocView, setPosAllocView, posAllocPeriod, setPosAllocPeriod, posValuePeriod, setPosValuePeriod,
-  calculateXIRR, getClosedTransactions, getOpenPurchases, getOpenDividends, tableSort, sortPropsFor,
+  posValueExcluded, setPosValueExcluded, calculateXIRR, getClosedTransactions, getOpenPurchases, getOpenDividends, tableSort, sortPropsFor,
   closedSelectAllRef, openSelectAllRef, positionsCurrency, setPositionsCurrency, groupMetalsCrypto,
   setGroupMetalsCrypto, cashCategory, setCashCategory, cashSelected, setCashSelected, openAccountFilter,
   setOpenAccountFilter, openAssetClassFilter, setOpenAssetClassFilter, openCurrencyFilter, setOpenCurrencyFilter,
@@ -2030,6 +2031,7 @@ export default function PositionsTab({
                 view={posAllocView} setView={setPosAllocView}
                 period={posAllocPeriod} setPeriod={setPosAllocPeriod}
                 valuePeriod={posValuePeriod} setValuePeriod={setPosValuePeriod}
+                valueExcluded={posValueExcluded} setValueExcluded={setPosValueExcluded}
               />
             )}
 
