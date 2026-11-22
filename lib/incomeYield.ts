@@ -19,9 +19,10 @@
   Cost: average cost per share, from purchases (their Amount already includes commission) and
   sales (which take shares out at the average cost, leaving the average unchanged).
 
-  CAVEAT, shown in the app: the price sheet holds dividend-ADJUSTED prices (history scaled down
-  as dividends are reinvested), so the market yield of older payments reads somewhat high.
-  Yield on cost uses only ledger figures and has no such bias.
+  PRICES: the market yield needs the plain price of the time, not a dividend-ADJUSTED one (a
+  "TR" column scales history down as dividends are reinvested, so old yields would read high).
+  The caller (components/IncomeChart.tsx) passes the sheet's unadjusted column — the same ticker
+  without "TR" — whenever it exists. Yield on cost uses only ledger figures.
 
   Every amount is turned into the asset's own currency first (via the `toAssetCcy` converter),
   so a USD dividend on an SGD-priced holding still compares like with like.
