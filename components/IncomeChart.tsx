@@ -70,8 +70,11 @@ const nextYm = (ym: string) => {
 
 // One payer: its key (what the unticked list stores), its label, a longer name for hover text,
 // and its class ('' = unknown: not in the Lookup tab)
-interface Payer { key: string; label: string; title: string; cls: string; color: string; total: number }
-// One payment, ready to add up: payer, month, account, amount in PLN and in the chosen currency
+// `kind`: dividend (incl. rent) or interest, so the buttons and the stack keep the two apart.
+// `ccy`: the currency it pays in (cash interest is one payer per account AND currency).
+interface Payer { key: string; label: string; title: string; cls: string; kind: 'dividend' | 'interest'; ccy: string; color: string; total: number }
+// One payment, ready to add up: payer, month, account, and the amount shown — in the chosen
+// currency, or (Native) in the payer's own currency, as paid
 interface Payment { key: string; ym: string; account: string; ticker: string; amount: number }
 
 export interface IncomeChartProps {
@@ -96,6 +99,8 @@ export default function IncomeChart({
   const [hoverBucket, setHoverBucket] = useState<string | null>(null);
   const amountCcy = positionsCurrency || 'PLN';
   const yieldMode = measure !== 'amount';
+  // Native (no currency picked at the top): every payment in the currency it was paid in
+  const native = !positionsCurrency && !yieldMode;
 
   // PLN per unit of each currency, for every month of the price sheet. A month with no rate
   // keeps the last one known, so a gap in the sheet never turns a payment into nonsense.
@@ -128,26 +133,33 @@ export default function IncomeChart({
       const ticker = r.ticker && r.ticker !== '-' ? r.ticker : '';
       const cashInterest = r.flow === 'Interest' && (!ticker || r.asset === 'Cash');
       const inLookup = info.get(ticker);
-      const key = cashInterest ? `int|${r.account}` : `pay|${ticker || r.asset}`;
+      // Cash interest: one payer per account and currency (an IBKR account earns USD, SGD and PLN)
+      const key = cashInterest ? `int|${r.account}|${r.currency}` : `pay|${ticker || r.asset}`;
       if (!payerInfo.has(key)) {
+        const kind = r.flow === 'Interest' ? 'interest' as const : 'dividend' as const;
         payerInfo.set(key, cashInterest
-          ? { key, label: `Interest · ${r.account}`, title: `Interest on cash paid into ${r.account}`, cls: 'Cash' }
+          ? { key, label: `${r.account} · ${r.currency}`, title: `Interest on ${r.currency} cash paid into ${r.account}`, cls: 'Cash', kind, ccy: r.currency }
           : {
             key,
             label: inLookup ? ticker : r.asset,
             title: inLookup ? `${inLookup.name} (${ticker})` : `${r.asset}${ticker ? ` (${ticker})` : ''} — not in the Lookup tab`,
             cls: inLookup ? (groupMetalsCrypto ? portfolioClassOf(inLookup) : (inLookup.assetClass || 'Other')) : '',
+            kind, ccy: r.currency,
           });
       }
       const ym = r.date.slice(0, 7);
       const rates = rateAt(ym);
       const toPln = r.currency === 'PLN' ? 1 : rates[r.currency];
-      const toShown = amountCcy === 'PLN' ? 1 : rates[amountCcy];
+      // Native: shown in the payer's own currency (a payment in another currency is converted
+      // into it); otherwise in the currency picked at the top
+      const target = native ? payerInfo.get(key)!.ccy : amountCcy;
+      const toShown = target === 'PLN' ? 1 : rates[target];
+      if (r.currency === target) { payments.push({ key, ym, account: r.account, ticker, amount: r.amount }); continue; }
       if (!toPln || !toShown) continue;   // a currency the price sheet has no rate for
       payments.push({ key, ym, account: r.account, ticker, amount: (r.amount * toPln) / toShown });
     }
     return { payments, payerInfo };
-  }, [rows, assetLookup, groupMetalsCrypto, ratesByYm, amountCcy]);
+  }, [rows, assetLookup, groupMetalsCrypto, ratesByYm, amountCcy, native]);
 
   const colorOf = useMemo(() => {
     const keys = Array.from(payerInfo.keys()).sort();
@@ -242,10 +254,12 @@ export default function IncomeChart({
       cell[p.key] = (cell[p.key] ?? 0) + p.value;
       totals[p.key] = (totals[p.key] ?? 0) + p.value;
     }
-    // Biggest earner first, so it sits at the bottom of each bar
+    // Dividends first, then interest, so the two never mix in a bar (dividends at the bottom);
+    // within each, the biggest earner first
+    const kindRank = (k: string) => (payerInfo.get(k)!.kind === 'dividend' ? 0 : 1);
     const payers: Payer[] = Object.keys(totals)
       .filter(k => Math.abs(totals[k]) > (yieldMode ? 0 : 0.5))
-      .sort((a, b) => totals[b] - totals[a])
+      .sort((a, b) => kindRank(a) - kindRank(b) || totals[b] - totals[a])
       .map(k => ({ ...payerInfo.get(k)!, color: colorOf.get(k) ?? SLATE, total: totals[k] }));
     return { perBucket, payers };
   }, [points, buckets, by, payerInfo, colorOf, yieldMode]);
@@ -270,6 +284,23 @@ export default function IncomeChart({
 
   const byBucket = useMemo(() => new Map(bars.map((b, i) => [b.bucket, { b, prev: bars[i - 1] }])), [bars]);
   const currentBucket = bucketOf(localTodayIso().slice(0, 7), by);
+  // The currencies the bars are in: one (the chosen one) normally; Native, each ticked payer's own.
+  // With more than one, a bar adds SGD to PLN, so totals are given per currency instead.
+  const barCcys = useMemo(
+    () => (native ? Array.from(new Set(shownPayers.map(p => p.ccy))).sort() : [amountCcy]),
+    [native, shownPayers, amountCcy],
+  );
+  const mixed = barCcys.length > 1;
+  // "1,200 SGD · 300 PLN": amounts per payer added up by currency
+  const totalsByCcy = useCallback((amountOf: (p: Payer) => number) => {
+    const sums: Record<string, number> = {};
+    for (const p of shownPayers) {
+      const ccy = native ? p.ccy : amountCcy;
+      sums[ccy] = (sums[ccy] ?? 0) + amountOf(p);
+    }
+    return Object.entries(sums).filter(([, v]) => v > 0.5).sort((a, b) => b[1] - a[1])
+      .map(([c, v]) => `${money(v)} ${c}`).join(' · ') || `0 ${barCcys[0] ?? amountCcy}`;
+  }, [shownPayers, native, amountCcy, barCcys]);
 
   const renderTooltip = useCallback((t: { active?: boolean; label?: string | number }) => {
     const hit = t.active && t.label !== undefined ? byBucket.get(String(t.label)) : undefined;
@@ -293,42 +324,45 @@ export default function IncomeChart({
                 <td style={{ textAlign: 'right', fontWeight: 600 }}>
                   {yieldMode ? `${b.byPayer[p.key].toFixed(2)}%` : money(b.byPayer[p.key])}
                 </td>
+                {/* Native: each amount's own currency, as paid */}
+                {native && <td style={{ paddingLeft: 4, color: MUTED }}>{p.ccy}</td>}
               </tr>
             ))}
           </tbody>
         </table>
         {!yieldMode && (
           <div style={{ color: INK, borderTop: `1px solid ${LINE}`, paddingTop: 2 }}>
-            Total <span className="font-semibold">{money(b.total)}</span> {amountCcy}
+            Total <span className="font-semibold">{totalsByCcy(p => b.byPayer[p.key] ?? 0)}</span>
           </div>
         )}
-        {!yieldMode && diff !== null && prev && (
+        {/* The change on the bar before: only when everything is in one currency */}
+        {!yieldMode && !mixed && diff !== null && prev && (
           <div style={{ color: diff >= 0 ? GAIN : LOSS }}>
             {signedMoney(diff)} vs {longLabel(prev.bucket)}
           </div>
         )}
       </div>
     );
-  }, [byBucket, shownPayers, amountCcy, currentBucket, yieldMode]);
+  }, [byBucket, shownPayers, currentBucket, yieldMode, native, mixed, totalsByCcy]);
 
   if (payments.length === 0) return null;
 
-  // Tick-boxes: one payer in or out; All / None
+  // Tick-boxes: one payer in or out; All / None for one group (dividends or interest)
   const toggle = (key: string) => setExcluded(prev => (prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]));
-  const setAll = (on: boolean) => setExcluded(prev => (on
-    ? prev.filter(k => !payers.some(p => p.key === k))
-    : Array.from(new Set([...prev, ...payers.map(p => p.key)]))));
+  const setAll = (group: Payer[], on: boolean) => setExcluded(prev => (on
+    ? prev.filter(k => !group.some(p => p.key === k))
+    : Array.from(new Set([...prev, ...group.map(p => p.key)]))));
 
   // Summary figures over the ticked payers: total in the period, the last 12 months, best bar
-  const periodTotal = bars.reduce((s, b) => s + b.total, 0);
+  // (in Native with several currencies the totals are per currency and "best" is left out)
+  const periodTotalText = totalsByCcy(p => bars.reduce((s, b) => s + (b.byPayer[p.key] ?? 0), 0));
   const todayYm = localTodayIso().slice(0, 7);
   let ym12 = todayYm;
   for (let i = 0; i < 11; i++) {
     const y = Number(ym12.slice(0, 4)), m = Number(ym12.slice(5, 7));
     ym12 = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
   }
-  const shownKeys = new Set(shownPayers.map(p => p.key));
-  const last12 = points.filter(p => p.ym >= ym12 && shownKeys.has(p.key)).reduce((s, p) => s + Math.max(0, p.value), 0);
+  const last12Text = totalsByCcy(p => points.filter(x => x.key === p.key && x.ym >= ym12).reduce((s, x) => s + Math.max(0, x.value), 0));
   // Yield views: each ticked payer's yield over the last 12 months (its payments' yields added
   // up), biggest first. A payer whose last payment is older than that has no figure here.
   const last12ByPayer = shownPayers
@@ -346,7 +380,9 @@ export default function IncomeChart({
           Income: Dividends &amp; Interest
           {filterNote && <span className="text-xs font-normal text-amber-600">— {filterNote}</span>}
         </h4>
-        <span className="text-xs text-gray-400">From the ledger · amounts in {amountCcy}, at each payment month&apos;s rate</span>
+        <span className="text-xs text-gray-400">
+          {native ? 'From the ledger · amounts as paid, each in its own currency' : `From the ledger · amounts in ${amountCcy}, at each payment month's rate`}
+        </span>
       </div>
 
       {/* What the bars measure, bars per month / quarter / year, and the period: one line on
@@ -377,31 +413,40 @@ export default function IncomeChart({
         </div>
       </div>
 
-      {/* Payers: the app's shared strip of segBtn buttons, slate while in the bars, each with a
-          dot in its colour (like Daily NAV Drawdowns' currency buttons). Hover: the full name and
-          its total over the period. */}
-      {payers.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-3 text-xs">
-          <span className="text-gray-500 mr-1">Paid by:</span>
-          {/* (SEG never shrinks, so it is capped at the card's width here: then it wraps) */}
-          <span className={`${SEG} flex-wrap max-w-full`}>
-            {payers.map(p => {
-              const on = !left.has(p.key);
-              return (
-                <button key={p.key} type="button" onClick={() => toggle(p.key)} aria-pressed={on}
-                  title={`${p.title} · ${money(p.total)} ${amountCcy} in the period`} className={segBtn(on)}>
-                  <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle -mt-px" style={{ backgroundColor: p.color }} />
-                  {p.label}
-                </button>
-              );
-            })}
-          </span>
-          <span className="inline-flex gap-2 ml-1">
-            <button type="button" onClick={() => setAll(true)} className="text-blue-600 hover:underline">All</button>
-            <button type="button" onClick={() => setAll(false)} className="text-blue-600 hover:underline">None</button>
-          </span>
-        </div>
-      )}
+      {/* Payers, in two rows so they never mix: Dividends (incl. rent) and Interest (cash per
+          account and currency, and bonds). The app's shared strip of segBtn buttons, slate while
+          in the bars, each with a dot in its colour (like Daily NAV Drawdowns' currency buttons),
+          and an All / None per row. Hover: the full name and its total over the period. */}
+      {([['dividend', 'Dividends'], ['interest', 'Interest']] as const).map(([kind, title]) => {
+        const group = payers.filter(p => p.kind === kind);
+        if (group.length === 0) return null;
+        // The label in a fixed column on the left; the buttons (and All / None) wrap beside it
+        return (
+          <div key={kind} className="flex items-start gap-2 mb-2 text-xs">
+            <span className="text-gray-500 w-16 shrink-0 pt-[8px] max-md:pt-[12px]">{title}:</span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 min-w-0 flex-1">
+            {/* (SEG never shrinks, so it is capped at the column's width here: then it wraps) */}
+            <span className={`${SEG} flex-wrap max-w-full`}>
+              {group.map(p => {
+                const on = !left.has(p.key);
+                const unit = yieldMode ? '%' : ` ${native ? p.ccy : amountCcy}`;
+                return (
+                  <button key={p.key} type="button" onClick={() => toggle(p.key)} aria-pressed={on}
+                    title={`${p.title} · ${yieldMode ? p.total.toFixed(1) : money(p.total)}${unit} in the period`} className={segBtn(on)}>
+                    <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle -mt-px" style={{ backgroundColor: p.color }} />
+                    {p.label}
+                  </button>
+                );
+              })}
+            </span>
+            <span className="inline-flex gap-2 ml-1">
+              <button type="button" onClick={() => setAll(group, true)} className="text-blue-600 hover:underline">All</button>
+              <button type="button" onClick={() => setAll(group, false)} className="text-blue-600 hover:underline">None</button>
+            </span>
+            </div>
+          </div>
+        );
+      })}
 
       {bars.length === 0 || shownPayers.length === 0 ? (
         <p className="text-sm text-gray-500 py-6 text-center">
@@ -426,23 +471,31 @@ export default function IncomeChart({
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs mb-3">
             <span className={RISK_ROW}>
               <span className="text-gray-500">Total in period:</span>
-              <span className="font-semibold text-gray-800">{money(periodTotal)} {amountCcy}</span>
+              <span className="font-semibold text-gray-800">{periodTotalText}</span>
             </span>
             <span className={RISK_ROW} title="The 12 calendar months up to and including this one">
               <span className="text-gray-500">Last 12 months:</span>
-              <span className="font-semibold text-gray-800">{money(last12)}</span>
+              <span className="font-semibold text-gray-800">{last12Text}</span>
             </span>
-            {best && best.total > 0 && (
+            {!mixed && best && best.total > 0 && (
               <span className={RISK_ROW}>
                 <span className="text-gray-500">Best {by}:</span>
-                <span className="font-semibold text-gray-800">{money(best.total)}</span>
+                <span className="font-semibold text-gray-800">{money(best.total)} {barCcys[0]}</span>
                 <span className="text-gray-400">{longLabel(best.bucket)}</span>
               </span>
             )}
           </div>
           )}
+          {/* Native with payers in several currencies: a bar then adds SGD to PLN */}
+          {mixed && (
+            <p className="text-xs text-amber-600 -mt-1 mb-2">
+              Amounts as paid, in {barCcys.join(', ')}: a bar adds different currencies, so heights aren&apos;t comparable.
+              Tick payers of one currency (or pick a currency at the top) to compare.
+            </p>
+          )}
 
-          <IncomeBars bars={bars} payers={shownPayers} by={by} yieldMode={yieldMode} renderTooltip={renderTooltip} onHover={setHoverBucket} />
+          <IncomeBars bars={bars} payers={shownPayers} by={by} yieldMode={yieldMode} unit={mixed ? '' : barCcys[0]}
+            renderTooltip={renderTooltip} onHover={setHoverBucket} />
           <p className="text-xs text-gray-400 mt-2">
             {hoverBucket ? `${longLabel(hoverBucket)}: hover box shows each payer.` : 'Hover (or touch) a bar to see who paid what.'}
             {' '}The latest bar is {by === 'year' ? 'the year' : by === 'quarter' ? 'the quarter' : 'the month'} so far.
@@ -463,11 +516,12 @@ export default function IncomeChart({
 }
 
 // The bars on their own, memoised: hovering only changes the hovered bucket in the parent
-const IncomeBars = React.memo(function IncomeBars({ bars, payers, by, yieldMode, renderTooltip, onHover }: {
+const IncomeBars = React.memo(function IncomeBars({ bars, payers, by, yieldMode, unit, renderTooltip, onHover }: {
   bars: { bucket: string; total: number; byPayer: Record<string, number> }[];
   payers: Payer[];
   by: IncomeBy;
   yieldMode: boolean;   // yields in %: one bar per payer side by side (a yield can't be stacked)
+  unit: string;         // the bars' currency ('' when Native mixes several), for the latest-bar label
   renderTooltip: (t: { active?: boolean; label?: string | number }) => React.ReactNode;
   onHover: (bucket: string | null) => void;
 }) {
@@ -492,7 +546,8 @@ const IncomeBars = React.memo(function IncomeBars({ bars, payers, by, yieldMode,
     return by === 'quarter' ? `${k.slice(5)} ${k.slice(2, 4)}` : `${MONTH_ABBR[Number(k.slice(5, 7)) - 1]} ${k.slice(2, 4)}`;
   };
   const last = bars[bars.length - 1];
-  const edgeDefs: BubbleDef[] = [{ value: last.total, color: SLATE, label: shortMoney(last.total) }];
+  // (no label when the bars add up several currencies: the sum would mean nothing)
+  const edgeDefs: BubbleDef[] = unit ? [{ value: last.total, color: SLATE, label: shortMoney(last.total) }] : [];
   return (
     <ResponsiveContainer width="100%" height={phone ? 240 : 300}>
       <BarChart
