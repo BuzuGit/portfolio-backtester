@@ -305,23 +305,27 @@ export default function ValueByMonth({
   const groupPicker = classFilter && (groups.length > 1 || left.size > 0) && (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-3 text-xs">
       <span className="text-gray-500 mr-1">Exposure:</span>
-      {groups.map(g => {
-        const on = !left.has(g.name);
-        return (
-          <button
-            key={g.name}
-            type="button"
-            onClick={() => toggle(g.name)}
-            aria-pressed={on}
-            title={g.tickers.length > 0 ? `${g.label}: ${g.tickers.join(', ')}` : g.label}
-            className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border ${on ? 'border-slate-400 bg-white text-gray-800' : 'border-gray-200 bg-gray-50 text-gray-400'}`}
-          >
-            {/* A tick-box in the group's colour: filled while it is in the bars */}
-            <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: on ? g.color : 'transparent', borderColor: g.color }} />
-            {g.label}
-          </button>
-        );
-      })}
+      {/* The app's shared control look: one grey strip (SEG) of segBtn buttons, slate while in
+          the bars, each with a dot in its series colour (like Daily NAV Drawdowns' currency
+          buttons). The strip wraps onto more lines when there are many exposures. */}
+      <span className={`${SEG} flex-wrap`}>
+        {groups.map(g => {
+          const on = !left.has(g.name);
+          return (
+            <button
+              key={g.name}
+              type="button"
+              onClick={() => toggle(g.name)}
+              aria-pressed={on}
+              title={g.tickers.length > 0 ? `${g.label}: ${g.tickers.join(', ')}` : g.label}
+              className={segBtn(on)}
+            >
+              <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle -mt-px" style={{ backgroundColor: g.color }} />
+              {g.label}
+            </button>
+          );
+        })}
+      </span>
       <span className="inline-flex gap-2 ml-1">
         <button type="button" onClick={() => setAll(true)} className="text-blue-600 hover:underline">All</button>
         <button type="button" onClick={() => setAll(false)} className="text-blue-600 hover:underline">None</button>
