@@ -1832,6 +1832,10 @@ export default function PositionsTab({
               </div>
             )}
 
+            {/* By Currency and By Account side by side on desktop (half the width each), with
+                their pie charts left out there: the bars already give each share in %. Phones:
+                one under the other, pies included, as before. */}
+            <div className="grid grid-cols-2 gap-x-4 max-md:block">
             {/* === Currency Breakdown (horizontal bar chart) === */}
             {openSummaryData.length > 0 && (
               <div className="bg-white p-4 rounded-lg shadow mb-4">
@@ -1884,8 +1888,8 @@ export default function PositionsTab({
                       );
                     })}
                   </div>
-                  {/* Pie chart — same dimensions as By Asset Class, colors match the bars */}
-                  <div className="max-md:self-center" style={{ width: 220, height: 200, flexShrink: 0 }}>
+                  {/* Pie chart — same dimensions as By Asset Class, colors match the bars (phones only) */}
+                  <div className="hidden max-md:block max-md:self-center" style={{ width: 220, height: 200, flexShrink: 0 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         {/* isAnimationActive={false} = draw instantly instead of sweeping in on tab open */}
@@ -2048,8 +2052,8 @@ export default function PositionsTab({
                         );
                       })}
                     </div>
-                    {/* Pie chart — colors match the account bars by index */}
-                    <div className="max-md:self-center" style={{ width: 220, height: 200, flexShrink: 0 }}>
+                    {/* Pie chart — colors match the account bars by index (phones only) */}
+                    <div className="hidden max-md:block max-md:self-center" style={{ width: 220, height: 200, flexShrink: 0 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           {/* isAnimationActive={false} = draw instantly instead of sweeping in on tab open */}
@@ -2095,6 +2099,7 @@ export default function PositionsTab({
                 </div>
               );
             })()}
+            </div>
 
             {/* === Allocation by Month-end (how the mix above changed over time) === */}
             {openSummaryData.length > 0 && (
