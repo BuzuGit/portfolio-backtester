@@ -50,6 +50,13 @@ const shortMoney = (v: number) =>
 // "+12,300" / "−4.1%" — a change with its sign
 const signedMoney = (v: number) => `${v >= 0 ? '+' : '−'}${money(Math.abs(v))}`;
 const signedPct = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}%`;
+// A figure in the chart's unit: "1,234,567" (money) or "12.3%" (share of the portfolio)
+const fmtIn = (share: boolean, v: number) => (share ? `${v.toFixed(1)}%` : money(v));
+// A change in the chart's unit: "+12,300 (+4.1%)" in money; in shares, percentage points
+// ("+2.1pp"), because "the share grew 20%" would be a % of a % and reads like a much bigger move
+const changeIn = (share: boolean, diff: number, from: number) => (share
+  ? `${diff >= 0 ? '+' : '−'}${Math.abs(diff).toFixed(1)}pp`
+  : `${signedMoney(diff)}${from > 0 ? ` (${signedPct((diff / from) * 100)})` : ''}`);
 
 // A group's key: its label in lower case with spaces tidied, so "World", "world" and "World "
 // typed on different rows of the sheet are one group (shown with the first spelling met)
@@ -57,9 +64,14 @@ const groupKey = (label: string) => label.trim().replace(/\s+/g, ' ').toLowerCas
 
 // One month-end before any choice of groups: PLN per group key, the rate into the chosen
 // currency, and which groups hold a holding valued without a market price
-interface RawMonth { date: string; rate: number; byGroup: Record<string, number>; estimated: Set<string> }
-// One bar: the chosen groups' amounts (in the chosen currency, by group key) and their sum
-interface ValuePoint { date: string; value: number; byGroup: Record<string, number>; estimated: boolean }
+// `portfolioPln` = the whole portfolio that month (every class, after the currency and account
+// filters only): what "% of portfolio" divides by — the same total as Allocation by Month-end's bars
+interface RawMonth { date: string; rate: number; byGroup: Record<string, number>; estimated: Set<string>; portfolioPln: number }
+// One bar. `value` and `byGroup` are what the bars show: amounts in the chosen currency, or (in
+// "% of portfolio") shares of the portfolio in %. `amount` is always the money, for the hover box.
+interface ValuePoint { date: string; value: number; byGroup: Record<string, number>; amount: number; byGroupAmount: Record<string, number>; estimated: boolean }
+// What the bars measure: money (the default) or each exposure's share of the whole portfolio
+export type ValueMode = 'value' | 'share';
 // `name` is the group key (what the unticked list stores), `label` what is shown
 interface Group { name: string; label: string; color: string; tickers: string[] }
 
@@ -77,13 +89,18 @@ export interface ValueByMonthProps {
   // Exposure groups left out, per class ("Equities" -> ["Sector"]); remembered per class
   excluded: Record<string, string[]>;
   setExcluded: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
+  // Value (money) or % of portfolio. The switch shows once a class is picked: with everything
+  // in the bars, the share would be 100% every month.
+  mode: ValueMode; setMode: (m: ValueMode) => void;
 }
 
 export default function ValueByMonth({
   months, classOf, ccyOf, exposureOf, tickerAccounts, accountFilter, currencyFilter, classFilter, amountCcy,
-  period, setPeriod, excluded, setExcluded,
+  period, setPeriod, excluded, setExcluded, mode: chosenMode, setMode,
 }: ValueByMonthProps) {
   const [hoverDate, setHoverDate] = useState<string | null>(null);
+  // % of portfolio only means something for a slice of it
+  const share = !!classFilter && chosenMode === 'share';
 
   // Every month-end in PLN per group, after ALL the tab's filters (class, currency, account).
   // The group is the asset's Exposure (its ticker when none is given) once a class is picked;
@@ -105,11 +122,17 @@ export default function ValueByMonth({
       if (!rate) continue;
       const byGroup: Record<string, number> = {};
       const estimated = new Set<string>();
+      // The whole portfolio by class, for "% of portfolio". Built exactly like Allocation by
+      // Month-end's class bars (account + currency filters, a class below zero counted as zero),
+      // so the two charts agree to the decimal.
+      const byClass: Record<string, number> = {};
       for (const h of m.holdings) {
         if (h.valuePln === null) continue;   // no exchange rate at all (the chart above says so)
         if (accountFilter && !tickerAccounts[h.ticker]?.has(accountFilter)) continue;
         if (currencyFilter && ccyOf(h.ticker, h.currency) !== currencyFilter) continue;
-        if (classFilter && classOf(h.ticker) !== classFilter) continue;
+        const cls = classOf(h.ticker);
+        byClass[cls] = (byClass[cls] ?? 0) + h.valuePln;
+        if (classFilter && cls !== classFilter) continue;
         // (the tick-box's hover list is built here, so it obeys the same filters as the bars)
         const key = add(byGroup, labelOf(h.ticker), h.valuePln);
         (tickers[key] ??= new Set()).add(h.ticker);
@@ -119,10 +142,12 @@ export default function ValueByMonth({
         if (c.valuePln === null) continue;
         if (accountFilter && c.account !== accountFilter) continue;
         if (currencyFilter && c.currency !== currencyFilter) continue;
+        byClass[CASH] = (byClass[CASH] ?? 0) + c.valuePln;
         if (classFilter && classFilter !== CASH) continue;
         add(byGroup, classFilter ? CASH : ALL, c.valuePln);
       }
-      out.push({ date: m.date, rate, byGroup, estimated });
+      const portfolioPln = Object.values(byClass).reduce((s, v) => s + Math.max(0, v), 0);
+      out.push({ date: m.date, rate, byGroup, estimated, portfolioPln });
     }
     return { raw: out, tickers, labels };
   }, [months, classOf, ccyOf, exposureOf, tickerAccounts, accountFilter, currencyFilter, classFilter, amountCcy]);
@@ -169,27 +194,33 @@ export default function ValueByMonth({
   const left = useMemo(() => new Set(classFilter ? excluded[classFilter] ?? [] : []), [excluded, classFilter]);
   const shownGroups = useMemo(() => groups.filter(g => !left.has(g.name)), [groups, left]);
 
-  // The bars: the ticked groups' amounts in the chosen currency, from the first month with any
-  // money (a class bought in 2021 starts in 2021), inside the chosen period
+  // The bars: the ticked groups' amounts in the chosen currency (or, in "% of portfolio", their
+  // share of the whole portfolio that month), from the first month with any money (a class
+  // bought in 2021 starts in 2021), inside the chosen period
   const shown = useMemo((): ValuePoint[] => {
     const start = periodStartIso(period);
     const out: ValuePoint[] = [];
     for (const m of raw) {
-      const byGroup: Record<string, number> = {};
-      let value = 0, estimated = false;
+      const byGroupAmount: Record<string, number> = {}, byGroupShare: Record<string, number> = {};
+      let amount = 0, pct = 0, estimated = false;
       for (const g of shownGroups) {
         // A rounding overdraft can't make a bar negative
-        const v = Math.max(0, (m.byGroup[g.name] ?? 0) / m.rate);
-        byGroup[g.name] = v;
-        value += v;
+        const pln = Math.max(0, m.byGroup[g.name] ?? 0);
+        byGroupAmount[g.name] = pln / m.rate;
+        byGroupShare[g.name] = m.portfolioPln > 0 ? (pln / m.portfolioPln) * 100 : 0;
+        amount += byGroupAmount[g.name];
+        pct += byGroupShare[g.name];
         if (m.estimated.has(g.name)) estimated = true;
       }
-      if (out.length === 0 && value <= 0) continue;
+      if (out.length === 0 && amount <= 0) continue;
       if (m.date < start) continue;
-      out.push({ date: m.date, value, byGroup, estimated });
+      out.push({
+        date: m.date, value: share ? pct : amount, byGroup: share ? byGroupShare : byGroupAmount,
+        amount, byGroupAmount, estimated,
+      });
     }
     return out;
-  }, [raw, shownGroups, period]);
+  }, [raw, shownGroups, period, share]);
 
   const byDate = useMemo(() => new Map(shown.map((p, i) => [p.date, { p, prev: shown[i - 1] }])), [shown]);
   const lastDate = shown.length > 0 ? shown[shown.length - 1].date : '';
@@ -209,31 +240,44 @@ export default function ValueByMonth({
         {split && (
           <table style={{ borderCollapse: 'collapse', marginBottom: 2 }}>
             <tbody>
-              {/* Top of the bar first, like the stack */}
-              {[...shownGroups].reverse().map(g => (p.byGroup[g.name] ?? 0) > 0 && (
+              {/* Top of the bar first, like the stack. Value: each group's share of the bar, then
+                  its amount. % of portfolio: its share of the portfolio, then its amount. */}
+              {[...shownGroups].reverse().map(g => (p.byGroupAmount[g.name] ?? 0) > 0 && (
                 <tr key={g.name}>
                   <td style={{ paddingRight: 10 }}>
                     <span className="inline-block w-2 h-2 rounded-sm mr-1.5" style={{ background: g.color }} />{g.label}
                   </td>
-                  <td style={{ textAlign: 'right', paddingRight: 10, color: MUTED }}>{((p.byGroup[g.name] / p.value) * 100).toFixed(1)}%</td>
-                  <td style={{ textAlign: 'right', fontWeight: 600 }}>{money(p.byGroup[g.name])}</td>
+                  {share ? (
+                    <>
+                      <td style={{ textAlign: 'right', paddingRight: 10, fontWeight: 600 }}>{p.byGroup[g.name].toFixed(1)}%</td>
+                      <td style={{ textAlign: 'right', color: MUTED }}>{money(p.byGroupAmount[g.name])}</td>
+                    </>
+                  ) : (
+                    <>
+                      <td style={{ textAlign: 'right', paddingRight: 10, color: MUTED }}>{((p.byGroup[g.name] / p.value) * 100).toFixed(1)}%</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{money(p.byGroup[g.name])}</td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         )}
         <div style={{ color: INK, borderTop: split ? `1px solid ${LINE}` : undefined, paddingTop: split ? 2 : 0 }}>
-          {split ? 'Total ' : ''}<span className="font-semibold">{p.estimated ? '≈ ' : ''}{money(p.value)}</span> {amountCcy}
+          {split ? 'Total ' : ''}
+          {share
+            ? <><span className="font-semibold">{p.value.toFixed(1)}%</span> of portfolio <span style={{ color: MUTED }}>· {p.estimated ? '≈ ' : ''}{money(p.amount)} {amountCcy}</span></>
+            : <><span className="font-semibold">{p.estimated ? '≈ ' : ''}{money(p.value)}</span> {amountCcy}</>}
         </div>
         {diff !== null && prev && (
           <div style={{ color: diff >= 0 ? GAIN : LOSS }}>
-            {signedMoney(diff)}{prev.value > 0 ? ` (${signedPct((diff / prev.value) * 100)})` : ''} vs {monthLong(prev.date)}
+            {changeIn(share, diff, prev.value)} vs {monthLong(prev.date)}
           </div>
         )}
         {p.estimated && <div style={{ color: MUTED, fontSize: 11, marginTop: 4, maxWidth: 240 }}>≈ includes a holding with no market price yet, valued from its own buy and sale prices.</div>}
       </div>
     );
-  }, [byDate, lastDate, amountCcy, split, shownGroups]);
+  }, [byDate, lastDate, amountCcy, split, shownGroups, share]);
 
   // Tick-boxes: one group in or out; "All" / "None" for the whole class
   const toggle = (name: string) => {
@@ -297,15 +341,30 @@ export default function ValueByMonth({
         <span className="text-xs text-gray-400">Click a class in By Asset Class to see only that class · amounts in {amountCcy}</span>
       </div>
 
-      {/* Period. Phones: a box that opens a slide-up panel */}
-      <div className="hidden max-md:flex gap-2 mb-3">
-        <PhoneChoice label="Period" options={periodOptions(PERIODS)} selected={period} onPick={p => setPeriod(p as MonthPeriod)} />
-      </div>
-      <div className="flex items-center gap-1 mb-3 max-md:hidden">
-        <span className="text-xs text-gray-500 mr-1">Period:</span>
-        <span className={SEG}>
-          {PERIODS.map(p => <button key={p} onClick={() => setPeriod(p)} className={segBtn(period === p)}>{p}</button>)}
-        </span>
+      {/* Period and (once a class is picked) Value / % of portfolio, side by side on one line.
+          Phones: the period is a box that opens a slide-up panel, with the two Show buttons
+          beside it (two short choices fit a phone's width). */}
+      <div className="flex items-center gap-x-5 gap-y-2 mb-3 max-md:gap-x-2">
+        <div className="hidden max-md:flex">
+          <PhoneChoice label="Period" options={periodOptions(PERIODS)} selected={period} onPick={p => setPeriod(p as MonthPeriod)} />
+        </div>
+        <div className="flex items-center gap-1 max-md:hidden">
+          <span className="text-xs text-gray-500 mr-1">Period:</span>
+          <span className={SEG}>
+            {PERIODS.map(p => <button key={p} onClick={() => setPeriod(p)} className={segBtn(period === p)}>{p}</button>)}
+          </span>
+        </div>
+        {classFilter && (
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-xs text-gray-500 mr-1 max-md:hidden">Show:</span>
+            <span className={SEG}>
+              <button onClick={() => setMode('value')} className={segBtn(!share)}
+                title={`How much money was in it each month-end, in ${amountCcy}`}>Value</button>
+              <button onClick={() => setMode('share')} className={segBtn(share)}
+                title="Its share of the whole portfolio each month-end: the bar grows when the share grows">% of portfolio</button>
+            </span>
+          </div>
+        )}
       </div>
       {groupPicker}
     </>
@@ -347,29 +406,30 @@ export default function ValueByMonth({
         <span className={RISK_ROW}>
           <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: totalColor }} />
           <span className="text-gray-500">Latest:</span>
-          <span className="font-semibold text-gray-800">{money(last.value)} {amountCcy}</span>
+          <span className="font-semibold text-gray-800">{share ? `${fmtIn(true, last.value)} of portfolio` : `${money(last.value)} ${amountCcy}`}</span>
         </span>
         <span className={RISK_ROW} title={hoverDate ? 'Since the month under the pointer' : 'Since the first month of the period'}>
           <span className="text-gray-500">Since {monthYear(thenP.date)}</span>
           <span className="font-semibold" style={{ color: change >= 0 ? GAIN : LOSS }}>
-            {signedMoney(change)}{thenP.value > 0 ? ` (${signedPct((change / thenP.value) * 100)})` : ''}
+            {changeIn(share, change, thenP.value)}
           </span>
         </span>
         <span className={RISK_ROW} title="Over finished months only (the current month is still moving)">
           <span className="text-gray-500">High</span>
-          <span className="font-semibold text-gray-800">{money(hi.value)}</span>
+          <span className="font-semibold text-gray-800">{fmtIn(share, hi.value)}</span>
           <span className="text-gray-400">{monthYear(hi.date)}</span>
         </span>
         <span className={RISK_ROW} title="Over finished months only (the current month is still moving)">
           <span className="text-gray-500">Low</span>
-          <span className="font-semibold text-gray-800">{money(lo.value)}</span>
+          <span className="font-semibold text-gray-800">{fmtIn(share, lo.value)}</span>
           <span className="text-gray-400">{monthYear(lo.date)}</span>
         </span>
       </div>
 
-      <ValueBars shown={shown} groups={shownGroups} totalColor={totalColor} renderTooltip={renderTooltip} onHover={setHoverDate} />
+      <ValueBars shown={shown} groups={shownGroups} totalColor={totalColor} share={share} renderTooltip={renderTooltip} onHover={setHoverDate} />
       <p className="text-xs text-gray-400 mt-2">
         {hoverDate ? 'Change measured from the month under the pointer.' : 'Hover (or touch) a bar to see its amount and the change from it to the latest month.'}
+        {share && ' % of portfolio = its share of every class plus cash that month (the same total as Allocation by Month-end).'}
         {classFilter && groups.length > 1 && ' Exposure comes from the Lookup tab; an asset without one is shown under its ticker.'}
       </p>
     </div>
@@ -378,10 +438,11 @@ export default function ValueByMonth({
 
 // The bars on their own, memoised: hovering changes only the hovered month in the parent, so the
 // ~100 bars aren't redrawn on every pointer move. One stacked series per group.
-const ValueBars = React.memo(function ValueBars({ shown, groups, totalColor, renderTooltip, onHover }: {
+const ValueBars = React.memo(function ValueBars({ shown, groups, totalColor, share, renderTooltip, onHover }: {
   shown: ValuePoint[];
   groups: Group[];
   totalColor: string;
+  share: boolean;   // the bars are % of portfolio rather than money
   renderTooltip: (t: { active?: boolean; label?: string | number }) => React.ReactNode;
   onHover: (date: string | null) => void;
 }) {
@@ -401,7 +462,7 @@ const ValueBars = React.memo(function ValueBars({ shown, groups, totalColor, ren
   );
   const last = shown[shown.length - 1];
   const edgeDefs: BubbleDef[] = [{
-    value: last.value, color: totalColor, label: shortMoney(last.value),
+    value: last.value, color: totalColor, label: share ? `${last.value.toFixed(1)}%` : shortMoney(last.value),
     // Slate flips with dark mode and the bubble code already handles it; a class colour doesn't
     textColor: totalColor === SLATE ? undefined : readableTextOn(totalColor),
   }];
@@ -416,8 +477,8 @@ const ValueBars = React.memo(function ValueBars({ shown, groups, totalColor, ren
       >
         <XAxis dataKey="date" ticks={ticks} interval={0} tickFormatter={label}
           tick={{ fontSize: 11, fill: MUTED }} tickLine={false} />
-        <YAxis tickFormatter={phoneAxisMoney() ?? ((v: number) => money(v))}
-          tick={{ fontSize: 11, fill: MUTED }} tickLine={false} axisLine={false} width={phone ? 40 : 76} />
+        <YAxis tickFormatter={share ? ((v: number) => `${v}%`) : (phoneAxisMoney() ?? ((v: number) => money(v)))}
+          tick={{ fontSize: 11, fill: MUTED }} tickLine={false} axisLine={false} width={phone || share ? 40 : 76} />
         <Tooltip cursor={{ fill: 'rgba(148,163,184,0.15)' }} content={renderTooltip} />
         {groups.map((g, i) => (
           <Bar key={g.name} dataKey={`g${i}`} name={g.label} stackId="value" fill={g.color} isAnimationActive={false}

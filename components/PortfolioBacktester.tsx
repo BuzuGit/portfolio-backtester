@@ -563,6 +563,8 @@ const PortfolioBacktester = () => {
   const [posValuePeriod, setPosValuePeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y' | 'Max'>('Max');
   // ...and the exposure groups unticked on it, remembered per class ("Equities" -> ["Sector"])
   const [posValueExcluded, setPosValueExcluded] = useState<Record<string, string[]>>({});
+  // ...and whether it shows money (the default) or % of the portfolio
+  const [posValueMode, setPosValueMode] = useState<'value' | 'share'>('value');
   // Which cash balance the user drilled into, keyed "account|currency".
   // Empty string = showing the summary list, mirroring openSelectedTicker above.
   const [cashSelected, setCashSelected] = useState<string>('');
@@ -3060,6 +3062,7 @@ const PortfolioBacktester = () => {
               posAllocPeriod={posAllocPeriod} setPosAllocPeriod={setPosAllocPeriod}
               posValuePeriod={posValuePeriod} setPosValuePeriod={setPosValuePeriod}
               posValueExcluded={posValueExcluded} setPosValueExcluded={setPosValueExcluded}
+              posValueMode={posValueMode} setPosValueMode={setPosValueMode}
               calculateXIRR={calculateXIRR} getClosedTransactions={getClosedTransactions}
               getOpenPurchases={getOpenPurchases} getOpenDividends={getOpenDividends}
               tableSort={tableSort} sortPropsFor={sortPropsFor}

@@ -38,7 +38,7 @@ import {
   type AllocView,
 } from '@/components/AllocationHistory';
 import { EdgeBubbles, twoLineLabelFont } from '@/components/charts';
-import ValueByMonth from '@/components/ValueByMonth';
+import ValueByMonth, { type ValueMode } from '@/components/ValueByMonth';
 
 export type MonthPeriod = '1Y' | '3Y' | '5Y' | '10Y' | 'Max';
 type Period = MonthPeriod;
@@ -78,12 +78,13 @@ export interface AllocationByMonthProps {
   // Value by Month-end: exposure groups left out, per class
   valueExcluded: Record<string, string[]>;
   setValueExcluded: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
+  valueMode: ValueMode; setValueMode: (m: ValueMode) => void;   // Value or % of portfolio
 }
 
 export default function AllocationByMonth({
   assetData, assetLookup, positionsModel, allCashAccounts, groupMetalsCrypto, tickerAccounts,
   accountFilter, currencyFilter, classFilter, positionsCurrency, view, setView, period, setPeriod,
-  valuePeriod, setValuePeriod, valueExcluded, setValueExcluded,
+  valuePeriod, setValuePeriod, valueExcluded, setValueExcluded, valueMode, setValueMode,
 }: AllocationByMonthProps) {
   const [hoverDate, setHoverDate] = useState<string | null>(null);
 
@@ -219,6 +220,7 @@ export default function AllocationByMonth({
       accountFilter={accountFilter} currencyFilter={currencyFilter} classFilter={classFilter}
       amountCcy={amountCcy} period={valuePeriod} setPeriod={setValuePeriod}
       excluded={valueExcluded} setExcluded={setValueExcluded}
+      mode={valueMode} setMode={setValueMode}
     />
   );
 
