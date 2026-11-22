@@ -38,7 +38,7 @@ const ALL = 'All';    // the one group when no class is picked
 const LABEL_W = 50;   // the latest-amount label beside the right edge ("1.23M", "845k")
 // One colour per exposure group: the theme's eight chart colours first, then the Return Map's
 // 32 distinct ones, so even a long list never repeats
-const GROUP_COLORS = [...Object.values(CHART_PALETTE), ...RETURN_MAP_ASSET_COLORS];
+export const GROUP_COLORS = [...Object.values(CHART_PALETTE), ...RETURN_MAP_ASSET_COLORS];
 
 // "2026-11-30" -> "Nov 2026"
 const monthLong = (d: string) => `${MONTH_ABBR[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}`;
@@ -308,7 +308,7 @@ export default function ValueByMonth({
       {/* The app's shared control look: one grey strip (SEG) of segBtn buttons, slate while in
           the bars, each with a dot in its series colour (like Daily NAV Drawdowns' currency
           buttons). The strip wraps onto more lines when there are many exposures. */}
-      <span className={`${SEG} flex-wrap`}>
+      <span className={`${SEG} flex-wrap max-w-full`}>
         {groups.map(g => {
           const on = !left.has(g.name);
           return (
