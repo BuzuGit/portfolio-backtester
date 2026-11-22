@@ -165,15 +165,25 @@ export default function IncomeChart({
   // The yield of every dividend of a holding with a price (lib/incomeYield.ts), worked out only
   // once a yield view is picked. Prices: the sheet's month-end price of the month BEFORE each
   // payment, in the asset's own currency; amounts are converted into that currency first.
-  const yieldPayments = useMemo(() => {
-    if (!yieldMode) return [];
+  //
+  // The market yield needs the price people actually paid then, NOT the dividend-adjusted one
+  // (a "TR" column scales history down as dividends are reinvested, which made old yields read
+  // high). The sheet keeps the plain price beside it under the same ticker without "TR"
+  // (CFATR -> CFA, KMLMTR -> KMLM, ...), so that column is used whenever it exists. A "TR"
+  // ticker without one falls back to its adjusted price and is named under the chart.
+  const yieldData = useMemo(() => {
+    if (!yieldMode) return { list: [] as ReturnType<typeof paymentYields>, adjustedOnly: [] as string[] };
     const info = new Map(assetLookup.map(a => [a.ticker, a]));
     const tickers = new Set(rows.filter(r => r.flow === 'Dividend' && info.has(r.ticker)).map(r => r.ticker));
+    const columns = new Set<string>();
+    for (const row of assetData) for (const k of Object.keys(row)) columns.add(k);
+    const priceColumn = (t: string) => (t.endsWith('TR') && columns.has(t.slice(0, -2)) ? t.slice(0, -2) : t);
+    const adjustedOnly = Array.from(tickers).filter(t => t.endsWith('TR') && priceColumn(t) === t);
     const series = new Map<string, [string, number][]>();   // ticker -> [month, price], oldest first
     const sorted = [...assetData].sort((a, b) => String(a.date).localeCompare(String(b.date)));
     for (const row of sorted) {
       for (const t of Array.from(tickers)) {
-        const v = Number(row[t]);
+        const v = Number(row[priceColumn(t)]);
         if (v > 0) (series.get(t) ?? series.set(t, []).get(t)!).push([String(row.date).slice(0, 7), v]);
       }
     }
@@ -189,8 +199,9 @@ export default function IncomeChart({
       const from = ccy === 'PLN' ? 1 : rates[ccy], to = target === 'PLN' ? 1 : rates[target];
       return from && to ? (amount * from) / to : null;
     };
-    return paymentYields(rows.filter(r => tickers.has(r.ticker)), priceBefore, toAssetCcy);
+    return { list: paymentYields(rows.filter(r => tickers.has(r.ticker)), priceBefore, toAssetCcy), adjustedOnly };
   }, [yieldMode, rows, assetLookup, assetData, ratesByYm]);
+  const yieldPayments = yieldData.list;
 
   // What the bars add up: payments (money) in the Amount view; payment yields (%) in the yield
   // views, for the payers passing the same class / account filters
@@ -439,7 +450,9 @@ export default function IncomeChart({
               ? <>
                   {' '}Each bar adds up the yields of the payments in it (four quarterly payments = the year&apos;s yield; never annualised).
                   {' '}Only holdings with a price in the sheet have a yield: cash interest and assets not in the Lookup tab are left out.
-                  {measure === 'yield' && ' The sheet’s prices are dividend-adjusted, so older years read somewhat high; Yield on cost has no such bias.'}
+                  {measure === 'yield' && ' Yield uses each asset’s plain (unadjusted) price, e.g. CFA for CFATR.'}
+                  {measure === 'yield' && yieldData.adjustedOnly.length > 0 &&
+                    ` ${yieldData.adjustedOnly.join(', ')}: no unadjusted price in the sheet, so the dividend-adjusted one is used and older years read somewhat high.`}
                 </>
               : ' Assets no longer in the Lookup tab show by name and only with no class picked.'}
           </p>
