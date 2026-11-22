@@ -51,12 +51,17 @@ const shortMoney = (v: number) =>
 const signedMoney = (v: number) => `${v >= 0 ? '+' : '−'}${money(Math.abs(v))}`;
 const signedPct = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}%`;
 
-// One month-end before any choice of groups: PLN per group, the rate into the chosen currency,
-// and which groups hold a holding valued without a market price
+// A group's key: its label in lower case with spaces tidied, so "World", "world" and "World "
+// typed on different rows of the sheet are one group (shown with the first spelling met)
+const groupKey = (label: string) => label.trim().replace(/\s+/g, ' ').toLowerCase();
+
+// One month-end before any choice of groups: PLN per group key, the rate into the chosen
+// currency, and which groups hold a holding valued without a market price
 interface RawMonth { date: string; rate: number; byGroup: Record<string, number>; estimated: Set<string> }
-// One bar: the chosen groups' amounts (in the chosen currency) and their sum
+// One bar: the chosen groups' amounts (in the chosen currency, by group key) and their sum
 interface ValuePoint { date: string; value: number; byGroup: Record<string, number>; estimated: boolean }
-interface Group { name: string; color: string; tickers: string[] }
+// `name` is the group key (what the unticked list stores), `label` what is shown
+interface Group { name: string; label: string; color: string; tickers: string[] }
 
 export interface ValueByMonthProps {
   months: LedgerMonth[];
@@ -83,9 +88,18 @@ export default function ValueByMonth({
   // Every month-end in PLN per group, after ALL the tab's filters (class, currency, account).
   // The group is the asset's Exposure (its ticker when none is given) once a class is picked;
   // without a class everything is one group. Months with no rate into the chosen currency drop out.
-  const raw = useMemo((): RawMonth[] => {
-    const groupOf = (ticker: string) => (classFilter ? exposureOf(ticker) || ticker : ALL);
+  const { raw, tickers, labels } = useMemo(() => {
+    // A holding's group label: its Exposure, else its ticker, once a class is picked
+    const labelOf = (ticker: string) => (classFilter ? exposureOf(ticker) || ticker : ALL);
     const out: RawMonth[] = [];
+    const tickers: Record<string, Set<string>> = {};    // group key -> the tickers in its bars
+    const labels: Record<string, string> = {};          // group key -> label to show (first spelling met)
+    const add = (byGroup: Record<string, number>, label: string, pln: number) => {
+      const key = groupKey(label);
+      labels[key] ??= label.trim();
+      byGroup[key] = (byGroup[key] ?? 0) + pln;
+      return key;
+    };
     for (const m of months) {
       const rate = amountCcy === 'PLN' ? 1 : m.pln[amountCcy];
       if (!rate) continue;
@@ -96,52 +110,61 @@ export default function ValueByMonth({
         if (accountFilter && !tickerAccounts[h.ticker]?.has(accountFilter)) continue;
         if (currencyFilter && ccyOf(h.ticker, h.currency) !== currencyFilter) continue;
         if (classFilter && classOf(h.ticker) !== classFilter) continue;
-        const g = groupOf(h.ticker);
-        byGroup[g] = (byGroup[g] ?? 0) + h.valuePln;
-        if (h.estimated) estimated.add(g);
+        // (the tick-box's hover list is built here, so it obeys the same filters as the bars)
+        const key = add(byGroup, labelOf(h.ticker), h.valuePln);
+        (tickers[key] ??= new Set()).add(h.ticker);
+        if (h.estimated) estimated.add(key);
       }
       for (const c of m.cash) {
         if (c.valuePln === null) continue;
         if (accountFilter && c.account !== accountFilter) continue;
         if (currencyFilter && c.currency !== currencyFilter) continue;
         if (classFilter && classFilter !== CASH) continue;
-        const g = classFilter ? CASH : ALL;
-        byGroup[g] = (byGroup[g] ?? 0) + c.valuePln;
+        add(byGroup, classFilter ? CASH : ALL, c.valuePln);
       }
       out.push({ date: m.date, rate, byGroup, estimated });
     }
-    return out;
+    return { raw: out, tickers, labels };
   }, [months, classOf, ccyOf, exposureOf, tickerAccounts, accountFilter, currencyFilter, classFilter, amountCcy]);
 
+  // Every group the picked class EVER had, ignoring the currency and account filters, in
+  // alphabetical order: the order colours are handed out in, so an exposure keeps its colour when
+  // a filter changes or when the amounts rank differently from one month to the next
+  const colourOrder = useMemo(() => {
+    if (!classFilter) return [] as string[];
+    const keys = new Set<string>();
+    for (const m of months) for (const h of m.holdings) {
+      if (h.valuePln !== null && classOf(h.ticker) === classFilter) keys.add(groupKey(exposureOf(h.ticker) || h.ticker));
+    }
+    if (classFilter === CASH) keys.add(groupKey(CASH));
+    return Array.from(keys).sort();
+  }, [months, classFilter, classOf, exposureOf]);
+
   // The groups ever held, biggest latest amount first (so the biggest sits at the bottom of each
-  // bar), each with a fixed colour and the tickers in it (for the tick-box's hover text)
+  // bar), each with its colour and the tickers in it (for the tick-box's hover text)
   const groups = useMemo((): Group[] => {
-    const latest: Record<string, number> = {}, ever: Record<string, number> = {};
+    const ever: Record<string, number> = {};
     for (const m of raw) for (const [g, v] of Object.entries(m.byGroup)) {
-      if (v > 0) { latest[g] = v; ever[g] = Math.max(ever[g] ?? 0, v); }
+      if (v > 0) ever[g] = Math.max(ever[g] ?? 0, v);
     }
     const lastMonth = raw[raw.length - 1];
     const now = (g: string) => Math.max(0, lastMonth?.byGroup[g] ?? 0);
     const names = Object.keys(ever).sort((a, b) => now(b) - now(a) || ever[b] - ever[a] || a.localeCompare(b));
-    // Which tickers make up each group, over the whole history
-    const tickers: Record<string, Set<string>> = {};
-    if (classFilter) {
-      for (const m of months) for (const h of m.holdings) {
-        if (h.valuePln === null || classOf(h.ticker) !== classFilter) continue;
-        const g = exposureOf(h.ticker) || h.ticker;
-        (tickers[g] ??= new Set()).add(h.ticker);
-      }
-    }
-    const single = names.length === 1;
-    return names.map((name, i) => ({
-      name,
-      // One group alone keeps the colour the chart had before: the class's, or slate for "All"
-      color: single || name === ALL
-        ? ((classFilter && ASSET_CLASS_COLORS[classFilter]) || SLATE)
-        : GROUP_COLORS[i % GROUP_COLORS.length],
-      tickers: Array.from(tickers[name] ?? []).sort(),
-    }));
-  }, [raw, months, classFilter, classOf, exposureOf]);
+    // A class with only one group in its whole history keeps the colour the chart had before:
+    // the class's own (slate for "All", when no class is picked)
+    const single = colourOrder.length <= 1;
+    return names.map(name => {
+      const at = colourOrder.indexOf(name);
+      return {
+        name,
+        label: labels[name] ?? name,
+        color: single || name === groupKey(ALL)
+          ? ((classFilter && ASSET_CLASS_COLORS[classFilter]) || SLATE)
+          : GROUP_COLORS[(at >= 0 ? at : colourOrder.length) % GROUP_COLORS.length],
+        tickers: Array.from(tickers[name] ?? []).sort(),
+      };
+    });
+  }, [raw, tickers, labels, colourOrder, classFilter]);
 
   const left = useMemo(() => new Set(classFilter ? excluded[classFilter] ?? [] : []), [excluded, classFilter]);
   const shownGroups = useMemo(() => groups.filter(g => !left.has(g.name)), [groups, left]);
@@ -190,7 +213,7 @@ export default function ValueByMonth({
               {[...shownGroups].reverse().map(g => (p.byGroup[g.name] ?? 0) > 0 && (
                 <tr key={g.name}>
                   <td style={{ paddingRight: 10 }}>
-                    <span className="inline-block w-2 h-2 rounded-sm mr-1.5" style={{ background: g.color }} />{g.name}
+                    <span className="inline-block w-2 h-2 rounded-sm mr-1.5" style={{ background: g.color }} />{g.label}
                   </td>
                   <td style={{ textAlign: 'right', paddingRight: 10, color: MUTED }}>{((p.byGroup[g.name] / p.value) * 100).toFixed(1)}%</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{money(p.byGroup[g.name])}</td>
@@ -233,7 +256,9 @@ export default function ValueByMonth({
   ].filter(Boolean).join(' · ');
 
   // The tick-boxes, shown once a class is picked and it has more than one exposure
-  const groupPicker = classFilter && groups.length > 1 && (
+  // Also shown while anything in this class is unticked, even if a currency / account filter has
+  // left a single group: otherwise an unticked last group would empty the chart with no way back
+  const groupPicker = classFilter && (groups.length > 1 || left.size > 0) && (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-3 text-xs">
       <span className="text-gray-500 mr-1">Exposure:</span>
       {groups.map(g => {
@@ -244,12 +269,12 @@ export default function ValueByMonth({
             type="button"
             onClick={() => toggle(g.name)}
             aria-pressed={on}
-            title={g.tickers.length > 0 ? `${g.name}: ${g.tickers.join(', ')}` : g.name}
+            title={g.tickers.length > 0 ? `${g.label}: ${g.tickers.join(', ')}` : g.label}
             className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border ${on ? 'border-slate-400 bg-white text-gray-800' : 'border-gray-200 bg-gray-50 text-gray-400'}`}
           >
             {/* A tick-box in the group's colour: filled while it is in the bars */}
             <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: on ? g.color : 'transparent', borderColor: g.color }} />
-            {g.name}
+            {g.label}
           </button>
         );
       })}
@@ -395,7 +420,7 @@ const ValueBars = React.memo(function ValueBars({ shown, groups, totalColor, ren
           tick={{ fontSize: 11, fill: MUTED }} tickLine={false} axisLine={false} width={phone ? 40 : 76} />
         <Tooltip cursor={{ fill: 'rgba(148,163,184,0.15)' }} content={renderTooltip} />
         {groups.map((g, i) => (
-          <Bar key={g.name} dataKey={`g${i}`} name={g.name} stackId="value" fill={g.color} isAnimationActive={false}
+          <Bar key={g.name} dataKey={`g${i}`} name={g.label} stackId="value" fill={g.color} isAnimationActive={false}
             stroke={touching ? g.color : undefined} strokeWidth={touching ? 1 : 0} />
         ))}
         {/* The latest total beside the right edge, like the allocation charts' latest % */}
