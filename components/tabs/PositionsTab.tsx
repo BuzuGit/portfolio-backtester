@@ -1631,8 +1631,18 @@ export default function PositionsTab({
             ticker: asset.ticker, name: asset.name, numTransactions: transactions.length,
             firstBuyDate, lastSaleDate, timeHeldYears,
             totalInvested: totalCost, totalFinalValue, totalPnL, totalPnLPct, xirr,
+            // The class it is shown under (follows Group M&C), for the class filter below
+            assetClass: effectiveClass({ assetClass: asset.assetClass, portfolioClass: asset.portfolioClass ?? '' }),
           };
         });
+        // The class and account filters narrow this table too, the same way they narrow Open
+        // Positions: class (the buttons at the top, or a By Asset Class row) and account (a By
+        // Account bar: the accounts that paid for the asset's purchases). Currency deliberately
+        // doesn't: the user's rule (2026-11-22) is that currency only sets how values are shown.
+        const filteredClosedData = closedSummaryData.filter(row =>
+          (!openAssetClassFilter || row.assetClass === openAssetClassFilter) &&
+          (!openAccountFilter    || tickerPurchaseAccounts[row.ticker]?.has(openAccountFilter))
+        );
 
         // Merge weights into each row so we can filter without losing the index.
         // Apply currency filter AND asset class filter together (AND logic — both must match).
@@ -2449,7 +2459,27 @@ export default function PositionsTab({
             {/* === Closed Positions Table === */}
             {closedSummaryData.length > 0 && (
               <div className="bg-white p-4 rounded-lg shadow">
-                <h4 className="text-sm font-semibold text-gray-700 mb-3">Closed Positions</h4>
+                <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                  Closed Positions
+                  {/* The filter badges that apply here, as on Open Positions, each cleared by
+                      clicking its ✕: asset class (blue), account (green) */}
+                  {openAssetClassFilter && (
+                    <span className="flex items-center gap-1 text-xs font-normal bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+                      {openAssetClassFilter}
+                      <button onClick={(e) => { e.stopPropagation(); setOpenAssetClassFilter(null); }} className="hover:text-blue-900 leading-none">✕</button>
+                    </span>
+                  )}
+                  {openAccountFilter && (
+                    <span className="flex items-center gap-1 text-xs font-normal bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
+                      {openAccountFilter}
+                      <button onClick={(e) => { e.stopPropagation(); setOpenAccountFilter(null); }} className="hover:text-green-900 leading-none">✕</button>
+                    </span>
+                  )}
+                </h4>
+                {filteredClosedData.length === 0 && (
+                  <p className="text-xs text-gray-500 py-2">No closed positions match the filters above.</p>
+                )}
+                {filteredClosedData.length > 0 && (
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs border-collapse">
                     <thead>
@@ -2469,7 +2499,7 @@ export default function PositionsTab({
                       </tr>
                     </thead>
                     <tbody>
-                      {sortTableRows(closedSummaryData, tableSort['positionsClosed'] ?? null, {
+                      {sortTableRows(filteredClosedData, tableSort['positionsClosed'] ?? null, {
                         name:            r => r.name,
                         numTransactions: r => r.numTransactions,
                         firstBuyDate:    r => r.firstBuyDate,
@@ -2527,6 +2557,7 @@ export default function PositionsTab({
                     </tbody>
                   </table>
                 </div>
+                )}
               </div>
             )}
             <p className="text-xs text-gray-400 mt-3">Click a row to see detailed transactions, chart, and statistics.</p>
