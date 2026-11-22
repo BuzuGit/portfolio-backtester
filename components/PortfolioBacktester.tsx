@@ -571,6 +571,8 @@ const PortfolioBacktester = () => {
   const [posIncomeBy, setPosIncomeBy] = useState<'month' | 'quarter' | 'year'>('year');
   const [posIncomePeriod, setPosIncomePeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y' | 'Max'>('Max');
   const [posIncomeExcluded, setPosIncomeExcluded] = useState<string[]>([]);
+  // ...and what its bars measure: money received, market yield, or yield on cost
+  const [posIncomeMeasure, setPosIncomeMeasure] = useState<'amount' | 'yield' | 'onCost'>('amount');
   // Which cash balance the user drilled into, keyed "account|currency".
   // Empty string = showing the summary list, mirroring openSelectedTicker above.
   const [cashSelected, setCashSelected] = useState<string>('');
@@ -894,9 +896,11 @@ const PortfolioBacktester = () => {
       setPositionsModel(model);
       setCashAccounts(cash);
       setAllCashAccounts(allCash);
-      // Every dividend and interest payment (~380 rows), for the Positions tab's Income chart.
-      // Only these rows are kept: the rest of the ledger lives on in the models above.
-      setIncomeRows(fetchedLedgerData.filter(r => r.flow === 'Dividend' || r.flow === 'Interest'));
+      // For the Positions tab's Income chart: every dividend and interest payment, plus the
+      // purchases and sales its yields need (shares held, average cost). ~700 rows; the rest of
+      // the ledger lives on in the models above.
+      setIncomeRows(fetchedLedgerData.filter(r =>
+        r.flow === 'Dividend' || r.flow === 'Interest' || r.flow === 'Purchase of Asset' || r.flow === 'Proceeds from Sale'));
       setClosedData(effectiveClosed);
       setTransactionData(effectiveTransactions);
       setDailyData(fetchedDailyData);
@@ -3075,6 +3079,7 @@ const PortfolioBacktester = () => {
               incomeRows={incomeRows} posIncomeBy={posIncomeBy} setPosIncomeBy={setPosIncomeBy}
               posIncomePeriod={posIncomePeriod} setPosIncomePeriod={setPosIncomePeriod}
               posIncomeExcluded={posIncomeExcluded} setPosIncomeExcluded={setPosIncomeExcluded}
+              posIncomeMeasure={posIncomeMeasure} setPosIncomeMeasure={setPosIncomeMeasure}
               calculateXIRR={calculateXIRR} getClosedTransactions={getClosedTransactions}
               getOpenPurchases={getOpenPurchases} getOpenDividends={getOpenDividends}
               tableSort={tableSort} sortPropsFor={sortPropsFor}

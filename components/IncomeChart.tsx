@@ -23,6 +23,7 @@ import type { AssetLookup, AssetRow, LedgerRow } from '@/lib/fetchData';
 import { localTodayIso } from '@/lib/fetchData';
 import { FX_TICKER_MAP } from '@/lib/backtest';
 import { portfolioClassOf } from '@/lib/holdings';
+import { paymentYields } from '@/lib/incomeYield';
 import { isPhoneScreen } from '@/lib/savedSheet';
 import { MONTH_ABBR, periodStartIso } from '@/lib/dates';
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
@@ -33,6 +34,13 @@ import { GROUP_COLORS } from '@/components/ValueByMonth';
 import type { MonthPeriod } from '@/components/AllocationByMonth';
 
 export type IncomeBy = 'month' | 'quarter' | 'year';
+// What the bars measure: money received, market yield, or yield on cost (lib/incomeYield.ts)
+export type IncomeMeasure = 'amount' | 'yield' | 'onCost';
+const MEASURE_OPTIONS: { value: IncomeMeasure; label: string; hint: string }[] = [
+  { value: 'amount', label: 'Amount', hint: 'Money received, in the chosen currency' },
+  { value: 'yield', label: 'Yield', hint: 'Each payment ÷ what those shares were worth at the previous month-end, added up per bar' },
+  { value: 'onCost', label: 'Yield on cost', hint: 'Each payment ÷ what those shares cost you (average cost), added up per bar' },
+];
 const PERIODS: readonly MonthPeriod[] = ['1Y', '3Y', '5Y', '10Y', 'Max'];
 const BY_OPTIONS: { value: IncomeBy; label: string }[] = [
   { value: 'month', label: 'Month' }, { value: 'quarter', label: 'Quarter' }, { value: 'year', label: 'Year' },
@@ -78,14 +86,16 @@ export interface IncomeChartProps {
   by: IncomeBy; setBy: (b: IncomeBy) => void;
   period: MonthPeriod; setPeriod: (p: MonthPeriod) => void;
   excluded: string[]; setExcluded: React.Dispatch<React.SetStateAction<string[]>>;
+  measure: IncomeMeasure; setMeasure: (m: IncomeMeasure) => void;
 }
 
 export default function IncomeChart({
   rows, assetData, assetLookup, groupMetalsCrypto, tickerAccounts, classFilter, accountFilter, positionsCurrency,
-  by, setBy, period, setPeriod, excluded, setExcluded,
+  by, setBy, period, setPeriod, excluded, setExcluded, measure, setMeasure,
 }: IncomeChartProps) {
   const [hoverBucket, setHoverBucket] = useState<string | null>(null);
   const amountCcy = positionsCurrency || 'PLN';
+  const yieldMode = measure !== 'amount';
 
   // PLN per unit of each currency, for every month of the price sheet. A month with no rate
   // keeps the last one known, so a gap in the sheet never turns a payment into nonsense.
@@ -113,6 +123,8 @@ export default function IncomeChart({
     const payerInfo = new Map<string, Omit<Payer, 'color' | 'total'>>();
     const payments: Payment[] = [];
     for (const r of rows) {
+      // (the purchases and sales in `rows` are only for the yields below)
+      if (r.flow !== 'Dividend' && r.flow !== 'Interest') continue;
       const ticker = r.ticker && r.ticker !== '-' ? r.ticker : '';
       const cashInterest = r.flow === 'Interest' && (!ticker || r.asset === 'Cash');
       const inLookup = info.get(ticker);
@@ -150,11 +162,53 @@ export default function IncomeChart({
     return true;
   }), [payments, payerInfo, classFilter, accountFilter, tickerAccounts]);
 
+  // The yield of every dividend of a holding with a price (lib/incomeYield.ts), worked out only
+  // once a yield view is picked. Prices: the sheet's month-end price of the month BEFORE each
+  // payment, in the asset's own currency; amounts are converted into that currency first.
+  const yieldPayments = useMemo(() => {
+    if (!yieldMode) return [];
+    const info = new Map(assetLookup.map(a => [a.ticker, a]));
+    const tickers = new Set(rows.filter(r => r.flow === 'Dividend' && info.has(r.ticker)).map(r => r.ticker));
+    const series = new Map<string, [string, number][]>();   // ticker -> [month, price], oldest first
+    const sorted = [...assetData].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    for (const row of sorted) {
+      for (const t of Array.from(tickers)) {
+        const v = Number(row[t]);
+        if (v > 0) (series.get(t) ?? series.set(t, []).get(t)!).push([String(row.date).slice(0, 7), v]);
+      }
+    }
+    const priceBefore = (t: string, ym: string) => {
+      let last: number | null = null;
+      for (const [m, p] of series.get(t) ?? []) { if (m < ym) last = p; else break; }
+      return last;
+    };
+    const toAssetCcy = (t: string, amount: number, ccy: string, ym: string) => {
+      const target = info.get(t)?.currency || ccy;
+      if (ccy === target) return amount;
+      const rates = ratesByYm.byYm.get(ym) ?? ratesByYm.latest;
+      const from = ccy === 'PLN' ? 1 : rates[ccy], to = target === 'PLN' ? 1 : rates[target];
+      return from && to ? (amount * from) / to : null;
+    };
+    return paymentYields(rows.filter(r => tickers.has(r.ticker)), priceBefore, toAssetCcy);
+  }, [yieldMode, rows, assetLookup, assetData, ratesByYm]);
+
+  // What the bars add up: payments (money) in the Amount view; payment yields (%) in the yield
+  // views, for the payers passing the same class / account filters
+  const points = useMemo(() => {
+    if (!yieldMode) return filtered.map(p => ({ key: p.key, ym: p.ym, value: p.amount }));
+    const allowed = new Set(filtered.map(p => p.key));
+    return yieldPayments.flatMap(y => {
+      const key = `pay|${y.ticker}`;
+      const v = measure === 'yield' ? y.marketPct : y.onCostPct;
+      return allowed.has(key) && v !== null ? [{ key, ym: y.date.slice(0, 7), value: v }] : [];
+    });
+  }, [yieldMode, filtered, yieldPayments, measure]);
+
   // Every bucket from the first payment to today (empty ones too, so a quiet year shows as a
   // gap), within the chosen period
   const buckets = useMemo(() => {
-    if (filtered.length === 0) return [] as string[];
-    const first = filtered.reduce((m, p) => (p.ym < m ? p.ym : m), filtered[0].ym);
+    if (points.length === 0) return [] as string[];
+    const first = points.reduce((m, p) => (p.ym < m ? p.ym : m), points[0].ym);
     const todayYm = localTodayIso().slice(0, 7);
     const startYm = periodStartIso(period).slice(0, 7);
     const out: string[] = [];
@@ -163,27 +217,27 @@ export default function IncomeChart({
       if (out[out.length - 1] !== b && lastYmOf(b) >= startYm) out.push(b);
     }
     return out;
-  }, [filtered, by, period]);
+  }, [points, by, period]);
 
   // Each payer's total per bucket, and its total over the buckets shown
   const { perBucket, payers } = useMemo(() => {
     const shownSet = new Set(buckets);
     const perBucket = new Map<string, Record<string, number>>(buckets.map(b => [b, {}]));
     const totals: Record<string, number> = {};
-    for (const p of filtered) {
+    for (const p of points) {
       const b = bucketOf(p.ym, by);
       if (!shownSet.has(b)) continue;
       const cell = perBucket.get(b)!;
-      cell[p.key] = (cell[p.key] ?? 0) + p.amount;
-      totals[p.key] = (totals[p.key] ?? 0) + p.amount;
+      cell[p.key] = (cell[p.key] ?? 0) + p.value;
+      totals[p.key] = (totals[p.key] ?? 0) + p.value;
     }
     // Biggest earner first, so it sits at the bottom of each bar
     const payers: Payer[] = Object.keys(totals)
-      .filter(k => Math.abs(totals[k]) > 0.5)
+      .filter(k => Math.abs(totals[k]) > (yieldMode ? 0 : 0.5))
       .sort((a, b) => totals[b] - totals[a])
       .map(k => ({ ...payerInfo.get(k)!, color: colorOf.get(k) ?? SLATE, total: totals[k] }));
     return { perBucket, payers };
-  }, [filtered, buckets, by, payerInfo, colorOf]);
+  }, [points, buckets, by, payerInfo, colorOf, yieldMode]);
 
   const left = useMemo(() => new Set(excluded), [excluded]);
   const shownPayers = useMemo(() => payers.filter(p => !left.has(p.key)), [payers, left]);
@@ -219,27 +273,32 @@ export default function IncomeChart({
         <table style={{ borderCollapse: 'collapse', marginBottom: 2 }}>
           <tbody>
             {/* Top of the bar first, like the stack */}
-            {[...shownPayers].reverse().map(p => (b.byPayer[p.key] ?? 0) > 0.5 && (
+            {/* (yield views: bars stand side by side, so the list is simply biggest first) */}
+            {[...shownPayers].reverse().map(p => (b.byPayer[p.key] ?? 0) > (yieldMode ? 0 : 0.5) && (
               <tr key={p.key}>
                 <td style={{ paddingRight: 10 }}>
                   <span className="inline-block w-2 h-2 rounded-sm mr-1.5" style={{ background: p.color }} />{p.label}
                 </td>
-                <td style={{ textAlign: 'right', fontWeight: 600 }}>{money(b.byPayer[p.key])}</td>
+                <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                  {yieldMode ? `${b.byPayer[p.key].toFixed(2)}%` : money(b.byPayer[p.key])}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <div style={{ color: INK, borderTop: `1px solid ${LINE}`, paddingTop: 2 }}>
-          Total <span className="font-semibold">{money(b.total)}</span> {amountCcy}
-        </div>
-        {diff !== null && prev && (
+        {!yieldMode && (
+          <div style={{ color: INK, borderTop: `1px solid ${LINE}`, paddingTop: 2 }}>
+            Total <span className="font-semibold">{money(b.total)}</span> {amountCcy}
+          </div>
+        )}
+        {!yieldMode && diff !== null && prev && (
           <div style={{ color: diff >= 0 ? GAIN : LOSS }}>
             {signedMoney(diff)} vs {longLabel(prev.bucket)}
           </div>
         )}
       </div>
     );
-  }, [byBucket, shownPayers, amountCcy, currentBucket]);
+  }, [byBucket, shownPayers, amountCcy, currentBucket, yieldMode]);
 
   if (payments.length === 0) return null;
 
@@ -258,7 +317,13 @@ export default function IncomeChart({
     ym12 = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
   }
   const shownKeys = new Set(shownPayers.map(p => p.key));
-  const last12 = filtered.filter(p => p.ym >= ym12 && shownKeys.has(p.key)).reduce((s, p) => s + Math.max(0, p.amount), 0);
+  const last12 = points.filter(p => p.ym >= ym12 && shownKeys.has(p.key)).reduce((s, p) => s + Math.max(0, p.value), 0);
+  // Yield views: each ticked payer's yield over the last 12 months (its payments' yields added
+  // up), biggest first. A payer whose last payment is older than that has no figure here.
+  const last12ByPayer = shownPayers
+    .map(p => ({ p, v: points.filter(x => x.key === p.key && x.ym >= ym12).reduce((s, x) => s + x.value, 0) }))
+    .filter(x => x.v > 0)
+    .sort((a, b) => b.v - a.v);
   const best = bars.reduce<typeof bars[number] | null>((m, b) => (!m || b.total > m.total ? b : m), null);
 
   const filterNote = [classFilter && `${classFilter} only`, accountFilter && `${accountFilter} only`].filter(Boolean).join(' · ');
@@ -273,11 +338,19 @@ export default function IncomeChart({
         <span className="text-xs text-gray-400">From the ledger · amounts in {amountCcy}, at each payment month&apos;s rate</span>
       </div>
 
-      {/* Bars per month / quarter / year and the period, on one line. Phones: the period is a
-          box that opens a slide-up panel, the three short "by" buttons beside it. */}
-      <div className="flex items-center gap-x-5 gap-y-2 mb-3 max-md:gap-x-2">
+      {/* What the bars measure, bars per month / quarter / year, and the period: one line on
+          desktop. Phones: the period is a box that opens a slide-up panel; the rows wrap. */}
+      <div className="flex items-center gap-x-5 gap-y-2 mb-3 max-md:gap-x-2 max-md:flex-wrap">
         <div className="flex items-center gap-1 shrink-0">
-          <span className="text-xs text-gray-500 mr-1 max-md:hidden">Show by:</span>
+          <span className="text-xs text-gray-500 mr-1 max-md:hidden">Show:</span>
+          <span className={SEG}>
+            {MEASURE_OPTIONS.map(o => (
+              <button key={o.value} onClick={() => setMeasure(o.value)} className={segBtn(measure === o.value)} title={o.hint}>{o.label}</button>
+            ))}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="text-xs text-gray-500 mr-1 max-md:hidden">By:</span>
           <span className={SEG}>
             {BY_OPTIONS.map(o => <button key={o.value} onClick={() => setBy(o.value)} className={segBtn(by === o.value)}>{o.label}</button>)}
           </span>
@@ -325,7 +398,20 @@ export default function IncomeChart({
         </p>
       ) : (
         <>
-          {/* Summary over the ticked payers */}
+          {/* Summary over the ticked payers. Yield views: each payer's last-12-months yield. */}
+          {yieldMode ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs mb-3">
+              <span className="text-gray-500">{measure === 'yield' ? 'Yield' : 'Yield on cost'}, last 12 months:</span>
+              {last12ByPayer.length === 0 && <span className="text-gray-400">no payments in the last 12 months</span>}
+              {last12ByPayer.map(({ p, v }) => (
+                <span key={p.key} className={RISK_ROW}>
+                  <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
+                  <span className="text-gray-600">{p.label}</span>
+                  <span className="font-semibold text-gray-800">{v.toFixed(1)}%</span>
+                </span>
+              ))}
+            </div>
+          ) : (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs mb-3">
             <span className={RISK_ROW}>
               <span className="text-gray-500">Total in period:</span>
@@ -343,12 +429,19 @@ export default function IncomeChart({
               </span>
             )}
           </div>
+          )}
 
-          <IncomeBars bars={bars} payers={shownPayers} by={by} renderTooltip={renderTooltip} onHover={setHoverBucket} />
+          <IncomeBars bars={bars} payers={shownPayers} by={by} yieldMode={yieldMode} renderTooltip={renderTooltip} onHover={setHoverBucket} />
           <p className="text-xs text-gray-400 mt-2">
             {hoverBucket ? `${longLabel(hoverBucket)}: hover box shows each payer.` : 'Hover (or touch) a bar to see who paid what.'}
             {' '}The latest bar is {by === 'year' ? 'the year' : by === 'quarter' ? 'the quarter' : 'the month'} so far.
-            {' '}Assets no longer in the Lookup tab show by name and only with no class picked.
+            {yieldMode
+              ? <>
+                  {' '}Each bar adds up the yields of the payments in it (four quarterly payments = the year&apos;s yield; never annualised).
+                  {' '}Only holdings with a price in the sheet have a yield: cash interest and assets not in the Lookup tab are left out.
+                  {measure === 'yield' && ' The sheet’s prices are dividend-adjusted, so older years read somewhat high; Yield on cost has no such bias.'}
+                </>
+              : ' Assets no longer in the Lookup tab show by name and only with no class picked.'}
           </p>
         </>
       )}
@@ -357,10 +450,11 @@ export default function IncomeChart({
 }
 
 // The bars on their own, memoised: hovering only changes the hovered bucket in the parent
-const IncomeBars = React.memo(function IncomeBars({ bars, payers, by, renderTooltip, onHover }: {
+const IncomeBars = React.memo(function IncomeBars({ bars, payers, by, yieldMode, renderTooltip, onHover }: {
   bars: { bucket: string; total: number; byPayer: Record<string, number> }[];
   payers: Payer[];
   by: IncomeBy;
+  yieldMode: boolean;   // yields in %: one bar per payer side by side (a yield can't be stacked)
   renderTooltip: (t: { active?: boolean; label?: string | number }) => React.ReactNode;
   onHover: (bucket: string | null) => void;
 }) {
@@ -397,15 +491,15 @@ const IncomeBars = React.memo(function IncomeBars({ bars, payers, by, renderTool
       >
         <XAxis dataKey="bucket" ticks={ticks} interval={0} tickFormatter={tickLabel}
           tick={{ fontSize: 11, fill: MUTED }} tickLine={false} />
-        <YAxis tickFormatter={phoneAxisMoney() ?? ((v: number) => money(v))}
-          tick={{ fontSize: 11, fill: MUTED }} tickLine={false} axisLine={false} width={phone ? 40 : 64} />
+        <YAxis tickFormatter={yieldMode ? ((v: number) => `${v}%`) : (phoneAxisMoney() ?? ((v: number) => money(v)))}
+          tick={{ fontSize: 11, fill: MUTED }} tickLine={false} axisLine={false} width={phone || yieldMode ? 40 : 64} />
         <Tooltip cursor={{ fill: 'rgba(148,163,184,0.15)' }} content={renderTooltip} />
         {payers.map((p, i) => (
-          <Bar key={p.key} dataKey={`p${i}`} name={p.label} stackId="income" fill={p.color} isAnimationActive={false}
+          <Bar key={p.key} dataKey={`p${i}`} name={p.label} stackId={yieldMode ? undefined : 'income'} fill={p.color} isAnimationActive={false}
             stroke={touching ? p.color : undefined} strokeWidth={touching ? 1 : 0} />
         ))}
-        {/* The latest bar's total (the current month / quarter / year so far) */}
-        <Customized component={<EdgeBubbles defs={edgeDefs} bubbleWidth={LABEL_W} fontSize={twoLineLabelFont()} />} />
+        {/* The latest bar's total (the current month / quarter / year so far); amounts only */}
+        {!yieldMode && <Customized component={<EdgeBubbles defs={edgeDefs} bubbleWidth={LABEL_W} fontSize={twoLineLabelFont()} />} />}
       </BarChart>
     </ResponsiveContainer>
   );
