@@ -224,9 +224,12 @@ export const barLossRoom = (barCount: number, anyBelowZero: boolean) => lossLabe
 
 /** Extra choices for barValueLabel; the defaults suit one series of bars with Recharts' usual gaps. */
 export type BarLabelOpts = {
-  /** Empty px beside each bar, which a label may spill into. Default: Recharts' usual gap (a
-   *  quarter of a bar's width). Side-by-side series (barGap 4): 4. barCategoryGap={1}: 1. */
+  /** Empty px between neighbouring bars, which a label may spill into: side-by-side series
+   *  (barGap 4): 4; barCategoryGap={1} (1px each side of every bar): 2. Overrides categoryGap. */
   gap?: number;
+  /** The chart's barCategoryGap as a share of each category, left empty on EACH side of its bar:
+   *  Recharts' default '10%' = 0.1 (the default here), '20%' = 0.2, touching bars (0) = 0. */
+  categoryGap?: number;
   /** The label's colour: one for all, or chosen per value. Default MUTED_LABEL, and LOSS below zero. */
   fill?: string | ((v: number) => string);
   /** Always above the column, even when its total is below zero: for a stacked column whose top
@@ -270,6 +273,12 @@ export const shortenBarLabel = (s: string, step: number): string => {
   const n = Number(`${whole}.${frac || '0'}`).toFixed(digits);
   return `${Number(n) === 0 ? '' : sign}${n}${suffix}`;         // never "-0"
 };
+// Did shortening round a non-zero value down to nothing ("0", "0k")? Such a bar gets no label
+// rather than a "0" that reads as "no value" (like a bar that really is zero).
+const roundedToZero = (text: string) => Number(text.replace(/[^\d.]/g, '')) === 0;
+// The room a bar's label may take: the bar's width plus the empty space to its neighbour.
+const labelRoom = (w: number, opts: BarLabelOpts) =>
+  opts.gap !== undefined ? w + opts.gap : w / (1 - 2 * (opts.categoryGap ?? 0.1));
 // The longest label (in em) at each shortening step, from "as formatted" to whole numbers.
 const longestByStep = (format: (v: number) => string, values: number[]) => {
   const texts = values.filter(v => v && isFinite(v)).map(format);
@@ -313,9 +322,11 @@ export const barValueLabel = (
     if (props.value === null || !isFinite(v) || v === 0 || ![x, w, y, h].every(isFinite)) return null;
     // Room per bar: its own width plus the gap beside it. The size (and any shortening) comes
     // from the chart's LONGEST label, so every bar works it out the same: one size, one form.
-    const fit = pickLabelFit(px, longest, bold ? BOLD_WIDTH : 1, Math.abs(w) + (opts.gap ?? Math.abs(w) * 0.25));
+    const fit = pickLabelFit(px, longest, bold ? BOLD_WIDTH : 1, labelRoom(Math.abs(w), opts));
     if (!fit) return null;
     const { size } = fit;
+    const text = shortenBarLabel(format(v), fit.step);
+    if (fit.step > 0 && roundedToZero(text)) return null;
     const top = Math.min(y, y + h), bottom = Math.max(y, y + h);
     const above = v >= 0 || opts.alwaysAbove;
     const fill = typeof opts.fill === 'function' ? opts.fill(v) : opts.fill ?? (v >= 0 ? MUTED_LABEL : LOSS);
@@ -323,7 +334,7 @@ export const barValueLabel = (
       // "bar-value-label": exempt from the phone 10px override (globals.css, phone-bar-labels)
       <text className="bar-value-label" x={x + w / 2} y={above ? top - 4 : bottom + size + 1} textAnchor="middle"
         style={{ fontSize: `${size}px`, fontWeight: bold ? 700 : undefined, fill }}>
-        {shortenBarLabel(format(v), fit.step)}
+        {text}
       </text>
     );
   };
@@ -331,26 +342,55 @@ export const barValueLabel = (
 };
 
 /**
- * Will this chart's labels fit? A best guess made BEFORE drawing, for the charts that hide their
- * Y axis while every bar carries its value: they show the axis instead when the labels won't fit,
- * so the bars never lose their scale. `perGroup` = side-by-side series per category. The guess
- * leans towards "no" (it assumes a narrower plot than most screens give), since an axis shown
- * beside labels does no harm, while labels gone AND the axis hidden would leave bare bars.
+ * Will this chart's labels draw? Worked out BEFORE drawing, from the plot's real width (measure it
+ * with MeasuredWidth below), for the charts that change something else when labels are on: those
+ * that hide their Y axis while every bar carries its value (they show it again when labels won't
+ * fit, so the bars never lose their scale), and EDO's best/worst callouts (shown only without
+ * labels, so the two never collide). It allows 2% less width than measured, so "yes" here means
+ * the labels really do draw. `plotWidth` = the chart's width less its margins and Y axis.
+ * Options: `perGroup` = side-by-side series per category (barGap 4 between them); `categoryGap` as
+ * in BarLabelOpts; `categoryGapPx` = a barCategoryGap given in px (e.g. 1).
  */
-export const barLabelsFit = (barCount: number, format: (v: number) => string, values: number[], perGroup = 1) => {
+export const barLabelsFit = (
+  barCount: number,
+  format: (v: number) => string,
+  values: number[],
+  plotWidth: number,
+  { perGroup = 1, categoryGap = 0.1, categoryGapPx }: { perGroup?: number; categoryGap?: number; categoryGapPx?: number } = {},
+) => {
   const px = barLabelSize(barCount);
-  if (!px) return false;
+  if (!px || plotWidth <= 0) return false;
   const longest = longestByStep(format, values);
   if (longest[0] === 0) return false;
-  const screen = typeof window === 'undefined' ? 1440 : window.innerWidth;
-  // Phones: the card fills the screen less ~70px of padding and margins. Wider: the content
-  // column tops out at 1,656px, less the sidebar (~220px) and the card's padding and margins,
-  // with a little to spare. (These charts all sit in full-width cards.)
-  const plot = screen < 768 ? screen - 70 : Math.min(screen, 1656) - 360;
-  const slot = plot / Math.max(1, barCount / perGroup);          // one category's width
-  const w = perGroup > 1 ? (slot * 0.8 - (perGroup - 1) * 4) / perGroup : slot * 0.8;
-  return pickLabelFit(px, longest, barLabelBold(barCount) ? BOLD_WIDTH : 1, w + (perGroup > 1 ? 4 : w * 0.25)) !== null;
+  const slot = (plotWidth * 0.98) / Math.max(1, barCount / perGroup);   // one category's width
+  const barsWidth = categoryGapPx !== undefined ? slot - 2 * categoryGapPx : slot * (1 - 2 * categoryGap);
+  const w = (barsWidth - (perGroup - 1) * 4) / perGroup;
+  const opts: BarLabelOpts = perGroup > 1 ? { gap: 4 } : categoryGapPx !== undefined ? { gap: 2 * categoryGapPx } : { categoryGap };
+  return w > 0 && pickLabelFit(px, longest, barLabelBold(barCount) ? BOLD_WIDTH : 1, labelRoom(w, opts)) !== null;
 };
+
+// useLayoutEffect in the browser (measures before the first paint, so no flicker), plain
+// useEffect on the server, where layout effects only print a warning.
+const useBrowserLayoutEffect = typeof window === 'undefined' ? React.useEffect : React.useLayoutEffect;
+/**
+ * Hands its children the width (px) it really has, and again whenever that changes (a window
+ * resize, the sidebar opening): `<MeasuredWidth>{w => <ResponsiveContainer ...>}</MeasuredWidth>`.
+ * 0 until the first measurement.
+ */
+export function MeasuredWidth({ children }: { children: (width: number) => React.ReactNode }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [width, setWidth] = React.useState(0);
+  useBrowserLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => setWidth(Math.round(el.getBoundingClientRect().width));
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return <div ref={ref}>{children(width)}</div>;
+}
 
 // Hover text for XIRR on the Positions tab: what the figure is, and the under-a-year rule in
 // calculateXIRR (the Markets Holdings page says the same in its own tooltips).

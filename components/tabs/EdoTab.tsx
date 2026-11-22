@@ -12,7 +12,7 @@ import { EDO_CPI_TICKER, EDO_TAX_RATE, daysBetween, edoAfterTax, monthEndIso, mo
 import { PhoneChoice } from '@/components/PhoneSheet';
 import {
   BTN_SECOND, CHART_PALETTE, GAIN, HALO, INK, LINE_MID, LOSS, MUTED, PINNED_FILTERS, ResponsiveContainer, SEG,
-  barLabelRoom, barLossRoom, barValueLabel, formatPrice, segBtn,
+  MeasuredWidth, barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, formatPrice, segBtn,
 } from '@/components/ui';
 import { EdgeBubbles } from '@/components/charts';
 
@@ -144,10 +144,12 @@ export default function EdoTab({
   });
   const outcomeData = maturedPaths.map(p => ({ date: p.s.sold, series: p.s.series, ret: p.final, perYear: p.perYear }));
   // Bar labels by the app-wide rule (ui.tsx barValueLabel): one bar per sale month, so with the
-  // full history (well over 100 series) there are none; bars sit 1px apart (barCategoryGap 1).
+  // full history (well over 100 series) there are none. barCategoryGap={1} leaves 1px each side
+  // of a bar, so 2px between neighbours.
   const marginLabel = barValueLabel(ratesData.length, v => `${Number(v.toFixed(2))}%`,
-    ratesData.map(d => d.margin ?? 0), undefined, { gap: 1 });
-  const outcomeLabel = barValueLabel(outcomeData.length, fmtPctSigned, outcomeData.map(d => d.ret), undefined, { gap: 1 });
+    ratesData.map(d => d.margin ?? 0), undefined, { gap: 2 });
+  const outcomeValues = outcomeData.map(d => d.ret);
+  const outcomeLabel = barValueLabel(outcomeData.length, fmtPctSigned, outcomeValues, undefined, { gap: 2 });
   const basisLabel = `${edoMaturedReal ? 'real' : 'nominal'}, ${edoMaturedTax ? 'after tax' : 'pre-tax'}`;
   // The sale-month charts get one tick per year, on each January's series, so no year
   // label repeats or goes missing (left to itself the axis did both).
@@ -424,8 +426,16 @@ export default function EdoTab({
 
             {/* The 10-year outcome of each series, by the month it was sold */}
             <div className="text-xs text-gray-500 mb-1">10-year return by sale month — total, not annualised. Click a bar to open that series below.</div>
+            {/* Bar labels or the best / worst callouts, never both (they would collide; the Best
+                and Worst tiles above name both series anyway, and those bars stay green and red).
+                Which one is decided from the chart's measured width (less the 44px axis), so a
+                phone, where the labels can't fit, keeps its callouts. */}
+            <MeasuredWidth>{width => {
+            const showOutcomeLabels = !!outcomeLabel
+              && barLabelsFit(outcomeData.length, fmtPctSigned, outcomeValues, width - 44, { categoryGapPx: 1 });
+            return (
             <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={outcomeData} margin={{ top: Math.max(20, outcomeLabel ? barLabelRoom(outcomeData.length) : 0), right: 8, left: -8, bottom: 0 }} barCategoryGap={1}
+              <BarChart data={outcomeData} margin={{ top: Math.max(20, showOutcomeLabels ? barLabelRoom(outcomeData.length) : 0), right: 8, left: -8, bottom: 0 }} barCategoryGap={1}
                 onClick={(e: { activePayload?: { payload?: { series?: string } }[] }) => {
                   const s = e?.activePayload?.[0]?.payload?.series;
                   if (s) setEdoSelected(s);
@@ -443,21 +453,20 @@ export default function EdoTab({
                   {outcomeData.map(d => (
                     <Cell key={d.series} fill={d.series === mBest.s.series ? GAIN : d.series === mWorst.s.series ? LOSS : d.ret < 0 ? LOSS : INK} />
                   ))}
-                  {outcomeLabel && <LabelList dataKey="ret" content={outcomeLabel} />}
+                  {showOutcomeLabels && <LabelList dataKey="ret" content={outcomeLabel} />}
                 </Bar>
-                {/* The best / worst callouts, only while the bars carry no labels of their own: the
-                    two would collide, and the Best and Worst tiles above already name both (the
-                    bars stay green and red). */}
-                {!outcomeLabel && (
+                {!showOutcomeLabels && (
                   <ReferenceDot x={mBest.s.sold} y={mBest.final} r={0} fill="none" stroke="none"
                     label={{ value: `${mBest.s.series} ${fmtPctSigned(mBest.final)}`, position: 'top', fontSize: 11, fill: GAIN, fontWeight: 600 }} />
                 )}
-                {!outcomeLabel && (
+                {!showOutcomeLabels && (
                   <ReferenceDot x={mWorst.s.sold} y={mWorst.final} r={0} fill="none" stroke="none"
                     label={{ value: `${mWorst.s.series} ${fmtPctSigned(mWorst.final)}`, position: mWorst.final < 0 ? 'bottom' : 'top', fontSize: 11, fill: LOSS, fontWeight: 600 }} />
                 )}
               </BarChart>
             </ResponsiveContainer>
+            );
+            }}</MeasuredWidth>
 
             {/* Every path on one chart: grey, with the best, worst and the median picked out */}
             <div className="flex flex-wrap gap-4 text-xs text-gray-600 mt-4 mb-1">

@@ -28,7 +28,7 @@ import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   BLACK, BTN_SECOND, CAGR_HINT, CARD_GLASS, CHART_PALETTE, CURRENCY_COLORS, FIELD, GAIN, INFLATION_COLOR, INK_SOFT,
   LINE, LINE_FAINT, LINE_MID, LOSS, LOSS_TOTAL, MUTED, ON_BLACK, PHONE_SCROLL_ROW, PROFIT_COLOR,
-  ResponsiveContainer, SEG, SHARPE_HINT, SLATE, barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, segBtn, shortLabelMoney,
+  MeasuredWidth, ResponsiveContainer, SEG, SHARPE_HINT, SLATE, barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, segBtn, shortLabelMoney,
 } from '@/components/ui';
 import {
   CURRENCY_CPI, DAILY_NAV_BENCHMARKS, twoLineLabelFont, DivergingBar, EdgeBubbles, barMillions, barPct, renderEdgeBubbles,
@@ -1823,8 +1823,12 @@ export default function PortfolioTab({
               const values = returnsRows.flatMap(d => keys.map(k => Number(d[k as keyof typeof d])));
               const barCount = returnsRows.length * keys.length;
               const valueLabel = barValueLabel(barCount, barPct, values, undefined, keys.length > 1 ? { gap: 4 } : {});
-              // The axis stays hidden while the labels carry the numbers; shown when they won't fit
-              const labelled = !!valueLabel && barLabelsFit(barCount, barPct, values, keys.length);
+              return (
+            // The axis stays hidden while the labels carry the numbers, and is shown when they
+            // won't fit; decided from the chart's measured width (less its 5px margins and the
+            // 40px axis), so it follows window resizes
+            <MeasuredWidth>{width => {
+              const labelled = !!valueLabel && barLabelsFit(barCount, barPct, values, width - 50, { perGroup: keys.length });
               return (
             <ResponsiveContainer width="100%" height={350}>
               <BarChart
@@ -1858,6 +1862,8 @@ export default function PortfolioTab({
               </BarChart>
             </ResponsiveContainer>
               );
+            }}</MeasuredWidth>
+              );
             })()}
           </div>
 
@@ -1872,7 +1878,9 @@ export default function PortfolioTab({
               const values = growthRows.flatMap(d => keys.map(k => d[k]));
               const barCount = growthRows.length * keys.length;
               const valueLabel = barValueLabel(barCount, barPct, values, undefined, keys.length > 1 ? { gap: 4 } : {});
-              const labelled = !!valueLabel && barLabelsFit(barCount, barPct, values, keys.length);
+              return (
+            <MeasuredWidth>{width => {
+              const labelled = !!valueLabel && barLabelsFit(barCount, barPct, values, width - 50, { perGroup: keys.length });
               return (
             <ResponsiveContainer width="100%" height={350}>
               <BarChart
@@ -1905,6 +1913,8 @@ export default function PortfolioTab({
                 )}
               </BarChart>
             </ResponsiveContainer>
+              );
+            }}</MeasuredWidth>
               );
             })()}
           </div>

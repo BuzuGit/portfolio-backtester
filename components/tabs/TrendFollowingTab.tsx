@@ -15,7 +15,7 @@ import type { DateRange } from '@/lib/backtest';
 import { trendFollowingAnalysis, calculateTrendMonthlyReturns, getTrendAnnualReturnsChartData } from '@/lib/trend';
 import {
   CHART_PALETTE, GAIN, LOSS, LOSS_AREA, SMA_COLOR, TREND_COLOR, FIELD, PINNED_FILTERS,
-  SHARPE_HINT_RF, barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, ResponsiveContainer,
+  SHARPE_HINT_RF, barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, MeasuredWidth, ResponsiveContainer,
 } from '@/components/ui';
 
 // Risk-free rate options (0% to 5%, 0.5% steps): the cash the strategy earns while out of the
@@ -498,17 +498,20 @@ export default function TrendFollowingTab({
                   if (chartData.length === 0) return null;
                   // Bar labels by the app-wide rule (ui.tsx barValueLabel): two bars a year side
                   // by side, each counted. The axis stays hidden while the labels carry the
-                  // numbers, and appears when they won't fit.
+                  // numbers, and appears when they won't fit: decided from the chart's measured
+                  // width (less its 5px margins and the 40px axis), so it follows window resizes.
                   const pctLabel = (v: number) => `${v.toFixed(1)}%`;
                   const labelValues = chartData.flatMap(d => [Number(d['Buy & Hold']), Number(d['Trend Following'])]);
                   const barCount = chartData.length * 2;
                   const valueLabel = barValueLabel(barCount, pctLabel, labelValues, undefined, { gap: 4 });
-                  const labelled = !!valueLabel && barLabelsFit(barCount, pctLabel, labelValues, 2);
 
                   return (
                     <>
                       <div className="bg-white rounded-lg mb-4">
                         <h4 className="text-md font-semibold text-gray-700 mb-2">Annual Returns</h4>
+                        <MeasuredWidth>{width => {
+                        const labelled = !!valueLabel && barLabelsFit(barCount, pctLabel, labelValues, width - 50, { perGroup: 2 });
+                        return (
                         <ResponsiveContainer width="100%" height={300}>
                           <BarChart
                             data={chartData}
@@ -533,6 +536,8 @@ export default function TrendFollowingTab({
                             </Bar>
                           </BarChart>
                         </ResponsiveContainer>
+                        );
+                        }}</MeasuredWidth>
                       </div>
 
                       {/* Monthly Returns Table - Buy & Hold */}

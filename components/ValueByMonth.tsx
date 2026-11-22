@@ -472,9 +472,11 @@ const ValueBars = React.memo(function ValueBars({ shown, groups, totalColor, sha
   }];
   // The month's total above each column, by the app-wide rule (ui.tsx barValueLabel): one label
   // per stacked column, on the top series; none over 100 months. Not in the % view, where every
-  // column adds up to 100% and the label would say nothing.
+  // column adds up to 100% and the label would say nothing. categoryGap matches barCategoryGap
+  // below (touching bars: none), so the labels get exactly the room there is.
   const totalLabel = share ? undefined
-    : barValueLabel(shown.length, shortLabelMoney, shown.map(p => p.value), i => shown[i]?.value ?? 0, touching ? { gap: 0 } : {});
+    : barValueLabel(shown.length, shortLabelMoney, shown.map(p => p.value), i => shown[i]?.value ?? 0,
+      { categoryGap: touching ? 0 : shown.length > 60 ? 0.1 : 0.2 });
   return (
     <ResponsiveContainer width="100%" height={phone ? 240 : 300}>
       <BarChart
