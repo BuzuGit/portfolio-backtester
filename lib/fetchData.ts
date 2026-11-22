@@ -118,6 +118,11 @@ export interface AssetLookup {
   // "Group M&C" toggle is on — e.g. "Metals & Crypto" for gold, silver and crypto, which the
   // standard Asset Class files elsewhere. '' (blank or "-") = use Asset Class.
   portfolioClass?: string;
+  // "Exposure" column (found by header, optional): what the asset gives you exposure to, in the
+  // user's own words ("World", "Poland", "EM", "Gold"...). ETFs swapped for one another share a
+  // label, so the Positions tab's Value by Month-end chart can follow e.g. "World equities" across
+  // the swaps. '' (blank or "-") = not given.
+  exposure?: string;
 }
 
 // Where one Lookup row appears in the Markets tab. A row can appear in several sections: the
@@ -848,6 +853,8 @@ export function parseLookupTable(csvText: string): { lookup: AssetLookup[]; warn
   const COL_SNAP_COUNTRY_ORDER = colOf('SnapshotCountryOrder', 10);
   // No fallback position: if the sheet has no PortfolioClass column, every row uses Asset Class.
   const COL_PORTFOLIO_CLASS = colOf('PortfolioClass', -1);
+  // Optional too: no Exposure column = no exposure groups
+  const COL_EXPOSURE = colOf('Exposure', -1);
 
   const lookup: AssetLookup[] = [];
 
@@ -895,9 +902,12 @@ export function parseLookupTable(csvText: string): { lookup: AssetLookup[]; warn
     const snapshotCountryOrder = isNaN(countryOrderNum) ? null : countryOrderNum;
     // PortfolioClass: a single class name; blank or "-" = fall back to Asset Class.
     const portfolioClass = COL_PORTFOLIO_CLASS >= 0 ? (snapList(COL_PORTFOLIO_CLASS)[0] || '') : '';
+    // Exposure: one label; blank or "-" = not given. Taken whole (a label may contain a comma).
+    const exposureRaw = cell(COL_EXPOSURE);
+    const exposure = exposureRaw === '-' ? '' : exposureRaw;
 
     if (ticker && name) {
-      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshots, snapshotCountry, snapshotCountryOrder, portfolioClass });
+      lookup.push({ ticker, name, currency, fx, assetClass, assetSubcategory, snapshots, snapshotCountry, snapshotCountryOrder, portfolioClass, exposure });
     }
   }
 
