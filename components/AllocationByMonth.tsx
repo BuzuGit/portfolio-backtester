@@ -210,7 +210,19 @@ export default function AllocationByMonth({
     );
   }, [byDate, bands, amountCcy, showRisk, lastDate]);
 
-  if (shown.length === 0) return null;
+  // The same month-ends in money rather than %: all assets, or only the filtered class. Built
+  // before the early return below, so it still shows when THIS chart has nothing in its period
+  // (Value by Month-end has its own period and may well have something to draw).
+  const valueChart = (
+    <ValueByMonth
+      months={months} classOf={classOf} ccyOf={ccyOf} exposureOf={exposureOf} tickerAccounts={tickerAccounts}
+      accountFilter={accountFilter} currencyFilter={currencyFilter} classFilter={classFilter}
+      amountCcy={amountCcy} period={valuePeriod} setPeriod={setValuePeriod}
+      excluded={valueExcluded} setExcluded={setValueExcluded}
+    />
+  );
+
+  if (shown.length === 0) return valueChart;
 
   const last = shown[shown.length - 1];
   const thenMix = (hoverDate && byDate.get(hoverDate)) || shown[0];
@@ -317,13 +329,7 @@ export default function AllocationByMonth({
       />
     </div>
 
-    {/* The same month-ends in money rather than %: all assets, or only the filtered class */}
-    <ValueByMonth
-      months={months} classOf={classOf} ccyOf={ccyOf} exposureOf={exposureOf} tickerAccounts={tickerAccounts}
-      accountFilter={accountFilter} currencyFilter={currencyFilter} classFilter={classFilter}
-      amountCcy={amountCcy} period={valuePeriod} setPeriod={setValuePeriod}
-      excluded={valueExcluded} setExcluded={setValueExcluded}
-    />
+    {valueChart}
     </>
   );
 }
