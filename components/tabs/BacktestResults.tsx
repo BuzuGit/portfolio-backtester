@@ -17,8 +17,8 @@ import { calculateMonthlyReturns, calculateWithdrawalReturns, formatPeriod, getW
 import { getPairedMonthlyReturns, getRollingCorrelationData, pearsonCorrelation } from '@/lib/correlation';
 import { PhoneChoice } from '@/components/PhoneSheet';
 import {
-  BLACK, CAGR_HINT, FIELD, GAIN, LOSS, MUTED, MUTED_LABEL, ResponsiveContainer, SEG, SHARPE_HINT, SLATE,
-  formatPrice, lossBarLabel, lossLabelRoom, segBtn,
+  BLACK, CAGR_HINT, FIELD, GAIN, LOSS, MUTED, ResponsiveContainer, SEG, SHARPE_HINT, SLATE,
+  barLabelRoom, barLabelsFit, barLossRoom, barValueLabel, formatPrice, segBtn,
 } from '@/components/ui';
 import {
   CORRELATION_WINDOWS, RETURNS_PERIOD_CHOICES, ROLLING_RETURN_YEARS, STREAK_VIEWS, UpMonthsSummary, phoneAxisMoney,
@@ -263,11 +263,14 @@ export default function BacktestResults({
           // negative. TWO OR MORE keep their own colours, because telling the portfolios
           // apart is the entire point of this chart and one colour per sign would erase it.
           const singleSeries = backtestResults.length === 1;
-          // The annual view keeps a label on every bar, exactly as it always had. The
-          // other views can run to hundreds of bars, so it is the TOTAL number of labels
-          // (bars x portfolios) that decides whether they would still be readable.
-          const showLabels = backtestReturnsPeriod === 'annual'
-            || rows.length * backtestResults.length < 48;
+          // Bar labels by the app-wide rule (ui.tsx barValueLabel): the portfolios stand side
+          // by side, so it is the TOTAL number of bars (periods x portfolios) that sets the
+          // size, and none over 100. A streak label is a plain month count, not a percentage.
+          const barCount = rows.length * backtestResults.length;
+          const labelFormat = streak ? (v: number) => String(v) : (v: number) => `${v.toFixed(1)}%`;
+          const labelValues = rows.flatMap(r => backtestResults.map(res => Number(r[res.portfolio.name])));
+          const valueLabel = barValueLabel(barCount, labelFormat, labelValues, undefined, singleSeries ? {} : { gap: 4 });
+          const showLabels = !!valueLabel && barLabelsFit(barCount, labelFormat, labelValues, backtestResults.length);
           const heading = backtestReturnsPeriod === 'annual' ? 'Annual Returns'
             : backtestReturnsPeriod === 'monthly' ? 'Monthly Returns'
             : backtestReturnsPeriod === 'quarterly' ? 'Quarterly Returns'
@@ -348,7 +351,7 @@ export default function BacktestResults({
               )}
               <ResponsiveContainer width="100%" height={300}>
                 {/* No CartesianGrid, matching the Monthly tab's returns chart */}
-                <BarChart data={rows} margin={{ top: 20, right: 5, left: 5, bottom: 5 }}>
+                <BarChart data={rows} margin={{ top: Math.max(10, valueLabel ? barLabelRoom(barCount) : 0), right: 5, left: 5, bottom: 5 }}>
                   <XAxis
                     dataKey="label"
                     tick={(props: { x: number; y: number; payload: { value: string } }) => {
@@ -375,11 +378,12 @@ export default function BacktestResults({
                       how this chart has always looked. Once the labels are too dense to
                       draw, it appears, so the bars never lose their scale entirely.
                       Streaks are a count of months, so it drops the % sign. */}
-                  {/* padding: room under the lowest bar for its loss label (lossBarLabel) */}
+                  {/* padding: room under the lowest bar for its loss label */}
                   {showLabels
                     ? <YAxis hide domain={['auto', 'auto']}
-                        padding={{ bottom: lossLabelRoom(rows.some(r => backtestResults.some(res => Number(r[res.portfolio.name]) < 0)), 11) }} />
-                    : <YAxis tick={{ fontSize: 9 }} width={40} tickFormatter={(v: number) => streak ? v.toFixed(0) : `${v.toFixed(0)}%`} />}
+                        padding={{ bottom: barLossRoom(barCount, labelValues.some(v => v < 0)) }} />
+                    : <YAxis tick={{ fontSize: 9 }} width={40} tickFormatter={(v: number) => streak ? v.toFixed(0) : `${v.toFixed(0)}%`}
+                        padding={{ bottom: valueLabel ? barLossRoom(barCount, labelValues.some(v => v < 0)) : 0 }} />}
                   <Tooltip
                     formatter={(value: number, name: string, props: { payload?: PeriodicReturnsRow }) => {
                       if (streak) return [`${value} month${value === 1 ? '' : 's'}`, name];
@@ -416,25 +420,8 @@ export default function BacktestResults({
                       {singleSeries && rows.map((row, index) => (
                         <Cell key={index} fill={Number(row[result.portfolio.name]) < 0 ? LOSS : GAIN} />
                       ))}
-                      {/* Labels for positive returns - positioned above bar.
-                          A streak label is a plain month count, not a percentage. */}
-                      {showLabels && (
-                        <LabelList
-                          dataKey={result.portfolio.name}
-                          position="top"
-                          formatter={(value: number) => streak
-                            ? (value > 0 ? String(value) : '')
-                            : (value >= 0 ? `${value.toFixed(1)}%` : '')}
-                          style={{ fontSize: '11px', fill: MUTED_LABEL }}
-                        />
-                      )}
-                      {/* Labels for negative returns - positioned below bar in red */}
-                      {showLabels && (
-                        <LabelList
-                          dataKey={result.portfolio.name}
-                          content={lossBarLabel((value: number) => `${value.toFixed(1)}%`, { fontSize: '11px', fill: LOSS })}
-                        />
-                      )}
+                      {/* Each bar's value: above a gain, under a loss in red */}
+                      {valueLabel && <LabelList dataKey={result.portfolio.name} content={valueLabel} />}
                     </Bar>
                   ))}
                 </BarChart>
@@ -525,9 +512,10 @@ export default function BacktestResults({
           : backtestReturnsPeriod === 'quarterly' ? 'quarters' : 'months';
         // Rolling bars are annualised, so their unit carries a "per year".
         const unit = deltaRolling ? 'pp/yr' : 'pp';
-        // Same crowding rule as the chart above: one series here, so it is simply
-        // the bar count that decides whether a label on each one stays readable.
-        const showLabels = rows.length < 48;
+        // Bar labels by the app-wide rule (ui.tsx barValueLabel), one series here. Each
+        // side's numbers wear its own colour, as its bars do.
+        const deltaLabel = barValueLabel(rows.length, (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}`,
+          rows.map(r => Number(r.delta)), undefined, { fill: (v: number) => (v >= 0 ? a.color : b.color) });
 
         return (
           // A section of the returns card rather than a card of its own, so this
@@ -730,7 +718,7 @@ export default function BacktestResults({
                 </p>
                 <ResponsiveContainer width="100%" height={300}>
                   {/* Gridless, matching every other chart on this page */}
-                  <BarChart data={rows} margin={{ top: 20, right: 5, left: 5, bottom: 5 }}>
+                  <BarChart data={rows} margin={{ top: Math.max(10, deltaLabel ? barLabelRoom(rows.length) : 0), right: 5, left: 5, bottom: 5 }}>
                     <XAxis
                       dataKey="label"
                       tick={(props: { x: number; y: number; payload: { value: string } }) => {
@@ -756,7 +744,7 @@ export default function BacktestResults({
                       tick={{ fontSize: 9 }}
                       width={45}
                       tickFormatter={(v: number) => `${v.toFixed(0)}${unit}`}
-                      padding={{ bottom: lossLabelRoom(rows.some(r => Number(r.delta) < 0), 9) }}
+                      padding={{ bottom: deltaLabel ? barLossRoom(rows.length, rows.some(r => Number(r.delta) < 0)) : 0 }}
                     />
                     <Tooltip
                       formatter={(value: number) => [
@@ -781,21 +769,8 @@ export default function BacktestResults({
                       {rows.map((row, index) => (
                         <Cell key={index} fill={row.delta >= 0 ? a.color : b.color} />
                       ))}
-                      {/* Two label lists so each side's numbers carry its own colour */}
-                      {showLabels && (
-                        <LabelList
-                          dataKey="delta"
-                          position="top"
-                          formatter={(value: number) => value >= 0 ? `+${value.toFixed(1)}` : ''}
-                          style={{ fontSize: '9px', fill: a.color }}
-                        />
-                      )}
-                      {showLabels && (
-                        <LabelList
-                          dataKey="delta"
-                          content={lossBarLabel((value: number) => value.toFixed(1), { fontSize: '9px', fill: b.color })}
-                        />
-                      )}
+                      {/* Each side's numbers carry its own colour */}
+                      {deltaLabel && <LabelList dataKey="delta" content={deltaLabel} />}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>

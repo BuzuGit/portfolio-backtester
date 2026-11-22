@@ -27,8 +27,8 @@ import {
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   BENCH_LABEL, BLACK, CAGR_HINT, CHART_PALETTE, FIELD, GAIN, GAIN_DEEP, GAIN_PILL, HALO, INK, INK_SOFT, LOSS,
-  LOSS_DEEP, LOSS_PILL, MUTED, MUTED_LABEL, ResponsiveContainer, SEG, SHARPE_HINT, SMA_COLOR, WINE_LABEL,
-  formatPrice, getHeatmapColor, getPriceHeatmap, heatColor, lossBarLabel, lossLabelRoom, heatTextOn,
+  LOSS_DEEP, LOSS_PILL, MUTED, ResponsiveContainer, SEG, SHARPE_HINT, SMA_COLOR, WINE_LABEL,
+  barLabelRoom, barLossRoom, barValueLabel, formatPrice, getHeatmapColor, getPriceHeatmap, heatColor, heatTextOn,
   segBtn, themedCell, type MonthlyChartPeriod,
 } from '@/components/ui';
 import {
@@ -1360,9 +1360,13 @@ export default function MonthlyTab({
               const returnsData = computeReturnsData();
               // Rolling and streak views produce one bar per month, like the monthly view,
               // so they share the monthly view's crowding rules for labels and axis ticks.
-              // Show bar labels unless there are too many bars to read (≥48 = 4+ years)
               const monthlyGrained = returnsChartPeriod === 'monthly' || !!rollingView || !!streakView;
-              const showReturnLabels = !monthlyGrained || returnsData.length < 48;
+              // Bar labels by the app-wide rule (ui.tsx barValueLabel): sized by the bar count,
+              // none over 100 bars. A streak is a plain month count; a return gets a "+" when up.
+              // On narrow bars (~70 quarters) the rule shortens "+12.3%" as far as "12".
+              const returnLabel = barValueLabel(returnsData.length,
+                streakView ? (v: number) => String(v) : (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`,
+                returnsData.map(d => d.return));
 
               // Build ReturnPoint[] from raw asset prices so we can reuse
               // calculateMonthlyReturns() for the calendar-style returns table
@@ -2422,7 +2426,7 @@ export default function MonthlyTab({
                         {/* No CartesianGrid, matching the price and drawdown charts above:
                             the bars themselves carry the shape, and the dashed zero line
                             below is the only reference level that actually matters here. */}
-                        <BarChart data={returnsData} margin={{ top: 20, right: 10, left: -5, bottom: 15 }}>
+                        <BarChart data={returnsData} margin={{ top: Math.max(10, barLabelRoom(returnsData.length)), right: 10, left: -5, bottom: 15 }}>
                           <XAxis
                             dataKey="label"
                             tick={(props: { x: number; y: number; payload: { value: string } }) => {
@@ -2450,7 +2454,7 @@ export default function MonthlyTab({
                             tick={{ fontSize: 9 }}
                             width={40}
                             tickFormatter={(v: number) => streakView ? v.toFixed(0) : `${v.toFixed(0)}%`}
-                            padding={{ bottom: lossLabelRoom(returnsData.some(d => d.return < 0), 9) }}
+                            padding={{ bottom: returnLabel ? barLossRoom(returnsData.length, returnsData.some(d => d.return < 0)) : 0 }}
                           />
                           <Tooltip
                             formatter={(value: number) => streakView
@@ -2490,25 +2494,8 @@ export default function MonthlyTab({
                             {returnsData.map((entry, index) => (
                               <Cell key={index} fill={entry.return >= 0 ? GAIN : LOSS} />
                             ))}
-                            {/* Labels above positive bars — a plain month count on a streak
-                                view, where a "%" would be nonsense */}
-                            {showReturnLabels && (
-                              <LabelList
-                                dataKey="return"
-                                position="top"
-                                formatter={(value: number) => streakView
-                                  ? (value > 0 ? String(value) : '')
-                                  : (value >= 0 ? `+${value.toFixed(1)}%` : '')}
-                                style={{ fontSize: '9px', fill: MUTED_LABEL }}
-                              />
-                            )}
-                            {/* Labels below negative bars */}
-                            {showReturnLabels && (
-                              <LabelList
-                                dataKey="return"
-                                content={lossBarLabel((value: number) => `${value.toFixed(1)}%`, { fontSize: '9px', fill: LOSS })}
-                              />
-                            )}
+                            {/* Each bar's value: above a gain, under a loss */}
+                            {returnLabel && <LabelList dataKey="return" content={returnLabel} />}
                           </Bar>
                         </BarChart>
                       </ResponsiveContainer>
@@ -2532,10 +2519,13 @@ export default function MonthlyTab({
                     const pct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
                     // Bar labels drop the leading "+" — the bar's direction already says the sign,
                     // and with 24 of them on screen every saved character helps. Months with no
-                    // price return an empty string so nothing is drawn for them.
-                    // Gains: above the bar (Recharts' "top"). Losses: lossBarLabel, under the bar.
-                    const barLabel = (v: number | null) =>
-                      (v === null || v === undefined || v < 0) ? '' : `${v.toFixed(1)}%`;
+                    // price get no label. Gains: above the bar. Losses: under it.
+                    // Sized by the app-wide rule (ui.tsx barValueLabel): 24 bars side by side, each
+                    // series in its own label colour. The size comes from all 24 together.
+                    const stressBarCount = rows.length * 2;
+                    const stressLabelValues = rows.flatMap(r => [r.asset ?? 0, r.bench ?? 0]);
+                    const stressLabel = (fill: string) => barValueLabel(stressBarCount, (v: number) => `${v.toFixed(1)}%`,
+                      stressLabelValues, undefined, { gap: STRESS_BAR_GAP, fill });
 
                     // --- The gap strip ---
                     // Drawn as a LabelList with custom content rather than as HTML above the
@@ -2562,8 +2552,9 @@ export default function MonthlyTab({
                     const stressHi = Math.max(0, ...stressVals);
                     const stressLo = Math.min(0, ...stressVals);
                     const stressSpan = (stressHi - stressLo) || 1;
-                    // (Room below for the loss labels under the lowest bars: 10% of the span)
-                    const stressDomain: [number, number] = [stressLo - stressSpan * (stressLo < 0 ? 0.10 : 0.06), stressHi + stressSpan * 0.18];
+                    // (Room below for the loss labels under the lowest bars: 18% of the span, enough
+                    // for a 16px label)
+                    const stressDomain: [number, number] = [stressLo - stressSpan * (stressLo < 0 ? 0.18 : 0.06), stressHi + stressSpan * 0.18];
                     // Pinning the domain costs Recharts its round auto-ticks — the axis came out
                     // reading -10%, -4%, 2%, 11%. So the ticks are chosen here instead: a 1/2/5
                     // step, and only the multiples that fall INSIDE the domain. That keeps the
@@ -2609,39 +2600,11 @@ export default function MonthlyTab({
                       return out;
                     })();
 
-                    // Only the LAST month with a value gets a label — the year's outcome. Which
-                    // month that is differs per series (one may run out of data earlier), so it
-                    // is found per key rather than assumed to be December.
-                    const lastFilled = (key: 'cumAsset' | 'cumBench') => {
-                      for (let i = rows.length - 1; i >= 0; i--) if (rows[i][key] !== null) return i;
-                      return -1;
-                    };
-                    const renderEndLabel = (key: 'cumAsset' | 'cumBench', fill: string) =>
-                      (props: { x?: string | number; y?: string | number; width?: string | number; height?: string | number; index?: number }) => {
-                        const index = props.index;
-                        if (index === undefined || index !== lastFilled(key)) return null;
-                        const v = rows[index][key];
-                        if (v === null) return null;
-                        const x = Number(props.x), width = Number(props.width);
-                        const y = Number(props.y), height = Number(props.height);
-                        if (!isFinite(x) || !isFinite(width) || !isFinite(y)) return null;
-                        // Do NOT assume `y` is the bar's top edge with a positive height. For a bar
-                        // hanging below the 100 line Recharts anchors `y` at the VALUE end and hands
-                        // back a NEGATIVE height back up to the baseline — assuming otherwise put
-                        // every below-100 label in the same spot just under the 100 line, nowhere
-                        // near the bar it belonged to. Deriving both edges works either way round.
-                        // Do NOT assume `y` is the bar's top edge with a positive height —
-                        // Recharts sometimes anchors `y` at the value end and returns a NEGATIVE
-                        // height back to the baseline. Deriving the top from both ends works
-                        // either way round.
-                        const h = isFinite(height) ? height : 0;
-                        const top = Math.min(y, y + h);
-                        return (
-                          <text x={x + width / 2} y={top - 5} textAnchor="middle" fontSize={11} fontWeight={700} fill={fill}>
-                            {v.toFixed(1)}
-                          </text>
-                        );
-                      };
+                    // Every month's level above its bar, by the app-wide rule (ui.tsx
+                    // barValueLabel), like the monthly bars above: 24 bars side by side, each
+                    // series in its own label colour, months with no price unlabelled.
+                    const cumLabel = (fill: string) => barValueLabel(stressBarCount, (v: number) => v.toFixed(1),
+                      rows.flatMap(r => [r.cumAsset ?? 0, r.cumBench ?? 0]), undefined, { gap: STRESS_BAR_GAP, fill });
                     // Recharts types x/width as `string | number`, so they are coerced rather
                     // than assumed — a non-numeric x would place the pill at NaN and vanish it.
                     const renderGapPill = (props: { x?: string | number; width?: string | number; index?: number }) => {
@@ -2764,21 +2727,17 @@ export default function MonthlyTab({
                                 <ReferenceLine y={0} stroke="#9CA3AF" strokeWidth={1} />
                                 {/* Black for the asset and gold (MARKET_LINE_COLOR) for the benchmark:
                                     world equities are gold wherever they are the yardstick.
-                                    Labels sit above a gain bar and under a loss bar (lossBarLabel),
+                                    Labels sit above a gain bar and under a loss bar (barValueLabel),
                                     in each series' own label colour. isAnimationActive={false} is what
                                     makes them appear at all: Recharts draws labels only after the
                                     entry animation finishes. */}
                                 <Bar dataKey="asset" name={assetName} fill={BLACK} isAnimationActive={false}>
-                                  <LabelList dataKey="asset" position="top" formatter={barLabel}
-                                             style={{ fontSize: '8px', fill: INK_SOFT }} />
-                                  <LabelList dataKey="asset" content={lossBarLabel(v => `${v.toFixed(1)}%`, { fontSize: '8px', fill: INK_SOFT })} />
+                                  {stressLabel(INK_SOFT) && <LabelList dataKey="asset" content={stressLabel(INK_SOFT)} />}
                                   {/* The gap strip rides on this series purely to get its x */}
                                   <LabelList content={renderGapPill} />
                                 </Bar>
                                 <Bar dataKey="bench" name="World equities (IWDA)" fill={MARKET_LINE_COLOR} isAnimationActive={false}>
-                                  <LabelList dataKey="bench" position="top" formatter={barLabel}
-                                             style={{ fontSize: '8px', fill: BENCH_LABEL }} />
-                                  <LabelList dataKey="bench" content={lossBarLabel(v => `${v.toFixed(1)}%`, { fontSize: '8px', fill: BENCH_LABEL })} />
+                                  {stressLabel(BENCH_LABEL) && <LabelList dataKey="bench" content={stressLabel(BENCH_LABEL)} />}
                                 </Bar>
                               </BarChart>
                             </ResponsiveContainer>
@@ -2791,7 +2750,7 @@ export default function MonthlyTab({
                               Cumulative — 100 at the start of {stressYear}, compounded month by month
                             </div>
                             <ResponsiveContainer width="100%" height={196}>
-                              <BarChart data={rows} barGap={STRESS_BAR_GAP} margin={{ top: 14, right: 10, left: -5, bottom: 5 }}>
+                              <BarChart data={rows} barGap={STRESS_BAR_GAP} margin={{ top: Math.max(14, cumLabel(INK) ? barLabelRoom(stressBarCount) : 0), right: 10, left: -5, bottom: 5 }}>
                                 <CartesianGrid strokeDasharray="3 3" />
                                 <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                                 <YAxis tick={{ fontSize: 9 }} width={40} domain={cumDomain} ticks={cumTicks}
@@ -2806,10 +2765,10 @@ export default function MonthlyTab({
                                 <ReferenceLine y={100} stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth={1} />
                                 <Legend wrapperStyle={{ fontSize: 11 }} />
                                 <Bar dataKey="cumAsset" name={assetName} fill={BLACK} isAnimationActive={false}>
-                                  <LabelList content={renderEndLabel('cumAsset', INK)} />
+                                  {cumLabel(INK) && <LabelList dataKey="cumAsset" content={cumLabel(INK)} />}
                                 </Bar>
                                 <Bar dataKey="cumBench" name="World equities (IWDA)" fill={MARKET_LINE_COLOR} isAnimationActive={false}>
-                                  <LabelList content={renderEndLabel('cumBench', BENCH_LABEL)} />
+                                  {cumLabel(BENCH_LABEL) && <LabelList dataKey="cumBench" content={cumLabel(BENCH_LABEL)} />}
                                 </Bar>
                               </BarChart>
                             </ResponsiveContainer>

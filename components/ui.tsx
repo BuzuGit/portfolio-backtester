@@ -179,6 +179,179 @@ export const lossBarLabel = (format: (v: number) => string, style: React.CSSProp
 /** Room (px) to leave under a bar chart's lowest bar for its loss label: none if nothing is below zero. */
 export const lossLabelRoom = (anyBelowZero: boolean, fontPx: number) => (anyBelowZero ? fontPx + 6 : 0);
 
+/*
+  THE BAR VALUE LABEL RULE — one rule for every bar chart in the app (the user's, 2026-11-22).
+  Each bar shows its value just above it (below it, for a bar under zero), in a size set by how
+  many bars the chart draws ("up to" includes the number itself):
+      up to  24 bars -> 16px, bold   (e.g. one bar per year, or two years of months)
+      up to  60 bars -> 12px   (e.g. per quarter, or five years of months)
+      up to 100 bars -> 10px
+      more           -> no labels (they could only overlap)
+  "Bars" = every bar drawn: side-by-side bars count one each; a stacked column counts once (its
+  label is the column's total, on top). The size is decided for the WHOLE chart, from its longest
+  label: if that one is wider than the room a bar has (a narrow phone, a long figure), every label
+  steps down a size together; if it can't fit even at 10px, every number gets shorter together
+  (see SHORTENING below), and only if even whole numbers don't fit does the chart show no labels
+  at all — never a patchy mix where only the short figures appear.
+  Use barLabelSize / barValueLabel / barLabelRoom below; never hand-pick a label size again.
+  Keep figures short (shortLabelMoney: "854", "8.4k", "22k", "1.2M") so they fit more often.
+*/
+/** Money for bar labels, at most 4 characters: "854", "8.4k", "22k", "245k", "1.2M", "12M". */
+export const shortLabelMoney = (v: number): string => {
+  const a = Math.abs(v), s = v < 0 ? '-' : '';
+  if (a < 1e3) return `${s}${Math.round(a)}`;
+  if (a < 1e4) return `${s}${(a / 1e3).toFixed(1)}k`;
+  if (a < 999.5e3) return `${s}${Math.round(a / 1e3)}k`;
+  if (a < 1e7) return `${s}${(a / 1e6).toFixed(1)}M`;
+  return `${s}${Math.round(a / 1e6)}M`;
+};
+export const BAR_LABEL_STEPS: readonly { maxBars: number; px: number }[] = [
+  { maxBars: 24, px: 16 }, { maxBars: 60, px: 12 }, { maxBars: 100, px: 10 },
+];
+/** The label size for a chart drawing `barCount` bars, or null for "no labels". */
+export const barLabelSize = (barCount: number): number | null =>
+  BAR_LABEL_STEPS.find(s => barCount <= s.maxBars)?.px ?? null;
+/** Room (px) to leave above the tallest bar (a chart's top margin) for its labels. */
+export const barLabelRoom = (barCount: number) => {
+  const px = barLabelSize(barCount);
+  return px ? px + 8 : 0;
+};
+/** Counts for bar labels (shares held): "0.25", "12.5", "340", "1.2k", "12k". */
+export const shortLabelCount = (v: number): string =>
+  Math.abs(v) >= 1e3 ? shortLabelMoney(v) : String(Number(v.toPrecision(3)));
+/** Room (px) to leave under the lowest bar for a below-zero label (a YAxis bottom padding). */
+export const barLossRoom = (barCount: number, anyBelowZero: boolean) => lossLabelRoom(anyBelowZero, barLabelSize(barCount) ?? 0);
+
+/** Extra choices for barValueLabel; the defaults suit one series of bars with Recharts' usual gaps. */
+export type BarLabelOpts = {
+  /** Empty px beside each bar, which a label may spill into. Default: Recharts' usual gap (a
+   *  quarter of a bar's width). Side-by-side series (barGap 4): 4. barCategoryGap={1}: 1. */
+  gap?: number;
+  /** The label's colour: one for all, or chosen per value. Default MUTED_LABEL, and LOSS below zero. */
+  fill?: string | ((v: number) => string);
+  /** Always above the column, even when its total is below zero: for a stacked column whose top
+   *  series ends above zero although a part of it hangs below (Contributions and Profit). */
+  alwaysAbove?: boolean;
+};
+
+// A label's width per 1px of font size (character widths of the app's sans-serif: digits ~0.56em,
+// "." 0.28em, "%" 0.89em...), so the fit test is close to the truth.
+const labelEm = (s: string) => Array.from(s).reduce((sum, c) =>
+  sum + (/[0-9]/.test(c) ? 0.56 : c === '.' || c === ',' ? 0.28 : c === '%' ? 0.89 : c === 'M' ? 0.83 : c === '-' ? 0.33 : 0.5), 0);
+// Charts in the first band (up to 24 bars) get bold labels; bold type runs ~8% wider, which the
+// fit test allows for. The weight follows the bar count, so it holds even after a step down.
+const barLabelBold = (barCount: number) => barCount <= BAR_LABEL_STEPS[0].maxBars;
+const BOLD_WIDTH = 1.08;
+// The size the chart's longest label fits at: start from the rule's size and step down 2px at a
+// time; null when it won't fit even at 10px.
+const fittingSize = (px: number, longestEm: number, room: number) => {
+  let size = px;
+  while (size >= 10 && longestEm * size > room) size -= 2;
+  return size >= 10 ? size : null;
+};
+
+/*
+  SHORTENING (the user's choice, 2026-11-22): when a chart's labels don't fit even at 10px, the
+  numbers get shorter, one step at a time, until they do — for every label on the chart at once:
+      step 0  as formatted          "+12.3%"  "5.2M"  "4.25%"
+      step 1  no "%" and no "+"      "12.3"   "5.2M"  "4.25"   (the axis still says %)
+      step 2  one decimal fewer      "12"     "5M"    "4.3"
+      step 3  one fewer again        ...               "4"
+  Only when even whole numbers don't fit does the chart go without labels. The tooltip keeps the
+  exact figure.
+*/
+export const shortenBarLabel = (s: string, step: number): string => {
+  if (step <= 0) return s;
+  const t = s.replace(/%/g, '').replace(/^\+/, '');
+  const m = t.match(/^(-?)(\d+)(?:\.(\d+))?(.*)$/);
+  if (step === 1 || !m) return t;
+  const [, sign, whole, frac = '', suffix] = m;
+  const digits = Math.max(0, frac.length - (step - 1));
+  const n = Number(`${whole}.${frac || '0'}`).toFixed(digits);
+  return `${Number(n) === 0 ? '' : sign}${n}${suffix}`;         // never "-0"
+};
+// The longest label (in em) at each shortening step, from "as formatted" to whole numbers.
+const longestByStep = (format: (v: number) => string, values: number[]) => {
+  const texts = values.filter(v => v && isFinite(v)).map(format);
+  const maxFrac = Math.max(0, ...texts.map(s => (s.match(/\.(\d+)/)?.[1].length ?? 0)));
+  return Array.from({ length: maxFrac + 2 }, (_, step) =>
+    texts.reduce((m, s) => Math.max(m, labelEm(shortenBarLabel(s, step))), 0));
+};
+// The size and shortening step for a chart: the rule's size, stepped down to 10px, as formatted;
+// failing that, 10px with the numbers shortened as little as fits. null = no labels.
+const pickLabelFit = (px: number, longest: number[], widthFactor: number, room: number) => {
+  const size = fittingSize(px, longest[0] * widthFactor, room);
+  if (size) return { size, step: 0 };
+  for (let step = 1; step < longest.length; step++) {
+    if (longest[step] * widthFactor * 10 <= room) return { size: 10, step };
+  }
+  return null;
+};
+
+/**
+ * A LabelList `content` that writes each bar's value by the rule above. `format` turns the value
+ * into text ("22k", "5.8%"); `values` are all the values the chart will label (to find its
+ * longest label, which sets one size for every label). For a stacked column, put it on the TOP
+ * series and pass `valueOf` (index -> the column's total), so the label shows the column's total.
+ * Returns undefined when the chart has too many bars for labels: pass it straight to `content`.
+ */
+export const barValueLabel = (
+  barCount: number,
+  format: (v: number) => string,
+  values: number[],
+  valueOf?: (index: number) => number,
+  opts: BarLabelOpts = {},
+) => {
+  const px = barLabelSize(barCount);
+  if (!px) return undefined;
+  const bold = barLabelBold(barCount);
+  const longest = longestByStep(format, values);
+  if (longest[0] === 0) return undefined;
+  const Label = (props: { x?: string | number; y?: string | number; width?: string | number; height?: string | number; value?: unknown; index?: number }) => {
+    const v = valueOf && props.index !== undefined ? valueOf(props.index) : Number(props.value);
+    const x = Number(props.x), w = Number(props.width), y = Number(props.y), h = Number(props.height);
+    if (props.value === null || !isFinite(v) || v === 0 || ![x, w, y, h].every(isFinite)) return null;
+    // Room per bar: its own width plus the gap beside it. The size (and any shortening) comes
+    // from the chart's LONGEST label, so every bar works it out the same: one size, one form.
+    const fit = pickLabelFit(px, longest, bold ? BOLD_WIDTH : 1, Math.abs(w) + (opts.gap ?? Math.abs(w) * 0.25));
+    if (!fit) return null;
+    const { size } = fit;
+    const top = Math.min(y, y + h), bottom = Math.max(y, y + h);
+    const above = v >= 0 || opts.alwaysAbove;
+    const fill = typeof opts.fill === 'function' ? opts.fill(v) : opts.fill ?? (v >= 0 ? MUTED_LABEL : LOSS);
+    return (
+      // "bar-value-label": exempt from the phone 10px override (globals.css, phone-bar-labels)
+      <text className="bar-value-label" x={x + w / 2} y={above ? top - 4 : bottom + size + 1} textAnchor="middle"
+        style={{ fontSize: `${size}px`, fontWeight: bold ? 700 : undefined, fill }}>
+        {shortenBarLabel(format(v), fit.step)}
+      </text>
+    );
+  };
+  return Label;
+};
+
+/**
+ * Will this chart's labels fit? A best guess made BEFORE drawing, for the charts that hide their
+ * Y axis while every bar carries its value: they show the axis instead when the labels won't fit,
+ * so the bars never lose their scale. `perGroup` = side-by-side series per category. The guess
+ * leans towards "no" (it assumes a narrower plot than most screens give), since an axis shown
+ * beside labels does no harm, while labels gone AND the axis hidden would leave bare bars.
+ */
+export const barLabelsFit = (barCount: number, format: (v: number) => string, values: number[], perGroup = 1) => {
+  const px = barLabelSize(barCount);
+  if (!px) return false;
+  const longest = longestByStep(format, values);
+  if (longest[0] === 0) return false;
+  const screen = typeof window === 'undefined' ? 1440 : window.innerWidth;
+  // Phones: the card fills the screen less ~70px of padding and margins. Wider: the content
+  // column tops out at 1,656px, less the sidebar (~220px) and the card's padding and margins,
+  // with a little to spare. (These charts all sit in full-width cards.)
+  const plot = screen < 768 ? screen - 70 : Math.min(screen, 1656) - 360;
+  const slot = plot / Math.max(1, barCount / perGroup);          // one category's width
+  const w = perGroup > 1 ? (slot * 0.8 - (perGroup - 1) * 4) / perGroup : slot * 0.8;
+  return pickLabelFit(px, longest, barLabelBold(barCount) ? BOLD_WIDTH : 1, w + (perGroup > 1 ? 4 : w * 0.25)) !== null;
+};
+
 // Hover text for XIRR on the Positions tab: what the figure is, and the under-a-year rule in
 // calculateXIRR (the Markets Holdings page says the same in its own tooltips).
 export const XIRR_HINT = 'XIRR: money-weighted return per year, each purchase, dividend and sale on its own date.\n'

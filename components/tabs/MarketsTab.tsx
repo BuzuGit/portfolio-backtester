@@ -7,7 +7,7 @@
   filter and Monthly setters are passed in; every choice here lives in the main screen.
 */
 import React from 'react';
-import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, Customized } from 'recharts';
+import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, Customized, LabelList } from 'recharts';
 import type { AssetLookup } from '@/lib/fetchData';
 import { formatPeriod } from '@/lib/backtest';
 import {
@@ -17,7 +17,7 @@ import {
 import { PhoneChoice, periodOptions } from '@/components/PhoneSheet';
 import {
   CHART_PALETTE, GAIN, INK, LINE, LINE_MID, LOSS, MUTED, PHONE_SCROLL_ROW, PINNED_FILTERS, ResponsiveContainer, SEG,
-  formatPrice, heatTextOn, returnHeatColor, segBtn,
+  barLabelRoom, barLossRoom, barValueLabel, formatPrice, heatTextOn, returnHeatColor, segBtn,
 } from '@/components/ui';
 import { EdgeBubbles, type BubbleDef } from '@/components/charts';
 
@@ -419,13 +419,18 @@ export default function MarketsTab({
     if (marketsIsCountry) {
       return rows.map(r => {
         const data = r.history!.filter(h => inRange(h.date)).map(h => ({ date: h.date, v: h.v }));
+        // Bar labels by the app-wide rule (ui.tsx barValueLabel): e.g. 1Y = 13 bars at 16px,
+        // Max = hundreds of bars and none. Bars sit 1px apart (barCategoryGap 1). Where "2.7%"
+        // is too wide (5Y), the rule shortens it to "2.7".
+        const valueLabel = barValueLabel(data.length, v => `${v.toFixed(dp)}%`, data.map(d => d.v), undefined, { gap: 1 });
         return (
           <tr key={`chart-${r.ticker}`}><td colSpan={colCount} className="pt-2 pb-4 px-1">
             {header}
             <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={data} margin={{ top: 8, right: 8, left: -8, bottom: 0 }} barCategoryGap={1}>
+              <BarChart data={data} margin={{ top: Math.max(8, valueLabel ? barLabelRoom(data.length) : 0), right: 8, left: -8, bottom: 0 }} barCategoryGap={1}>
                 <XAxis dataKey="date" tickFormatter={shortMonth} tick={axisProps} minTickGap={40} tickLine={false} axisLine={{ stroke: LINE_MID }} />
-                <YAxis tickFormatter={pctTick} tick={axisProps} width={44} tickLine={false} axisLine={false} />
+                <YAxis tickFormatter={pctTick} tick={axisProps} width={44} tickLine={false} axisLine={false}
+                  padding={{ bottom: valueLabel ? barLossRoom(data.length, data.some(d => d.v < 0)) : 0 }} />
                 <ReferenceLine y={0} stroke="#9ca3af" />
                 <Tooltip
                   formatter={(v: number) => [`${v.toFixed(dp)}%`, r.name]}
@@ -434,6 +439,7 @@ export default function MarketsTab({
                 />
                 <Bar dataKey="v" isAnimationActive={false}>
                   {data.map(d => <Cell key={d.date} fill={d.v < 0 ? LOSS : INK} />)}
+                  {valueLabel && <LabelList dataKey="v" content={valueLabel} />}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
