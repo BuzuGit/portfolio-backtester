@@ -341,6 +341,9 @@ export interface ParsedData {
   ledgerData: LedgerRow[];    // Full transaction ledger (from Transactions sheet)
   presetPortfolios: PresetPortfolio[];  // Ready-made portfolios (from Portfolios sheet)
   edo: EdoData | null;        // EDO bond series + value grid (from EDO sheet); null if it failed to load
+  // Lookup columns whose header wasn't found and that were read by position instead (shown as a
+  // banner). Optional: a copy saved before this field existed simply has none.
+  lookupWarnings?: string[];
 }
 
 // One ready-made portfolio from the "Portfolios" sheet (gid=145431423),
@@ -611,7 +614,7 @@ export async function fetchSheetData(): Promise<ParsedData> {
 
   // Parse core CSVs
   const { data, assets } = parseSheetData(dataCsvText);
-  const lookup = parseLookupTable(lookupCsvText);
+  const { lookup, warnings: lookupWarnings } = parseLookupTable(lookupCsvText);
 
   // Parse Years sheet if it loaded successfully (wrapped in try/catch so it can't break the app)
   let yearsData: YearsRow[] = [];
@@ -729,7 +732,7 @@ export async function fetchSheetData(): Promise<ParsedData> {
 
   console.log(`Lookup table has ${lookup.length} assets: ${lookup.map(l => l.ticker).join(', ')}`);
 
-  return { data: pricedData, assets, lookup, yearsData, dailyData, ledgerData, presetPortfolios, edo };
+  return { data: pricedData, assets, lookup, yearsData, dailyData, ledgerData, presetPortfolios, edo, lookupWarnings };
 }
 
 /**
@@ -779,38 +782,65 @@ function parsePresetPortfolios(csvText: string): PresetPortfolio[] {
 }
 
 /**
- * Parses the lookup table CSV (ticker -> asset name, currency, FX ticker, asset class, subcategory).
- * Expects six columns: Ticker, Asset Name, Currency, FX, Asset Class, Asset Subcategory
+ * Parses the Lookup tab (ticker -> asset name, currency, FX ticker, asset class, subcategory, and
+ * the Markets / PortfolioClass columns).
  *
- * Column 1: Ticker (e.g., "SPY")
- * Column 2: Asset Name (e.g., "S&P 500 ETF")
- * Column 3: Currency (e.g., "USD", "SGD", "PLN")
- * Column 4: FX (e.g., "USDPLN", "SGDPLN", or empty for PLN assets)
- * Column 5: Asset Class (e.g., "Equities", "Fixed Income", "Alternatives")
- * Column 6: Asset Subcategory (e.g., "US Stocks", "Emerging Markets", "Gold")
+ * EVERY column is found by its HEADER NAME, so columns can be inserted or moved anywhere in the
+ * sheet without shifting data into the wrong field. The match forgives case, spaces and
+ * punctuation ("Asset Class" = "asset class" = "AssetClass"), but must otherwise be the whole
+ * header: "Name #char" is not "Name".
  *
- * @param csvText - The raw CSV file content
- * @returns Array of ticker-to-name-currency-fx-assetClass-assetSubcategory mappings
+ * If a header isn't found (renamed, or deleted), the column's usual position is used instead, so
+ * a sheet with its usual layout keeps working — AND a warning is returned, which the app shows
+ * as a banner, because reading by position after a column was moved would quietly give wrong
+ * figures. Optional columns (PortfolioClass) have no fallback and no warning: missing = unused.
+ *
+ *   Header                     usual position  e.g.
+ *   Ticker                     A               "SPY"
+ *   Name                       B               "S&P 500 ETF"
+ *   Currency                   C               "USD", "SGD", "PLN"
+ *   FX                         D               "USDPLN", or empty for PLN assets
+ *   Asset Class                E               "Equities", "Fixed Income", "Alternatives"
+ *   Asset Subcategory          F               "Basic", "Factor"
+ *   SnapshotCategory ... SnapshotCountryOrder   G-K (Markets tab layout)
+ *   PortfolioClass             (optional)      "Metals & Crypto"
+ *
+ * Exported for its tests (lib/fetchData.test.mjs).
  */
-function parseLookupTable(csvText: string): AssetLookup[] {
+export function parseLookupTable(csvText: string): { lookup: AssetLookup[]; warnings: string[] } {
   const lines = csvText.trim().split('\n');
+  const warnings: string[] = [];
 
   if (lines.length < 2) {
     console.warn('Lookup table is empty or has no data rows');
-    return [];
+    return { lookup: [], warnings };
   }
 
   // Auto-detect delimiter
   const delimiter = lines[0].includes('\t') ? '\t' : ',';
 
-  // The Markets columns (7-11) are found by their HEADER NAME, so inserting a column elsewhere
-  // in the sheet can't silently shift them into the wrong field; the usual position is only the
-  // fallback if a header is missing or renamed. (Columns 1-6 keep their fixed positions.)
-  const headers = parseCSVLine(lines[0].trim(), delimiter).map(h => h.trim().toLowerCase());
+  // Headers compared with case, spaces and punctuation removed (see the note above)
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const headers = parseCSVLine(lines[0].trim(), delimiter).map(norm);
+  const letter = (i: number) => String.fromCharCode(65 + i);   // 0 -> "A" (the sheet has < 26 columns)
+  // A column's index by its header; `fallback` = its usual position (-1 = optional column)
   const colOf = (name: string, fallback: number) => {
-    const i = headers.indexOf(name.toLowerCase());
-    return i >= 0 ? i : fallback;
+    const i = headers.indexOf(norm(name));
+    if (i >= 0) return i;
+    if (fallback >= 0) {
+      const msg = `Lookup tab: no "${name}" column header found, so column ${letter(fallback)} is being read as ${name}. ` +
+        `Check the header row (was it renamed or moved?).`;
+      console.warn(msg);
+      warnings.push(msg);
+    }
+    return fallback;
   };
+  const COL_TICKER = colOf('Ticker', 0);
+  const COL_NAME = colOf('Name', 1);
+  const COL_CURRENCY = colOf('Currency', 2);
+  const COL_FX = colOf('FX', 3);
+  const COL_ASSET_CLASS = colOf('Asset Class', 4);
+  const COL_ASSET_SUBCATEGORY = colOf('Asset Subcategory', 5);
   const COL_SNAP_CATEGORY = colOf('SnapshotCategory', 6);
   const COL_SNAP_SUBCATEGORY = colOf('SnapshotSubCategory', 7);
   const COL_SNAP_ORDER = colOf('SnapshotSubCategoryOrder', 8);
@@ -829,16 +859,16 @@ function parseLookupTable(csvText: string): AssetLookup[] {
     const values = parseCSVLine(line, delimiter);
     if (values.length < 2) continue;
 
-    const ticker = values[0].trim();
-    const name = values[1].trim();
-    // Currency defaults to "PLN" if not specified (column 3)
-    const currency = values.length > 2 ? values[2].trim() : 'PLN';
-    // FX ticker defaults to empty string if not specified (column 4)
-    const fx = values.length > 3 ? values[3].trim() : '';
-    // Asset class defaults to empty string if not specified (column 5)
-    const assetClass = values.length > 4 ? values[4].trim() : '';
-    // Asset subcategory defaults to empty string if not specified (column 6)
-    const assetSubcategory = values.length > 5 ? values[5].trim() : '';
+    // One cell by column index; '' when the row is shorter than that
+    const cell = (i: number) => (i >= 0 && values.length > i ? values[i].trim() : '');
+    const ticker = cell(COL_TICKER);
+    const name = cell(COL_NAME);
+    // Currency defaults to "PLN" if not specified
+    const currency = values.length > COL_CURRENCY ? cell(COL_CURRENCY) : 'PLN';
+    // FX ticker, asset class and subcategory default to empty strings
+    const fx = cell(COL_FX);
+    const assetClass = cell(COL_ASSET_CLASS);
+    const assetSubcategory = cell(COL_ASSET_SUBCATEGORY);
     // Markets tab columns 7-9 (SnapshotCategory, SnapshotSubCategory, SnapshotSubCategoryOrder).
     // Each cell may hold a comma-separated list; item N of each list belongs together (see
     // SnapshotPlacement). A "-" means "not included", so it is treated exactly like a blank.
@@ -871,7 +901,7 @@ function parseLookupTable(csvText: string): AssetLookup[] {
     }
   }
 
-  return lookup;
+  return { lookup, warnings };
 }
 
 /**

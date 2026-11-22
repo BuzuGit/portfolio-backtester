@@ -54,6 +54,7 @@ export interface PositionsTabProps {
   allCashAccounts: CashAccountBalance[];
   posAllocView: AllocView; setPosAllocView: (v: AllocView) => void;
   posAllocPeriod: MonthPeriod; setPosAllocPeriod: (p: MonthPeriod) => void;
+  posValuePeriod: MonthPeriod; setPosValuePeriod: (p: MonthPeriod) => void;
   calculateXIRR: (cashFlows: { date: Date; amount: number }[]) => number | null;
   getClosedTransactions: (ticker: string) => ClosedPositionRow[];
   getOpenPurchases: (ticker: string) => TransactionRow[];
@@ -93,7 +94,7 @@ export interface PositionsTabProps {
 
 export default function PositionsTab({
   assetData, assetLookup, closedData, transactionData, positionsModel, cashAccounts, edoMissingBanner,
-  allCashAccounts, posAllocView, setPosAllocView, posAllocPeriod, setPosAllocPeriod,
+  allCashAccounts, posAllocView, setPosAllocView, posAllocPeriod, setPosAllocPeriod, posValuePeriod, setPosValuePeriod,
   calculateXIRR, getClosedTransactions, getOpenPurchases, getOpenDividends, tableSort, sortPropsFor,
   closedSelectAllRef, openSelectAllRef, positionsCurrency, setPositionsCurrency, groupMetalsCrypto,
   setGroupMetalsCrypto, cashCategory, setCashCategory, cashSelected, setCashSelected, openAccountFilter,
@@ -1207,6 +1208,29 @@ export default function PositionsTab({
           Group M&amp;C
         </button>
         </span>
+
+        {/* Clear all filters (the class / currency / account picked by clicking a row or slice in
+            the cards below) in one click: the same funnel-with-a-cross button as the Cash Flows
+            app. Dimmed while no filter is on. Phones: 38px, an easier tap; there's no room for it
+            beside Group M&C, so it only appears (on a line of its own) while a filter is on. */}
+        {(() => {
+          const anyFilter = !!(openAssetClassFilter || openCurrencyFilter || openAccountFilter);
+          return (
+            <button
+              type="button"
+              onClick={() => { setOpenAssetClassFilter(null); setOpenCurrencyFilter(null); setOpenAccountFilter(null); }}
+              disabled={!anyFilter}
+              title={anyFilter ? 'Clear all filters' : 'No filters on'}
+              aria-label="Clear all filters"
+              className={`grid place-items-center w-8 h-8 max-md:w-[38px] max-md:h-[38px] p-0 border border-gray-300 rounded-lg bg-white text-gray-500 ${anyFilter ? 'hover:text-slate-800 hover:border-slate-500 cursor-pointer' : 'opacity-40 cursor-default max-md:hidden'}`}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M15 6.5V4.5A1.5 1.5 0 0 0 13.5 3h-10A1.5 1.5 0 0 0 2 4.5v1.2l6.5 6.8v7A1.5 1.5 0 0 0 10 21h1.5a1.5 1.5 0 0 0 1.5-1.5V18" />
+                <path d="M15.5 9.5l6 6M21.5 9.5l-6 6" />
+              </svg>
+            </button>
+          );
+        })()}
       </div>
 
       {/* --- SUMMARY VIEW (when no specific asset or cash balance is drilled into) --- */}
@@ -2005,6 +2029,7 @@ export default function PositionsTab({
                 positionsCurrency={positionsCurrency}
                 view={posAllocView} setView={setPosAllocView}
                 period={posAllocPeriod} setPeriod={setPosAllocPeriod}
+                valuePeriod={posValuePeriod} setValuePeriod={setPosValuePeriod}
               />
             )}
 

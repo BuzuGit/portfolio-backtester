@@ -557,6 +557,10 @@ const PortfolioBacktester = () => {
   // The Positions tab's Allocation by Month-end chart: by class or currency, and its period
   const [posAllocView, setPosAllocView] = useState<'class' | 'currency'>('class');
   const [posAllocPeriod, setPosAllocPeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y' | 'Max'>('Max');
+  // Lookup tab columns read by position because their header wasn't found (shown as a banner)
+  const [lookupWarnings, setLookupWarnings] = useState<string[]>([]);
+  // The Positions tab's Value by Month-end chart has its own period
+  const [posValuePeriod, setPosValuePeriod] = useState<'1Y' | '3Y' | '5Y' | '10Y' | 'Max'>('Max');
   // Which cash balance the user drilled into, keyed "account|currency".
   // Empty string = showing the summary list, mirroring openSelectedTicker above.
   const [cashSelected, setCashSelected] = useState<string>('');
@@ -837,6 +841,7 @@ const PortfolioBacktester = () => {
    */
   const applySheetData = (parsed: ParsedData, resetSelections: boolean) => {
       const { data, assets, lookup, yearsData: fetchedYearsData, dailyData: fetchedDailyData, ledgerData: fetchedLedgerData, presetPortfolios: fetchedPresets, edo: fetchedEdo } = parsed;
+      setLookupWarnings(parsed.lookupWarnings ?? []);
 
       // ---- Derive positions from the ledger -------------------------------
       // Replay the Transactions tab to work out what is still held, what was sold,
@@ -2673,6 +2678,15 @@ const PortfolioBacktester = () => {
             On wide screens no bottom margin, so it ends level with the dark sidebar beside it. */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4 min-[1520px]:mb-0 max-md:p-3">
 
+          {/* A Lookup column whose header wasn't found was read by its usual position instead
+              (lib/fetchData parseLookupTable). Loud on purpose, on every page: if the column was
+              moved, that position now holds something else and the figures would be quietly wrong. */}
+          {lookupWarnings.length > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {lookupWarnings.map(w => <div key={w}>{w}</div>)}
+            </div>
+          )}
+
           {/* Phones only: one slim line instead of the Data box and Menu button below (together they
               took about a quarter of the first screen): the page's name with the load status in
               small print under it. Pages are switched from the tab bar at the bottom, and the data
@@ -3042,6 +3056,7 @@ const PortfolioBacktester = () => {
               allCashAccounts={allCashAccounts}
               posAllocView={posAllocView} setPosAllocView={setPosAllocView}
               posAllocPeriod={posAllocPeriod} setPosAllocPeriod={setPosAllocPeriod}
+              posValuePeriod={posValuePeriod} setPosValuePeriod={setPosValuePeriod}
               calculateXIRR={calculateXIRR} getClosedTransactions={getClosedTransactions}
               getOpenPurchases={getOpenPurchases} getOpenDividends={getOpenDividends}
               tableSort={tableSort} sortPropsFor={sortPropsFor}

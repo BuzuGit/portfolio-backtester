@@ -38,6 +38,7 @@ import {
   type AllocView,
 } from '@/components/AllocationHistory';
 import { EdgeBubbles, twoLineLabelFont } from '@/components/charts';
+import ValueByMonth from '@/components/ValueByMonth';
 
 export type MonthPeriod = '1Y' | '3Y' | '5Y' | '10Y' | 'Max';
 type Period = MonthPeriod;
@@ -73,11 +74,13 @@ export interface AllocationByMonthProps {
   positionsCurrency: string;                       // '' = native: amounts then shown in PLN
   view: AllocView; setView: (v: AllocView) => void;
   period: Period; setPeriod: (p: Period) => void;
+  valuePeriod: Period; setValuePeriod: (p: Period) => void;   // the Value by Month-end chart's own period
 }
 
 export default function AllocationByMonth({
   assetData, assetLookup, positionsModel, allCashAccounts, groupMetalsCrypto, tickerAccounts,
   accountFilter, currencyFilter, classFilter, positionsCurrency, view, setView, period, setPeriod,
+  valuePeriod, setValuePeriod,
 }: AllocationByMonthProps) {
   const [hoverDate, setHoverDate] = useState<string | null>(null);
 
@@ -88,18 +91,22 @@ export default function AllocationByMonth({
   );
   const info = useMemo(() => new Map(assetLookup.map(a => [a.ticker, a])), [assetLookup]);
 
-  // Each month split into bands, after the filters. Same class / currency rules as the cards above
-  // (effectiveClass / effectiveCurrency there).
-  const mixes = useMemo((): MonthMix[] => {
-    const classOf = (t: string) => {
+  // A holding's class and currency. Same rules as the cards above (effectiveClass /
+  // effectiveCurrency there). Shared with the Value by Month-end chart below this one.
+  const { classOf, ccyOf } = useMemo(() => ({
+    classOf: (t: string) => {
       const a = info.get(t);
       if (!a) return 'Other';
       return groupMetalsCrypto ? portfolioClassOf(a) : (a.assetClass || 'Other');
-    };
-    const ccyOf = (t: string, fallback: string) => {
+    },
+    ccyOf: (t: string, fallback: string) => {
       const a = info.get(t);
       return a && groupMetalsCrypto && portfolioClassOf(a) === METALS_CRYPTO_LABEL ? METALS_CRYPTO_CCY : (a?.currency || fallback);
-    };
+    },
+  }), [info, groupMetalsCrypto]);
+
+  // Each month split into bands, after the filters
+  const mixes = useMemo((): MonthMix[] => {
     // Risk-on is always Equities + Metals & Crypto by the PortfolioClass column, whatever the
     // toggle shows, so the figure doesn't change when you flip Group M&C
     const isRiskOn = (t: string) => {
@@ -135,7 +142,7 @@ export default function AllocationByMonth({
       const total = Object.values(byBand).reduce((s, v) => s + v, 0);
       return { date: m.date, byBand, estimated, riskOn, total, pln: m.pln };
     }).filter(m => m.total > 0);
-  }, [months, info, groupMetalsCrypto, tickerAccounts, accountFilter, currencyFilter, classFilter, view]);
+  }, [months, info, classOf, ccyOf, tickerAccounts, accountFilter, currencyFilter, classFilter, view]);
 
   // Currencies that never had an exchange rate in the price sheet: their holdings and cash can't
   // be converted, so they are left out of the bars — said in words under the chart, never silently
@@ -224,6 +231,7 @@ export default function AllocationByMonth({
   ].filter(Boolean).join(' · ');
 
   return (
+    <>
     <div className="bg-white p-4 rounded-lg shadow mb-4">
       <div className="flex items-center justify-between mb-3 gap-3 max-md:flex-col max-md:items-start max-md:gap-0.5">
         <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
@@ -303,6 +311,14 @@ export default function AllocationByMonth({
         hint={hoverDate ? 'Showing the month under the pointer.' : 'Then = start of the period. Hover (or touch) a bar to compare another month.'}
       />
     </div>
+
+    {/* The same month-ends in money rather than %: all assets, or only the filtered class */}
+    <ValueByMonth
+      months={months} classOf={classOf} ccyOf={ccyOf} tickerAccounts={tickerAccounts}
+      accountFilter={accountFilter} currencyFilter={currencyFilter} classFilter={classFilter}
+      amountCcy={amountCcy} period={valuePeriod} setPeriod={setValuePeriod}
+    />
+    </>
   );
 }
 
