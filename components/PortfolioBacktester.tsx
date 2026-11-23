@@ -565,6 +565,8 @@ const PortfolioBacktester = () => {
   const [posValueExcluded, setPosValueExcluded] = useState<Record<string, string[]>>({});
   // ...and whether it shows money (the default) or % of the portfolio
   const [posValueMode, setPosValueMode] = useState<'value' | 'share'>('value');
+  // ...and, in % of portfolio, whether it is a share of the whole portfolio or of the filtered part
+  const [posValueShareBase, setPosValueShareBase] = useState<'whole' | 'filtered'>('whole');
   // The Positions tab's Income chart: the ledger's dividend + interest rows, and its choices
   // (bars per month / quarter / year, the period, and the payers unticked)
   const [incomeRows, setIncomeRows] = useState<LedgerRow[]>([]);
@@ -3076,6 +3078,7 @@ const PortfolioBacktester = () => {
               posValuePeriod={posValuePeriod} setPosValuePeriod={setPosValuePeriod}
               posValueExcluded={posValueExcluded} setPosValueExcluded={setPosValueExcluded}
               posValueMode={posValueMode} setPosValueMode={setPosValueMode}
+              posValueShareBase={posValueShareBase} setPosValueShareBase={setPosValueShareBase}
               incomeRows={incomeRows} posIncomeBy={posIncomeBy} setPosIncomeBy={setPosIncomeBy}
               posIncomePeriod={posIncomePeriod} setPosIncomePeriod={setPosIncomePeriod}
               posIncomeExcluded={posIncomeExcluded} setPosIncomeExcluded={setPosIncomeExcluded}

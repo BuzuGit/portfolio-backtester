@@ -73,6 +73,7 @@ export interface PositionsTabProps {
   posValuePeriod: MonthPeriod; setPosValuePeriod: (p: MonthPeriod) => void;
   posValueExcluded: Record<string, string[]>; setPosValueExcluded: SetState<Record<string, string[]>>;
   posValueMode: 'value' | 'share'; setPosValueMode: (m: 'value' | 'share') => void;
+  posValueShareBase: 'whole' | 'filtered'; setPosValueShareBase: (b: 'whole' | 'filtered') => void;
   // The Income chart: the ledger's dividend + interest rows, and its choices
   incomeRows: LedgerRow[];
   posIncomeBy: IncomeBy; setPosIncomeBy: (b: IncomeBy) => void;
@@ -119,7 +120,7 @@ export interface PositionsTabProps {
 export default function PositionsTab({
   assetData, assetLookup, closedData, transactionData, positionsModel, cashAccounts, edoMissingBanner,
   allCashAccounts, posAllocView, setPosAllocView, posAllocPeriod, setPosAllocPeriod, posValuePeriod, setPosValuePeriod,
-  posValueExcluded, setPosValueExcluded, posValueMode, setPosValueMode,
+  posValueExcluded, setPosValueExcluded, posValueMode, setPosValueMode, posValueShareBase, setPosValueShareBase,
   incomeRows, posIncomeBy, setPosIncomeBy, posIncomePeriod, setPosIncomePeriod, posIncomeExcluded, setPosIncomeExcluded,
   posIncomeMeasure, setPosIncomeMeasure,
   calculateXIRR, getClosedTransactions, getOpenPurchases, getOpenDividends, tableSort, sortPropsFor,
@@ -2173,6 +2174,7 @@ export default function PositionsTab({
                 valuePeriod={posValuePeriod} setValuePeriod={setPosValuePeriod}
                 valueExcluded={posValueExcluded} setValueExcluded={setPosValueExcluded}
                 valueMode={posValueMode} setValueMode={setPosValueMode}
+                valueShareBase={posValueShareBase} setValueShareBase={setPosValueShareBase}
               />
             )}
 
