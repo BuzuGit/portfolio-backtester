@@ -1201,9 +1201,59 @@ export default function PositionsTab({
       {/* Pinned while scrolling, exactly like the Markets tab's filter row (PINNED_FILTERS).
           Phones: not pinned ("max-md:static"), it scrolls away and leaves the small screen to
           the cards, as on Markets. */}
-      <div className={`${PINNED_FILTERS} max-md:static flex flex-wrap items-center gap-x-6 gap-y-2 mb-4 max-md:gap-x-2`}>
-        <div className="flex items-center gap-1">
-          <span className="text-xs text-gray-500 mr-1 max-md:hidden" title="Convert all position values to this currency for comparison">Currency:</span>
+      {/* Two currency controls, two jobs: HOLDINGS filters by the currency an asset trades in
+          (only PLN assets and PLN cash, say); SHOW IN only sets the currency amounts are
+          displayed in and never hides anything. Then Class, Group M&C and clear-filters, all on
+          one line on desktop. Phones: Show in + Group M&C on the first line, then the Holdings
+          and Class boxes side by side ("max-md:order-*" sets that phone order). */}
+      <div className={`${PINNED_FILTERS} max-md:static flex flex-wrap items-center gap-x-4 gap-y-2 mb-4 max-md:gap-x-2`}>
+        {/* Holdings: the same filter as clicking a bar of By Currency (they stay in sync). Its
+            currencies are By Currency's: each open position's own currency ("M&C" for metals
+            and crypto while Group M&C is on), plus the currencies cash is held in. */}
+        {(() => {
+          const lookupInfo = new Map(assetLookup.map(a => [a.ticker, a]));
+          const present = new Set<string>();
+          for (const t of getOpenTickers()) {
+            const a = lookupInfo.get(t);
+            if (!a) continue;
+            present.add(groupMetalsCrypto && portfolioClassOf(a) === METALS_CRYPTO_LABEL ? METALS_CRYPTO_CCY : a.currency);
+          }
+          for (const c of cashAccounts) if (Math.abs(c.balance) > 0.005) present.add(c.currency);
+          const order = ['PLN', 'USD', 'SGD', 'EUR', 'CHF', METALS_CRYPTO_CCY];
+          const rank = (c: string) => { const i = order.indexOf(c); return i >= 0 ? i : order.length; };
+          const ccys = Array.from(present).filter(Boolean).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+          if (ccys.length === 0) return null;
+          return (
+            <>
+              <div className="hidden max-md:flex max-md:order-3 max-md:basis-[calc(50%-4px)] max-md:grow max-md:min-w-0">
+                <PhoneChoice
+                  label="Holdings"
+                  options={[{ value: '', label: 'All currencies' }, ...ccys.map(c => ({ value: c, label: c }))]}
+                  selected={openCurrencyFilter ?? ''}
+                  onPick={v => setOpenCurrencyFilter(v || null)}
+                />
+              </div>
+              <div className="flex items-center gap-1 max-md:hidden">
+                <span className="text-xs text-gray-500 mr-1" title="Show only assets (and cash) in this currency">Holdings:</span>
+                <span className={SEG}>
+                  <button onClick={() => setOpenCurrencyFilter(null)} className={segBtn(!openCurrencyFilter)}
+                    title="Assets in every currency">All</button>
+                  {ccys.map(c => (
+                    <button
+                      key={c}
+                      onClick={() => setOpenCurrencyFilter(prev => (prev === c ? null : c))}
+                      className={segBtn(openCurrencyFilter === c)}
+                      title={openCurrencyFilter === c ? 'Click again to show every currency' : `Show only assets and cash in ${c}`}
+                    >{c}</button>
+                  ))}
+                </span>
+              </div>
+            </>
+          );
+        })()}
+
+        <div className="flex items-center gap-1 max-md:order-1">
+          <span className="text-xs text-gray-500 mr-1 max-md:hidden" title="The currency every amount is shown in (Native: each in its own). Hides nothing.">Show in:</span>
           <span className={SEG}>
             {CURRENCY_OPTIONS.map(opt => (
               <button
@@ -1237,7 +1287,7 @@ export default function PositionsTab({
           if (classes.length === 0) return null;
           return (
             <>
-              <div className="hidden max-md:flex w-full">
+              <div className="hidden max-md:flex max-md:order-4 max-md:basis-[calc(50%-4px)] max-md:grow max-md:min-w-0">
                 <PhoneChoice
                   label="Class"
                   options={[{ value: '', label: 'All classes' }, ...classes.map(c => ({ value: c, label: c }))]}
@@ -1266,7 +1316,7 @@ export default function PositionsTab({
             column, so gold, silver and crypto become "Metals & Crypto" as both an asset
             class and a separate currency bar, keeping fiat bars pure.
             An on/off switch: a strip of one, slate while on. */}
-        <span className={SEG}>
+        <span className={`${SEG} max-md:order-2`}>
         <button
           onClick={() => {
             setGroupMetalsCrypto(prev => !prev);
@@ -1291,7 +1341,7 @@ export default function PositionsTab({
         {(() => {
           const anyFilter = !!(openAssetClassFilter || openCurrencyFilter || openAccountFilter);
           return (
-            <span className={`${SEG} ${anyFilter ? '' : 'max-md:hidden'}`}>
+            <span className={`${SEG} max-md:order-5 ${anyFilter ? '' : 'max-md:hidden'}`}>
               <button
                 type="button"
                 onClick={() => { setOpenAssetClassFilter(null); setOpenCurrencyFilter(null); setOpenAccountFilter(null); }}
@@ -1647,16 +1697,19 @@ export default function PositionsTab({
             ticker: asset.ticker, name: asset.name, numTransactions: transactions.length,
             firstBuyDate, lastSaleDate, timeHeldYears,
             totalInvested: totalCost, totalFinalValue, totalPnL, totalPnLPct, xirr,
-            // The class it is shown under (follows Group M&C), for the class filter below
+            // The class and currency it is shown under (both follow Group M&C), for the filters below
             assetClass: effectiveClass({ assetClass: asset.assetClass, portfolioClass: asset.portfolioClass ?? '' }),
+            currency: effectiveCurrency({ nativeCurrency: asset.currency, assetClass: asset.assetClass, portfolioClass: asset.portfolioClass ?? '' }),
           };
         });
-        // The class and account filters narrow this table too, the same way they narrow Open
-        // Positions: class (the buttons at the top, or a By Asset Class row) and account (a By
-        // Account bar: the accounts that paid for the asset's purchases). Currency deliberately
-        // doesn't: the user's rule (2026-11-22) is that currency only sets how values are shown.
+        // The tab's filters narrow this table too, the same way they narrow Open Positions:
+        // class (the Class buttons, or a By Asset Class row), the currency the asset trades in
+        // (the Holdings buttons, or a By Currency bar — added 2026-11-23, once the user had a
+        // Holdings filter separate from the "Show in" display currency) and account (a By
+        // Account bar: the accounts that paid for the asset's purchases).
         const filteredClosedData = closedSummaryData.filter(row =>
           (!openAssetClassFilter || row.assetClass === openAssetClassFilter) &&
+          (!openCurrencyFilter   || row.currency === openCurrencyFilter) &&
           (!openAccountFilter    || tickerPurchaseAccounts[row.ticker]?.has(openAccountFilter))
         );
 
@@ -2126,7 +2179,8 @@ export default function PositionsTab({
             {/* === Income: dividends and interest received, by month / quarter / year === */}
             <IncomeChart
               rows={incomeRows} assetData={assetData} assetLookup={assetLookup} groupMetalsCrypto={groupMetalsCrypto}
-              tickerAccounts={tickerPurchaseAccounts} classFilter={openAssetClassFilter} accountFilter={openAccountFilter}
+              tickerAccounts={tickerPurchaseAccounts} classFilter={openAssetClassFilter} currencyFilter={openCurrencyFilter}
+              accountFilter={openAccountFilter}
               positionsCurrency={positionsCurrency}
               by={posIncomeBy} setBy={setPosIncomeBy} period={posIncomePeriod} setPeriod={setPosIncomePeriod}
               excluded={posIncomeExcluded} setExcluded={setPosIncomeExcluded}
@@ -2492,8 +2546,14 @@ export default function PositionsTab({
               <div className="bg-white p-4 rounded-lg shadow">
                 <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                   Closed Positions
-                  {/* The filter badges that apply here, as on Open Positions, each cleared by
-                      clicking its ✕: asset class (blue), account (green) */}
+                  {/* The same filter badges as Open Positions, each cleared by clicking its ✕:
+                      currency (amber), asset class (blue), account (green) */}
+                  {openCurrencyFilter && (
+                    <span className="flex items-center gap-1 text-xs font-normal bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                      {openCurrencyFilter}
+                      <button onClick={(e) => { e.stopPropagation(); setOpenCurrencyFilter(null); }} className="hover:text-amber-900 leading-none">✕</button>
+                    </span>
+                  )}
                   {openAssetClassFilter && (
                     <span className="flex items-center gap-1 text-xs font-normal bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
                       {openAssetClassFilter}

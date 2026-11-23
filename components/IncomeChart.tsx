@@ -8,10 +8,12 @@
     - interest on cash under "Interest · <account>", one per account it was paid into.
   Tick-boxes take payers in or out, to focus on e.g. the REITs alone.
 
-  It follows the tab's class and account filters (never currency: on Positions currency only
-  sets how amounts are shown): a class keeps the payers in it (cash interest = "Cash"; an asset
-  not in the Lookup tab has no class, so it shows only with no class picked); an account keeps
-  income paid into that account, plus the dividends of assets bought from it.
+  It follows the tab's filters: a class keeps the payers in it (cash interest = "Cash"; an asset
+  not in the Lookup tab has no class, so it shows only with no class picked); a Holdings currency
+  keeps the payers held in it (a holding's own trading currency, "M&C" for metals and crypto while
+  Group M&C is on; cash interest by the cash's currency; an asset not in the Lookup tab by the
+  currency it paid in); an account keeps income paid into that account, plus the dividends of
+  assets bought from it. "Show in" only sets the currency amounts are displayed in.
 
   Amounts are converted with the price sheet's rate for the month of each payment (PLN is the
   hub: amount x xxxPLN, then / yyyPLN for the chosen currency), so a 2019 dividend counts at 2019
@@ -23,6 +25,7 @@ import type { AssetLookup, AssetRow, LedgerRow } from '@/lib/fetchData';
 import { localTodayIso } from '@/lib/fetchData';
 import { FX_TICKER_MAP } from '@/lib/backtest';
 import { portfolioClassOf } from '@/lib/holdings';
+import { METALS_CRYPTO_CCY, METALS_CRYPTO_LABEL } from '@/components/ui';
 import { paymentYields } from '@/lib/incomeYield';
 import { isPhoneScreen } from '@/lib/savedSheet';
 import { MONTH_ABBR, periodStartIso } from '@/lib/dates';
@@ -75,7 +78,8 @@ const nextYm = (ym: string) => {
 // and its class ('' = unknown: not in the Lookup tab)
 // `kind`: dividend (incl. rent) or interest, so the buttons and the stack keep the two apart.
 // `ccy`: the currency it pays in (cash interest is one payer per account AND currency).
-interface Payer { key: string; label: string; title: string; cls: string; kind: 'dividend' | 'interest'; ccy: string; color: string; total: number }
+// `holdCcy`: the currency it is HELD in, for the Holdings filter (By Currency's rule).
+interface Payer { key: string; label: string; title: string; cls: string; kind: 'dividend' | 'interest'; ccy: string; holdCcy: string; color: string; total: number }
 // One payment, ready to add up: payer, month, account, and the amount shown — in the chosen
 // currency, or (Native) in the payer's own currency, as paid
 interface Payment { key: string; ym: string; account: string; ticker: string; amount: number }
@@ -87,8 +91,9 @@ export interface IncomeChartProps {
   groupMetalsCrypto: boolean;
   tickerAccounts: Record<string, Set<string>>;   // which accounts paid for each ticker (the By Account rule)
   classFilter: string | null;
+  currencyFilter: string | null;                   // the Holdings filter: the currency assets are held in
   accountFilter: string | null;
-  positionsCurrency: string;                       // '' = native: amounts then shown in PLN
+  positionsCurrency: string;                       // "Show in": '' = native, each payment as paid
   by: IncomeBy; setBy: (b: IncomeBy) => void;
   period: MonthPeriod; setPeriod: (p: MonthPeriod) => void;
   excluded: string[]; setExcluded: React.Dispatch<React.SetStateAction<string[]>>;
@@ -96,8 +101,8 @@ export interface IncomeChartProps {
 }
 
 export default function IncomeChart({
-  rows, assetData, assetLookup, groupMetalsCrypto, tickerAccounts, classFilter, accountFilter, positionsCurrency,
-  by, setBy, period, setPeriod, excluded, setExcluded, measure, setMeasure,
+  rows, assetData, assetLookup, groupMetalsCrypto, tickerAccounts, classFilter, currencyFilter, accountFilter,
+  positionsCurrency, by, setBy, period, setPeriod, excluded, setExcluded, measure, setMeasure,
 }: IncomeChartProps) {
   const [hoverBucket, setHoverBucket] = useState<string | null>(null);
   const amountCcy = positionsCurrency || 'PLN';
@@ -141,13 +146,16 @@ export default function IncomeChart({
       if (!payerInfo.has(key)) {
         const kind = r.flow === 'Interest' ? 'interest' as const : 'dividend' as const;
         payerInfo.set(key, cashInterest
-          ? { key, label: `${r.account} · ${r.currency}`, title: `Interest on ${r.currency} cash paid into ${r.account}`, cls: 'Cash', kind, ccy: r.currency }
+          ? { key, label: `${r.account} · ${r.currency}`, title: `Interest on ${r.currency} cash paid into ${r.account}`, cls: 'Cash', kind, ccy: r.currency, holdCcy: r.currency }
           : {
             key,
             label: inLookup ? ticker : r.asset,
             title: inLookup ? `${inLookup.name} (${ticker})` : `${r.asset}${ticker ? ` (${ticker})` : ''} — not in the Lookup tab`,
             cls: inLookup ? (groupMetalsCrypto ? portfolioClassOf(inLookup) : (inLookup.assetClass || 'Other')) : '',
             kind, ccy: r.currency,
+            holdCcy: inLookup
+              ? (groupMetalsCrypto && portfolioClassOf(inLookup) === METALS_CRYPTO_LABEL ? METALS_CRYPTO_CCY : inLookup.currency)
+              : r.currency,
           });
       }
       const ym = r.date.slice(0, 7);
@@ -169,13 +177,14 @@ export default function IncomeChart({
     return new Map(keys.map((k, i) => [k, GROUP_COLORS[i % GROUP_COLORS.length]]));
   }, [payerInfo]);
 
-  // The payments passing the tab's class and account filters
+  // The payments passing the tab's class, Holdings (currency) and account filters
   const filtered = useMemo(() => payments.filter(p => {
     const payer = payerInfo.get(p.key)!;
     if (classFilter && payer.cls !== classFilter) return false;
+    if (currencyFilter && payer.holdCcy !== currencyFilter) return false;
     if (accountFilter && p.account !== accountFilter && !(p.ticker && tickerAccounts[p.ticker]?.has(accountFilter))) return false;
     return true;
-  }), [payments, payerInfo, classFilter, accountFilter, tickerAccounts]);
+  }), [payments, payerInfo, classFilter, currencyFilter, accountFilter, tickerAccounts]);
 
   // The yield of every dividend of a holding with a price (lib/incomeYield.ts), worked out only
   // once a yield view is picked. Prices: the sheet's month-end price of the month BEFORE each
@@ -374,7 +383,8 @@ export default function IncomeChart({
     .sort((a, b) => b.v - a.v);
   const best = bars.reduce<typeof bars[number] | null>((m, b) => (!m || b.total > m.total ? b : m), null);
 
-  const filterNote = [classFilter && `${classFilter} only`, accountFilter && `${accountFilter} only`].filter(Boolean).join(' · ');
+  const filterNote = [classFilter && `${classFilter} only`, currencyFilter && `${currencyFilter} only`, accountFilter && `${accountFilter} only`]
+    .filter(Boolean).join(' · ');
 
   return (
     <div className="bg-white p-4 rounded-lg shadow mb-4">
