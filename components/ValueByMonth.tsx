@@ -64,9 +64,13 @@ const groupKey = (label: string) => label.trim().replace(/\s+/g, ' ').toLowerCas
 
 // One month-end before any choice of groups: PLN per group key, the rate into the chosen
 // currency, and which groups hold a holding valued without a market price
-// `portfolioPln` = the whole portfolio that month (every class, after the currency and account
-// filters only): what "% of portfolio" divides by — the same total as Allocation by Month-end's bars
-interface RawMonth { date: string; rate: number; byGroup: Record<string, number>; estimated: Set<string>; portfolioPln: number }
+// What "% of portfolio" divides by, two ways (the user's switch, 2026-11-23):
+//   `portfolioPln` = "of filtered": every class, after the Holdings (currency) and account filters
+//                    — the same total as Allocation by Month-end's bars;
+//   `wholePln`     = "of whole portfolio": every class, every currency, every account.
+interface RawMonth { date: string; rate: number; byGroup: Record<string, number>; estimated: Set<string>; portfolioPln: number; wholePln: number }
+// What "% of portfolio" is a share of
+export type ShareBase = 'whole' | 'filtered';
 // One bar. `value` and `byGroup` are what the bars show: amounts in the chosen currency, or (in
 // "% of portfolio") shares of the portfolio in %. `amount` is always the money, for the hover box.
 interface ValuePoint { date: string; value: number; byGroup: Record<string, number>; amount: number; byGroupAmount: Record<string, number>; estimated: boolean }
@@ -92,15 +96,20 @@ export interface ValueByMonthProps {
   // Value (money) or % of portfolio. The switch shows once a class is picked: with everything
   // in the bars, the share would be 100% every month.
   mode: ValueMode; setMode: (m: ValueMode) => void;
+  // "% of portfolio" of the whole portfolio, or of the part the Holdings / account filters leave
+  shareBase: ShareBase; setShareBase: (b: ShareBase) => void;
 }
 
 export default function ValueByMonth({
   months, classOf, ccyOf, exposureOf, tickerAccounts, accountFilter, currencyFilter, classFilter, amountCcy,
-  period, setPeriod, excluded, setExcluded, mode: chosenMode, setMode,
+  period, setPeriod, excluded, setExcluded, mode: chosenMode, setMode, shareBase, setShareBase,
 }: ValueByMonthProps) {
   const [hoverDate, setHoverDate] = useState<string | null>(null);
   // % of portfolio only means something for a slice of it
   const share = !!classFilter && chosenMode === 'share';
+  // The whole / filtered choice matters only while a Holdings or account filter narrows things
+  const baseMatters = !!(currencyFilter || accountFilter);
+  const ofWhole = !baseMatters || shareBase === 'whole';
 
   // Every month-end in PLN per group, after ALL the tab's filters (class, currency, account).
   // The group is the asset's Exposure (its ticker when none is given) once a class is picked;
@@ -126,8 +135,12 @@ export default function ValueByMonth({
       // Month-end's class bars (account + currency filters, a class below zero counted as zero),
       // so the two charts agree to the decimal.
       const byClass: Record<string, number> = {};
+      // ...and the same with no filters at all, for "of whole portfolio"
+      const wholeByClass: Record<string, number> = {};
       for (const h of m.holdings) {
         if (h.valuePln === null) continue;   // no exchange rate at all (the chart above says so)
+        const wholeCls = classOf(h.ticker);
+        wholeByClass[wholeCls] = (wholeByClass[wholeCls] ?? 0) + h.valuePln;
         if (accountFilter && !tickerAccounts[h.ticker]?.has(accountFilter)) continue;
         if (currencyFilter && ccyOf(h.ticker, h.currency) !== currencyFilter) continue;
         const cls = classOf(h.ticker);
@@ -140,6 +153,7 @@ export default function ValueByMonth({
       }
       for (const c of m.cash) {
         if (c.valuePln === null) continue;
+        wholeByClass[CASH] = (wholeByClass[CASH] ?? 0) + c.valuePln;
         if (accountFilter && c.account !== accountFilter) continue;
         if (currencyFilter && c.currency !== currencyFilter) continue;
         byClass[CASH] = (byClass[CASH] ?? 0) + c.valuePln;
@@ -147,7 +161,8 @@ export default function ValueByMonth({
         add(byGroup, classFilter ? CASH : ALL, c.valuePln);
       }
       const portfolioPln = Object.values(byClass).reduce((s, v) => s + Math.max(0, v), 0);
-      out.push({ date: m.date, rate, byGroup, estimated, portfolioPln });
+      const wholePln = Object.values(wholeByClass).reduce((s, v) => s + Math.max(0, v), 0);
+      out.push({ date: m.date, rate, byGroup, estimated, portfolioPln, wholePln });
     }
     return { raw: out, tickers, labels };
   }, [months, classOf, ccyOf, exposureOf, tickerAccounts, accountFilter, currencyFilter, classFilter, amountCcy]);
@@ -207,7 +222,8 @@ export default function ValueByMonth({
         // A rounding overdraft can't make a bar negative
         const pln = Math.max(0, m.byGroup[g.name] ?? 0);
         byGroupAmount[g.name] = pln / m.rate;
-        byGroupShare[g.name] = m.portfolioPln > 0 ? (pln / m.portfolioPln) * 100 : 0;
+        const base = ofWhole ? m.wholePln : m.portfolioPln;
+        byGroupShare[g.name] = base > 0 ? (pln / base) * 100 : 0;
         amount += byGroupAmount[g.name];
         pct += byGroupShare[g.name];
         if (m.estimated.has(g.name)) estimated = true;
@@ -220,7 +236,7 @@ export default function ValueByMonth({
       });
     }
     return out;
-  }, [raw, shownGroups, period, share]);
+  }, [raw, shownGroups, period, share, ofWhole]);
 
   const byDate = useMemo(() => new Map(shown.map((p, i) => [p.date, { p, prev: shown[i - 1] }])), [shown]);
   const lastDate = shown.length > 0 ? shown[shown.length - 1].date : '';
@@ -348,7 +364,7 @@ export default function ValueByMonth({
       {/* Period and (once a class is picked) Value / % of portfolio, side by side on one line.
           Phones: the period is a box that opens a slide-up panel, with the two Show buttons
           beside it (two short choices fit a phone's width). */}
-      <div className="flex items-center gap-x-5 gap-y-2 mb-3 max-md:gap-x-2">
+      <div className="flex items-center gap-x-5 gap-y-2 mb-3 max-md:gap-x-2 max-md:flex-wrap">
         <div className="hidden max-md:flex">
           <PhoneChoice label="Period" options={periodOptions(PERIODS)} selected={period} onPick={p => setPeriod(p as MonthPeriod)} />
         </div>
@@ -365,9 +381,20 @@ export default function ValueByMonth({
               <button onClick={() => setMode('value')} className={segBtn(!share)}
                 title={`How much money was in it each month-end, in ${amountCcy}`}>Value</button>
               <button onClick={() => setMode('share')} className={segBtn(share)}
-                title="Its share of the whole portfolio each month-end: the bar grows when the share grows">% of portfolio</button>
+                title="Its share of the portfolio each month-end: the bar grows when the share grows">% of portfolio</button>
             </span>
           </div>
+        )}
+        {/* "% of portfolio" of what: the whole portfolio, or only the part the Holdings / account
+            filters leave (what Allocation by Month-end shows). Only while such a filter is on:
+            without one, the two are the same. */}
+        {share && baseMatters && (
+          <span className={`${SEG} shrink-0`}>
+            <button onClick={() => setShareBase('whole')} className={segBtn(shareBase === 'whole')}
+              title="Divided by everything you own: every class, currency and account">of whole portfolio</button>
+            <button onClick={() => setShareBase('filtered')} className={segBtn(shareBase === 'filtered')}
+              title={`Divided by only what the filters keep (${[currencyFilter && `${currencyFilter} holdings`, accountFilter].filter(Boolean).join(', ')}), all classes — as Allocation by Month-end shows it`}>of filtered</button>
+          </span>
         )}
       </div>
       {groupPicker}
@@ -433,7 +460,9 @@ export default function ValueByMonth({
       <ValueBars shown={shown} groups={shownGroups} totalColor={totalColor} share={share} renderTooltip={renderTooltip} onHover={setHoverDate} />
       <p className="text-xs text-gray-400 mt-2">
         {hoverDate ? 'Change measured from the month under the pointer.' : 'Hover (or touch) a bar to see its amount and the change from it to the latest month.'}
-        {share && ' % of portfolio = its share of every class plus cash that month (the same total as Allocation by Month-end).'}
+        {share && (ofWhole
+          ? ' % of portfolio = its share of everything you own that month (every class, currency and account, plus cash).'
+          : ` % of portfolio = its share of what the filters keep (${[currencyFilter && `${currencyFilter} holdings`, accountFilter].filter(Boolean).join(', ')}), every class plus cash — the same total as Allocation by Month-end.`)}
         {classFilter && groups.length > 1 && ' Exposure comes from the Lookup tab; an asset without one is shown under its ticker.'}
       </p>
     </div>
