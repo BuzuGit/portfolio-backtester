@@ -513,17 +513,20 @@ const ValueBars = React.memo(function ValueBars({ shown, groups, totalColor, sha
     textColor: totalColor === SLATE ? undefined : readableTextOn(totalColor),
   }];
   // The month's total above each column, by the app-wide rule (ui.tsx barValueLabel): one label
-  // per stacked column, on the top series; none over 100 months. Not in the % view, where every
-  // column adds up to 100% and the label would say nothing. categoryGap matches barCategoryGap
-  // below (touching bars: none), so the labels get exactly the room there is.
-  const totalLabel = share ? undefined
-    : barValueLabel(shown.length, shortLabelMoney, shown.map(p => p.value), i => shown[i]?.value ?? 0,
-      { categoryGap: touching ? 0 : shown.length > 60 ? 0.1 : 0.2 });
+  // per stacked column, on the top series; none over 100 months. categoryGap matches
+  // barCategoryGap below (touching bars: none), so the labels get exactly the room there is.
+  // When the bars can't all be labelled (over 100 months, or too narrow), the highest and lowest
+  // month still are. In % of portfolio a month at 100% gets no label and never counts as the
+  // highest (it only says "all of it"), as 0% never does; only 0s and 100s = no labels at all.
+  const totalLabel = barValueLabel(shown.length, share ? (v => `${v.toFixed(1)}%`) : shortLabelMoney,
+    shown.map(p => p.value), i => shown[i]?.value ?? 0,
+    { categoryGap: touching ? 0 : shown.length > 60 ? 0.1 : 0.2, extremes: true,
+      skip: share ? (v => v >= 99.95) : undefined });
   return (
     <ResponsiveContainer width="100%" height={phone ? 240 : 300}>
       <BarChart
         data={data}
-        margin={{ top: Math.max(10, totalLabel ? barLabelRoom(shown.length) : 0), right: LABEL_W + 8, left: 0, bottom: 0 }}
+        margin={{ top: Math.max(10, totalLabel ? barLabelRoom(shown.length, true) : 0), right: LABEL_W + 8, left: 0, bottom: 0 }}
         barCategoryGap={touching ? 0 : shown.length > 60 ? '10%' : '20%'}
         onMouseMove={(s: { activeLabel?: string | number }) => { if (s?.activeLabel) onHover(String(s.activeLabel)); }}
         onMouseLeave={() => onHover(null)}

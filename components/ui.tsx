@@ -211,10 +211,13 @@ export const BAR_LABEL_STEPS: readonly { maxBars: number; px: number }[] = [
 /** The label size for a chart drawing `barCount` bars, or null for "no labels". */
 export const barLabelSize = (barCount: number): number | null =>
   BAR_LABEL_STEPS.find(s => barCount <= s.maxBars)?.px ?? null;
-/** Room (px) to leave above the tallest bar (a chart's top margin) for its labels. */
-export const barLabelRoom = (barCount: number) => {
+/** Size of the two labels a chart keeps when it can't label every bar (BarLabelOpts.extremes). */
+export const BAR_EXTREME_PX = 12;
+/** Room (px) to leave above the tallest bar (a chart's top margin) for its labels; with
+ *  `extremes` (BarLabelOpts), at least room for the highest bar's label beyond 100 bars. */
+export const barLabelRoom = (barCount: number, extremes = false) => {
   const px = barLabelSize(barCount);
-  return px ? px + 8 : 0;
+  return px ? Math.max(px, extremes ? BAR_EXTREME_PX : 0) + 8 : extremes ? BAR_EXTREME_PX + 8 : 0;
 };
 /** Counts for bar labels (shares held): "0.25", "12.5", "340", "1.2k", "12k". */
 export const shortLabelCount = (v: number): string =>
@@ -235,6 +238,14 @@ export type BarLabelOpts = {
   /** Always above the column, even when its total is below zero: for a stacked column whose top
    *  series ends above zero although a part of it hangs below (Contributions and Profit). */
   alwaysAbove?: boolean;
+  /** When the chart can't label every bar (over 100 bars, or too narrow even shortened), label
+   *  just its highest and its lowest non-zero bar, at BAR_EXTREME_PX, as formatted (the user's
+   *  wish for Value by Month-end, 2026-11-24). Only for one value per bar position: a single
+   *  series or stacked columns, where `values[i]` is bar i's value. */
+  extremes?: boolean;
+  /** Values that get no label and don't count as the highest / lowest bar (as zero never does):
+   *  e.g. 100% in a share-of-portfolio chart, where it only says "all of it". */
+  skip?: (v: number) => boolean;
 };
 
 // A label's width per 1px of font size (character widths of the app's sans-serif: digits ~0.56em,
@@ -302,7 +313,8 @@ const pickLabelFit = (px: number, longest: number[], widthFactor: number, room: 
  * into text ("22k", "5.8%"); `values` are all the values the chart will label (to find its
  * longest label, which sets one size for every label). For a stacked column, put it on the TOP
  * series and pass `valueOf` (index -> the column's total), so the label shows the column's total.
- * Returns undefined when the chart has too many bars for labels: pass it straight to `content`.
+ * Returns undefined when the chart has too many bars for labels (and no `extremes`): pass it
+ * straight to `content`.
  */
 export const barValueLabel = (
   barCount: number,
@@ -312,24 +324,47 @@ export const barValueLabel = (
   opts: BarLabelOpts = {},
 ) => {
   const px = barLabelSize(barCount);
-  if (!px) return undefined;
+  if (!px && !opts.extremes) return undefined;
   const bold = barLabelBold(barCount);
-  const longest = longestByStep(format, values);
+  // Skipped values count as zero: unlabelled, not sizing the labels, never the highest / lowest
+  const counted = opts.skip ? values.map(v => (opts.skip!(v) ? 0 : v)) : values;
+  const longest = longestByStep(format, counted);
   if (longest[0] === 0) return undefined;
+  // The fallback's two bars: the highest, and the lowest that isn't zero (first of any ties)
+  let maxAt = -1, minAt = -1;
+  counted.forEach((v, i) => {
+    if (!v || !isFinite(v)) return;
+    if (maxAt < 0 || v > counted[maxAt]) maxAt = i;
+    if (minAt < 0 || v < counted[minAt]) minAt = i;
+  });
   const Label = (props: { x?: string | number; y?: string | number; width?: string | number; height?: string | number; value?: unknown; index?: number }) => {
     const v = valueOf && props.index !== undefined ? valueOf(props.index) : Number(props.value);
     const x = Number(props.x), w = Number(props.width), y = Number(props.y), h = Number(props.height);
     if (props.value === null || !isFinite(v) || v === 0 || ![x, w, y, h].every(isFinite)) return null;
-    // Room per bar: its own width plus the gap beside it. The size (and any shortening) comes
-    // from the chart's LONGEST label, so every bar works it out the same: one size, one form.
-    const fit = pickLabelFit(px, longest, bold ? BOLD_WIDTH : 1, labelRoom(Math.abs(w), opts));
-    if (!fit) return null;
-    const { size } = fit;
-    const text = shortenBarLabel(format(v), fit.step);
-    if (fit.step > 0 && roundedToZero(text)) return null;
+    if (opts.skip?.(v)) return null;
     const top = Math.min(y, y + h), bottom = Math.max(y, y + h);
     const above = v >= 0 || opts.alwaysAbove;
     const fill = typeof opts.fill === 'function' ? opts.fill(v) : opts.fill ?? (v >= 0 ? MUTED_LABEL : LOSS);
+    // Room per bar: its own width plus the gap beside it. The size (and any shortening) comes
+    // from the chart's LONGEST label, so every bar works it out the same: one size, one form.
+    const fit = px ? pickLabelFit(px, longest, bold ? BOLD_WIDTH : 1, labelRoom(Math.abs(w), opts)) : null;
+    if (!fit) {
+      // Every bar can't be labelled: with `extremes`, still the highest and the lowest one. Near
+      // either end of the chart the label hangs inwards, so it isn't cut off at the edge.
+      if (!opts.extremes || (props.index !== maxAt && props.index !== minAt)) return null;
+      const i = props.index ?? 0, n = values.length;
+      const edge = i < n * 0.08 ? 'start' : i >= n * 0.92 ? 'end' : 'middle';
+      return (
+        <text className="bar-value-label" x={edge === 'start' ? x : edge === 'end' ? x + w : x + w / 2}
+          y={above ? top - 4 : bottom + BAR_EXTREME_PX + 1} textAnchor={edge}
+          style={{ fontSize: `${BAR_EXTREME_PX}px`, fill }}>
+          {format(v)}
+        </text>
+      );
+    }
+    const { size } = fit;
+    const text = shortenBarLabel(format(v), fit.step);
+    if (fit.step > 0 && roundedToZero(text)) return null;
     return (
       // "bar-value-label": exempt from the phone 10px override (globals.css, phone-bar-labels)
       <text className="bar-value-label" x={x + w / 2} y={above ? top - 4 : bottom + size + 1} textAnchor="middle"
