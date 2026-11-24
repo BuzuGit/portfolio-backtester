@@ -12,6 +12,8 @@
     leave some out. An ETF sold and replaced by a similar one (for tax) shares an exposure label,
     so "World equities" stays one continuous series across the swap. An asset with no Exposure
     given shows under its own ticker. The currency and account filters narrow it the same way.
+  - Pick only a Holdings currency (no class): the same exposure split and tick-boxes, over every
+    class held in that currency, plus that currency's cash.
 
   It reads the month-ends Allocation by Month-end already rebuilt from the ledger (so nothing is
   computed twice) and that chart's class / currency rules. Its period and the exposures left out
@@ -93,7 +95,7 @@ export interface ValueByMonthProps {
   // Exposure groups left out, per class ("Equities" -> ["Sector"]); remembered per class
   excluded: Record<string, string[]>;
   setExcluded: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
-  // Value (money) or % of portfolio. The switch shows once a class is picked: with everything
+  // Value (money) or % of portfolio. The switch shows once a class or currency is picked: with everything
   // in the bars, the share would be 100% every month.
   mode: ValueMode; setMode: (m: ValueMode) => void;
   // "% of portfolio" of the whole portfolio, or of the part the Holdings / account filters leave
@@ -105,8 +107,13 @@ export default function ValueByMonth({
   period, setPeriod, excluded, setExcluded, mode: chosenMode, setMode, shareBase, setShareBase,
 }: ValueByMonthProps) {
   const [hoverDate, setHoverDate] = useState<string | null>(null);
+  // The bars split by exposure once a class OR a Holdings currency is picked (the currency one
+  // added 2026-11-24: "USD only" then shows World / US / Gold... instead of one grey column).
+  // `splitKey` is also where the unticked exposures are remembered: per class ("Equities"), or
+  // per currency ("ccy:USD") when only a currency is picked. A class wins when both are picked.
+  const splitKey = classFilter ?? (currencyFilter ? `ccy:${currencyFilter}` : null);
   // % of portfolio only means something for a slice of it
-  const share = !!classFilter && chosenMode === 'share';
+  const share = !!splitKey && chosenMode === 'share';
   // The whole / filtered choice matters only while a Holdings or account filter narrows things
   const baseMatters = !!(currencyFilter || accountFilter);
   const ofWhole = !baseMatters || shareBase === 'whole';
@@ -115,8 +122,8 @@ export default function ValueByMonth({
   // The group is the asset's Exposure (its ticker when none is given) once a class is picked;
   // without a class everything is one group. Months with no rate into the chosen currency drop out.
   const { raw, tickers, labels } = useMemo(() => {
-    // A holding's group label: its Exposure, else its ticker, once a class is picked
-    const labelOf = (ticker: string) => (classFilter ? exposureOf(ticker) || ticker : ALL);
+    // A holding's group label: its Exposure, else its ticker, once a class or currency is picked
+    const labelOf = (ticker: string) => (splitKey ? exposureOf(ticker) || ticker : ALL);
     const out: RawMonth[] = [];
     const tickers: Record<string, Set<string>> = {};    // group key -> the tickers in its bars
     const labels: Record<string, string> = {};          // group key -> label to show (first spelling met)
@@ -158,27 +165,33 @@ export default function ValueByMonth({
         if (currencyFilter && c.currency !== currencyFilter) continue;
         byClass[CASH] = (byClass[CASH] ?? 0) + c.valuePln;
         if (classFilter && classFilter !== CASH) continue;
-        add(byGroup, classFilter ? CASH : ALL, c.valuePln);
+        add(byGroup, splitKey ? CASH : ALL, c.valuePln);
       }
       const portfolioPln = Object.values(byClass).reduce((s, v) => s + Math.max(0, v), 0);
       const wholePln = Object.values(wholeByClass).reduce((s, v) => s + Math.max(0, v), 0);
       out.push({ date: m.date, rate, byGroup, estimated, portfolioPln, wholePln });
     }
     return { raw: out, tickers, labels };
-  }, [months, classOf, ccyOf, exposureOf, tickerAccounts, accountFilter, currencyFilter, classFilter, amountCcy]);
+  }, [months, classOf, ccyOf, exposureOf, tickerAccounts, accountFilter, currencyFilter, classFilter, amountCcy, splitKey]);
 
-  // Every group the picked class EVER had, ignoring the currency and account filters, in
-  // alphabetical order: the order colours are handed out in, so an exposure keeps its colour when
-  // a filter changes or when the amounts rank differently from one month to the next
+  // Every group the picked class (or, with only a currency picked, that currency) EVER had,
+  // ignoring the other filters, in alphabetical order: the order colours are handed out in, so an
+  // exposure keeps its colour when a filter changes or when the amounts rank differently from one
+  // month to the next
   const colourOrder = useMemo(() => {
-    if (!classFilter) return [] as string[];
+    if (!splitKey) return [] as string[];
     const keys = new Set<string>();
     for (const m of months) for (const h of m.holdings) {
-      if (h.valuePln !== null && classOf(h.ticker) === classFilter) keys.add(groupKey(exposureOf(h.ticker) || h.ticker));
+      if (h.valuePln === null) continue;
+      const inSlice = classFilter ? classOf(h.ticker) === classFilter : ccyOf(h.ticker, h.currency) === currencyFilter;
+      if (inSlice) keys.add(groupKey(exposureOf(h.ticker) || h.ticker));
     }
-    if (classFilter === CASH) keys.add(groupKey(CASH));
+    // Cash: the Cash class, or (currency picked) any cash ever held in that currency
+    if (classFilter ? classFilter === CASH : months.some(m => m.cash.some(c => c.valuePln !== null && c.currency === currencyFilter))) {
+      keys.add(groupKey(CASH));
+    }
     return Array.from(keys).sort();
-  }, [months, classFilter, classOf, exposureOf]);
+  }, [months, splitKey, classFilter, currencyFilter, classOf, ccyOf, exposureOf]);
 
   // The groups ever held, biggest latest amount first (so the biggest sits at the bottom of each
   // bar), each with its colour and the tickers in it (for the tick-box's hover text)
@@ -206,7 +219,7 @@ export default function ValueByMonth({
     });
   }, [raw, tickers, labels, colourOrder, classFilter]);
 
-  const left = useMemo(() => new Set(classFilter ? excluded[classFilter] ?? [] : []), [excluded, classFilter]);
+  const left = useMemo(() => new Set(splitKey ? excluded[splitKey] ?? [] : []), [excluded, splitKey]);
   const shownGroups = useMemo(() => groups.filter(g => !left.has(g.name)), [groups, left]);
 
   // The bars: the ticked groups' amounts in the chosen currency (or, in "% of portfolio", their
@@ -297,15 +310,15 @@ export default function ValueByMonth({
 
   // Tick-boxes: one group in or out; "All" / "None" for the whole class
   const toggle = (name: string) => {
-    if (!classFilter) return;
+    if (!splitKey) return;
     setExcluded(prev => {
-      const cur = prev[classFilter] ?? [];
-      return { ...prev, [classFilter]: cur.includes(name) ? cur.filter(n => n !== name) : [...cur, name] };
+      const cur = prev[splitKey] ?? [];
+      return { ...prev, [splitKey]: cur.includes(name) ? cur.filter(n => n !== name) : [...cur, name] };
     });
   };
   const setAll = (on: boolean) => {
-    if (!classFilter) return;
-    setExcluded(prev => ({ ...prev, [classFilter]: on ? [] : groups.map(g => g.name) }));
+    if (!splitKey) return;
+    setExcluded(prev => ({ ...prev, [splitKey]: on ? [] : groups.map(g => g.name) }));
   };
 
   // What the filters above are doing to this chart, in words
@@ -315,10 +328,10 @@ export default function ValueByMonth({
     accountFilter && `${accountFilter} only`,
   ].filter(Boolean).join(' · ');
 
-  // The tick-boxes, shown once a class is picked and it has more than one exposure
-  // Also shown while anything in this class is unticked, even if a currency / account filter has
-  // left a single group: otherwise an unticked last group would empty the chart with no way back
-  const groupPicker = classFilter && (groups.length > 1 || left.size > 0) && (
+  // The tick-boxes, shown once a class or currency is picked and it has more than one exposure
+  // Also shown while anything in it is unticked, even if another filter has left a single group:
+  // otherwise an unticked last group would empty the chart with no way back
+  const groupPicker = splitKey && (groups.length > 1 || left.size > 0) && (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-3 text-xs">
       <span className="text-gray-500 mr-1">Exposure:</span>
       {/* The app's shared control look: one grey strip (SEG) of segBtn buttons, slate while in
@@ -358,7 +371,7 @@ export default function ValueByMonth({
             ? <span className="text-xs font-normal text-amber-600">— {filterNote}</span>
             : <span className="text-xs font-normal text-gray-400">— all assets + cash</span>}
         </h4>
-        <span className="text-xs text-gray-400">Click a class in By Asset Class to see only that class · amounts in {amountCcy}</span>
+        <span className="text-xs text-gray-400">Pick a class or a Holdings currency to split it by exposure · amounts in {amountCcy}</span>
       </div>
 
       {/* Period and (once a class is picked) Value / % of portfolio, side by side on one line.
@@ -374,7 +387,7 @@ export default function ValueByMonth({
             {PERIODS.map(p => <button key={p} onClick={() => setPeriod(p)} className={segBtn(period === p)}>{p}</button>)}
           </span>
         </div>
-        {classFilter && (
+        {splitKey && (
           <div className="flex items-center gap-1 shrink-0">
             <span className="text-xs text-gray-500 mr-1 max-md:hidden">Show:</span>
             <span className={SEG}>
@@ -463,7 +476,7 @@ export default function ValueByMonth({
         {share && (ofWhole
           ? ' % of portfolio = its share of everything you own that month (every class, currency and account, plus cash).'
           : ` % of portfolio = its share of what the filters keep (${[currencyFilter && `${currencyFilter} holdings`, accountFilter].filter(Boolean).join(', ')}), every class plus cash — the same total as Allocation by Month-end.`)}
-        {classFilter && groups.length > 1 && ' Exposure comes from the Lookup tab; an asset without one is shown under its ticker.'}
+        {splitKey && groups.length > 1 && ' Exposure comes from the Lookup tab; an asset without one is shown under its ticker.'}
       </p>
     </div>
   );
