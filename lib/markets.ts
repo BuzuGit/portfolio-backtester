@@ -728,6 +728,35 @@ export const buildReturnMatrix = (
   return finishMatrix(placed, endDate);
 };
 
+/**
+ * The Holdings page's "Market view": the Assets page's Return matrix, but only for what you
+ * hold today, grouped the way the Holdings page groups it (Equities, Fixed Income...). Every
+ * figure is the ASSET's own market return (price over the period), not your own profit, so it
+ * reads exactly like Markets › Assets. Cash has no price, so it has no row. `groups` lists the
+ * sections in page order, each with its tickers in page order; a ticker not in the Lookup tab or
+ * with no prices is skipped.
+ */
+export const buildHoldingsMatrix = (
+  data: AssetRow[] | null,
+  lookup: AssetLookup[],
+  currency: MarketsCurrency,
+  groups: { name: string; tickers: string[] }[],
+  reanchor?: Reanchor, // for EDO: price each window from a purchase at its start
+): ReturnMatrix | null => {
+  if (!data || data.length === 0) return null;
+  const { rows, indexByMonth, endDate } = prepareRows(data);
+  const byTicker = new Map(lookup.map((a, i) => [a.ticker, { a, i }]));
+  const placed: PlacedRow[] = [];
+  const shownFx = new Set<string>();
+  groups.forEach(g => g.tickers.forEach((ticker, order) => {
+    const hit = byTicker.get(ticker);
+    if (!hit) return;
+    const row = buildPriceRow(hit.a, currency, rows, indexByMonth, shownFx, reanchor);
+    if (row) placed.push({ section: g.name, row, order, sheetIndex: hit.i });
+  }));
+  return finishMatrix(placed, endDate);
+};
+
 // The Markets section name for the Country page (listed last in the left panel), and the
 // countries it can show — every currency the sheet has an xxxPLN rate for, plus PLN itself.
 export const MARKETS_COUNTRY = 'Country';

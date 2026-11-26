@@ -43,6 +43,9 @@ export interface MarketsTabProps {
   setSelectedAssetClasses: React.Dispatch<React.SetStateAction<string[]>>;
   setSelectedCurrencies: React.Dispatch<React.SetStateAction<string[]>>;
   setSelectedAssetSubcategories: React.Dispatch<React.SetStateAction<string[]>>;
+  // A control put first in the pinned filter row: the Holdings page's "My P&L | Market view"
+  // switch, when this page draws the Holdings Market view
+  leadingFilter?: React.ReactNode;
 }
 
 export default function MarketsTab({
@@ -50,7 +53,7 @@ export default function MarketsTab({
   marketsPeriod, setMarketsPeriod, marketsSavedPeriod, marketsCurrency, setMarketsCurrency, marketsCountry,
   setMarketsCountry, marketsTrendPeriod, setMarketsTrendPeriod, marketsChartRange, setMarketsChartRange,
   setActiveView, setMonthlySelectedTicker, setMonthlyDisplayCurrency, setSelectedAssetTickers,
-  setSelectedAssetClasses, setSelectedCurrencies, setSelectedAssetSubcategories,
+  setSelectedAssetClasses, setSelectedCurrencies, setSelectedAssetSubcategories, leadingFilter,
 }: MarketsTabProps) {
   const m = marketsMatrix;
   const allRows = m ? m.sections.flatMap(s => s.rows) : [];
@@ -509,6 +512,7 @@ export default function MarketsTab({
       {/* Phones: not pinned ("max-md:static"), it scrolls away with the page, leaving the */}
       {/* small screen to the table (same on the Holdings and EDO sections below). */}
       <div className={`${PINNED_FILTERS} max-md:static mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
+        {leadingFilter}
         {/* Phones: Currency, Period and View as boxes on one row that open slide-up panels */}
         <div className="hidden max-md:flex w-full gap-2">
           {marketsIsCountry
@@ -623,6 +627,8 @@ export default function MarketsTab({
           <p className="text-sm text-gray-500 py-6 text-center">
             {marketsIsCountry
               ? <>No rows have SnapshotCountry = &quot;{marketsCountry}&quot; in the Lookup tab yet.</>
+              : leadingFilter
+              ? <>None of your holdings has a price history in the sheet.</>
               : <>No rows have SnapshotCategory = &quot;{activeMarketsCategory}&quot; in the Lookup tab yet.</>}
           </p>
         ) : (

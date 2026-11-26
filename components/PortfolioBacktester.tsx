@@ -42,7 +42,7 @@ import { isPhoneScreen, readSavedSheet, saveSheet } from '@/lib/savedSheet';
 import { BottomSheet, PhoneCheckSheet, PhoneSelectSheets } from '@/components/PhoneSheet';
 import { buildPositions, toTransactionRows, toClosedPositionRows, closedTickersFrom, PositionsModel } from '@/lib/positions';
 import { buildCashAccounts, selectVisibleCash, CashAccountBalance } from '@/lib/cash';
-import { buildReturnMatrix, buildCountryMatrix, snapshotCategories, MARKETS_COUNTRY, MarketsCurrency, MarketsPeriod } from '@/lib/markets';
+import { buildReturnMatrix, buildCountryMatrix, buildHoldingsMatrix, snapshotCategories, MARKETS_COUNTRY, MarketsCurrency, MarketsPeriod } from '@/lib/markets';
 import { buildHoldings, portfolioClassOf, MARKETS_HOLDINGS, HoldingsCurrency } from '@/lib/holdings';
 // The one place CAGR / volatility / Sharpe / drawdown are defined, so every tab agrees.
 // Sharpe is imported as `sharpeFor` because many functions here already have a local `sharpeRatio`.
@@ -62,7 +62,7 @@ import MonthlyTab from '@/components/tabs/MonthlyTab';
 import BacktestSetup from '@/components/tabs/BacktestSetup';
 import BacktestResults from '@/components/tabs/BacktestResults';
 import MarketsTab from '@/components/tabs/MarketsTab';
-import HoldingsTab from '@/components/tabs/HoldingsTab';
+import HoldingsTab, { HoldingsViewSwitch, type HoldingsView } from '@/components/tabs/HoldingsTab';
 import EdoTab from '@/components/tabs/EdoTab';
 import PortfolioTab from '@/components/tabs/PortfolioTab';
 // Calculations moved out of this file, each with tests in lib/
@@ -420,6 +420,8 @@ const PortfolioBacktester = () => {
   // Its own setting, so it never moves the Positions tab's currency. Always opens on Native, like
   // the rest of Markets (the user's choice, 2026-11-20), and phones don't remember it either.
   const [holdingsCurrency, setHoldingsCurrency] = useState<HoldingsCurrency>('Native');
+  // Holdings page: your own P&L (default), or the Markets › Assets view of the same assets
+  const [holdingsView, setHoldingsView] = useState<HoldingsView>('pnl');
   // Which year the "Profit Breakdown by Asset" table shows.
   // null = default to the latest available year in yearsData (computed at render time).
   const [breakdownYear, setBreakdownYear] = useState<number | null>(null);
@@ -2172,6 +2174,20 @@ const PortfolioBacktester = () => {
       : null),
     [activeView, marketsIsHoldings, assetData, positionsModel, assetLookup, cashAccounts, holdingsCurrency],
   );
+  // Holdings "Market view": the held assets in the Holdings page's sections, as one text key
+  // so the table below is rebuilt only when what you hold changes, not when the Holdings
+  // currency does (that rebuilds holdingsModel, and a new object every time)
+  const holdingsGroupsKey = holdingsModel
+    ? JSON.stringify(holdingsModel.sections.map(s => ({
+        name: s.name, tickers: s.rows.filter(r => r.kind === 'asset').map(r => r.ticker),
+      })))
+    : '';
+  const holdingsMatrix = useMemo(
+    () => (marketsIsHoldings && holdingsView === 'market' && holdingsGroupsKey
+      ? buildHoldingsMatrix(assetData, assetLookup, marketsCurrency, JSON.parse(holdingsGroupsKey), edoReanchor)
+      : null),
+    [marketsIsHoldings, holdingsView, holdingsGroupsKey, assetData, assetLookup, marketsCurrency, edoReanchor],
+  );
 
   // Calendar-year returns of the xxxPLN exchange rates, for the Return Map's currency buttons.
   // Same method as calculateAssetsAnnualReturns (last price of the year vs last price of the prior
@@ -2945,10 +2961,30 @@ const PortfolioBacktester = () => {
           {/* Markets tab, Holdings page — what you own today, in the Markets look: open positions */}
           {/* (shares still held, as in Positions › Open Positions) plus cash, grouped by asset class, */}
           {/* every money figure in one currency. The arithmetic is in lib/holdings.ts. */}
-          {isConnected && assetData && activeView === 'markets' && marketsIsHoldings && (
+          {/* Its "Market view" is the Assets page's Return matrix for the same assets (the same */}
+          {/* currency, period and Returns / Stats choices as Markets), drawn by MarketsTab. */}
+          {isConnected && assetData && activeView === 'markets' && marketsIsHoldings && holdingsView === 'market' && (
+            <MarketsTab
+              assetLookup={assetLookup} getAssetCurrency={getAssetCurrency}
+              activeMarketsCategory={activeMarketsCategory} marketsIsCountry={false} marketsMatrix={holdingsMatrix}
+              marketsView={marketsView} setMarketsView={setMarketsView}
+              marketsPeriod={marketsPeriod} setMarketsPeriod={setMarketsPeriod} marketsSavedPeriod={marketsSavedPeriod}
+              marketsCurrency={marketsCurrency} setMarketsCurrency={setMarketsCurrency}
+              marketsCountry={marketsCountry} setMarketsCountry={setMarketsCountry}
+              marketsTrendPeriod={marketsTrendPeriod} setMarketsTrendPeriod={setMarketsTrendPeriod}
+              marketsChartRange={marketsChartRange} setMarketsChartRange={setMarketsChartRange}
+              setActiveView={setActiveView} setMonthlySelectedTicker={setMonthlySelectedTicker}
+              setMonthlyDisplayCurrency={setMonthlyDisplayCurrency} setSelectedAssetTickers={setSelectedAssetTickers}
+              setSelectedAssetClasses={setSelectedAssetClasses} setSelectedCurrencies={setSelectedCurrencies}
+              setSelectedAssetSubcategories={setSelectedAssetSubcategories}
+              leadingFilter={<HoldingsViewSwitch view={holdingsView} setView={setHoldingsView} />}
+            />
+          )}
+          {isConnected && assetData && activeView === 'markets' && marketsIsHoldings && holdingsView === 'pnl' && (
             <HoldingsTab
               holdingsModel={holdingsModel} positionsModel={positionsModel} edoMissingBanner={edoMissingBanner}
-              holdingsCurrency={holdingsCurrency} setHoldingsCurrency={setHoldingsCurrency} setActiveView={setActiveView}
+              holdingsCurrency={holdingsCurrency} setHoldingsCurrency={setHoldingsCurrency}
+              holdingsView={holdingsView} setHoldingsView={setHoldingsView} setActiveView={setActiveView}
               setOpenSelectedTicker={setOpenSelectedTicker} setClosedSelectedTicker={setClosedSelectedTicker}
               setCashCategory={setCashCategory} setCashSelected={setCashSelected} setOpenIncludedTxns={setOpenIncludedTxns}
               setOpenSinceInvested={setOpenSinceInvested} setOpenShowMinMax={setOpenShowMinMax}
