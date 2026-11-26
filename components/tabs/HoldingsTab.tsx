@@ -15,11 +15,41 @@ import {
   ASSET_CLASS_COLORS, GAIN, LOSS, PINNED_FILTERS, SEG, formatPrice, heatTextOn, readableTextOn, returnHeatColor, segBtn,
 } from '@/components/ui';
 
+// The Holdings page's two looks: "My P&L" (this page: what YOU made, from your own buys and
+// dividends) or "Market view" (the Markets › Assets Return matrix for the same assets: what each
+// asset's price did over 1M, YTD, 1Y..., in the same sections). Drawn by MarketsTab.
+export type HoldingsView = 'pnl' | 'market';
+const HOLDINGS_VIEWS: { value: HoldingsView; label: string; hint: string }[] = [
+  { value: 'pnl', label: 'My P&L', hint: 'your own returns' },
+  { value: 'market', label: 'Market view', hint: 'returns as in Markets › Assets' },
+];
+
+// The switch, first in the pinned filter row on both looks. Phones: a box that opens the
+// slide-up panel, on its own line; desktop: the shared button strip.
+export function HoldingsViewSwitch({ view, setView }: { view: HoldingsView; setView: (v: HoldingsView) => void }) {
+  return (
+    <>
+      <div className="hidden max-md:flex w-full">
+        <PhoneChoice label="Show" options={HOLDINGS_VIEWS} selected={view} onPick={v => setView(v as HoldingsView)} />
+      </div>
+      <div className="flex items-center gap-1 max-md:hidden">
+        <span className="text-xs text-gray-500 mr-1">Show:</span>
+        <span className={SEG}>
+          {HOLDINGS_VIEWS.map(v => (
+            <button key={v.value} onClick={() => setView(v.value)} title={v.hint} className={segBtn(view === v.value)}>{v.label}</button>
+          ))}
+        </span>
+      </div>
+    </>
+  );
+}
+
 export interface HoldingsTabProps {
   holdingsModel: HoldingsModel | null;
   positionsModel: PositionsModel | null;
   edoMissingBanner: React.ReactNode;                 // a warning when EDO bonds are held but their sheet is missing
   holdingsCurrency: HoldingsCurrency; setHoldingsCurrency: (c: HoldingsCurrency) => void;
+  holdingsView: HoldingsView; setHoldingsView: (v: HoldingsView) => void;
   setActiveView: (v: 'positions') => void;
   setOpenSelectedTicker: (t: string) => void;
   setClosedSelectedTicker: (t: string) => void;
@@ -36,7 +66,7 @@ export interface HoldingsTabProps {
 }
 
 export default function HoldingsTab({
-  holdingsModel, positionsModel, edoMissingBanner, holdingsCurrency, setHoldingsCurrency, setActiveView,
+  holdingsModel, positionsModel, edoMissingBanner, holdingsCurrency, setHoldingsCurrency, holdingsView, setHoldingsView, setActiveView,
   setOpenSelectedTicker, setClosedSelectedTicker, setCashCategory, setCashSelected, setOpenIncludedTxns,
   setOpenSinceInvested, setOpenShowMinMax, setOpenShowAvgBuy, setOpenInvestedFrom, setOpenInvestedInto,
   setOpenGraphStarts, setOpenGraphEnds,
@@ -177,6 +207,7 @@ export default function HoldingsTab({
       {/* Page-level filter: the one currency every money figure is converted into, or */}
       {/* Native (each row in its own currency; totals, weights and tiles then in USD). */}
       <div className={`${PINNED_FILTERS} max-md:static mb-4 flex flex-wrap items-center gap-x-6 gap-y-2`}>
+        <HoldingsViewSwitch view={holdingsView} setView={setHoldingsView} />
         <div className="hidden max-md:flex w-full">
           <PhoneChoice
             label="Currency"
