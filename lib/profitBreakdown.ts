@@ -76,6 +76,18 @@ export interface BreakdownInputs {
 export const SRS_VALUE_FACTOR = 0.73;
 const isSrs = (account: string | undefined): boolean => !!account && /SRS/i.test(account);
 
+/*
+  MORTGAGE OVERPAYMENTS. The flat is priced as net equity (RE_NET = the flat's value less the
+  mortgage still owed), so paying the mortgage down raises its "price" even though the flat is
+  worth no more. The lump-sum overpayments were paid from the portfolio's own cash and are
+  booked as a "Transfer" to "Other" with the mortgage in the remark (e.g. "Nadpłata kredytu").
+  Net worth doesn't change (cash down, flat equity up by the same amount), so they are not
+  profit. The regular monthly instalments are different: they were "Outflow" rows (or paid
+  from outside), and the yearly totals already count the equity they add, so they stay as is.
+*/
+const isMortgageOverpayment = (flow: string, counterparty: string, remarks: string | undefined): boolean =>
+  flow === 'Transfer' && counterparty === 'Other' && /kredyt|mortgage/i.test(remarks || '');
+
 /**
  * ============================================================
  * PROFIT BREAKDOWN BY ASSET — for a single calendar year
@@ -536,6 +548,18 @@ export const getYearlyProfitBreakdown = (
     // The FX slice: total less the interest/fees valued at the start-of-year rate
     const fx = pnl - ownN * rateAt(prevYearEndRow, native) * k;
     if (Math.abs(pnl) >= 0.5) addTo(`Cash (${native})`, acct.account, pnl, fx);
+  }
+
+  // --- 1b. Mortgage overpaid from cash: money moved into the flat, not profit ---
+  // The cash line above treats the transfer as money leaving (neutral), while the flat's
+  // rise counts it as profit wherever the flat is valued (an asset row or part 3 below).
+  // This line takes it back out, at the rate of the month it was paid.
+  for (const acct of inputs.cashAccounts ?? []) {
+    for (const m of acct.movements) {
+      if (m.date <= yStartIso || m.date > yEndIso || m.direction !== 'out') continue;
+      if (!isMortgageOverpayment(m.flow, m.counterparty, m.remarks)) continue;
+      addTo('Mortgage overpaid from cash (not profit)', acct.account, -m.amount * rateInMonth(m.date, acct.currency), 0);
+    }
   }
 
   // --- 2. Holdings the table could not itemise (not in the Lookup tab or not priced) ---
