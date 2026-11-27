@@ -468,20 +468,35 @@ export default function PortfolioTab({
             // Every FX figure in the column: the assets' and the currency gains inside "Other"
             const fxAll = assets.reduce((s, a) => s + a.totalFx, 0) + otherFx;
 
-            // Whole-portfolio currency effect for the year (accurate; includes the unpriced
-            // holdings): total profit − what that profit would be with the exchange rate frozen
-            // at the start of the year. In PLN it's 0 (base currency). Cheap: just reuses the
-            // yearly totals. "ex-FX profit" (what you made from the assets, not the currency)
-            // is then total − currencyEffect.
-            const totalPln = getYearlyValueSeries('PLN').find(s => s.year === `${selectedYear}`)?.profit ?? 0;
-            const prevYrRow = yearsData.find(r => r.date.startsWith(`${selectedYear - 1}`))
-              || yearsData.find(r => r.date.startsWith(`${selectedYear}`)) || null;
-            const startCtoPln = portfolioCurrency === 'PLN'
-              ? 1
-              : (prevYrRow ? yearsRowRate(prevYrRow, portfolioCurrency, 'end') : 0);
-            const currencyEffect = (portfolioCurrency === 'PLN' || !startCtoPln)
-              ? 0
-              : total - totalPln / startCtoPln;
+            // FROM PLN PROFIT TO THIS CURRENCY'S PROFIT (shown only when not viewing in PLN).
+            // The portfolio's figures are kept in PLN, so a year's profit in USD can look tiny
+            // next to the PLN one. The gap is not a shrunken profit: the exchange rate moved the
+            // WHOLE portfolio's value, not just the year's gain. In 2026 USD/PLN rose 13.7%, so
+            // the 1.28M USD held on 1 Jan was worth 627k PLN more by the end without earning a
+            // dollar: 94% of the 663k PLN profit, against 2.4k of profit in USD.
+            //
+            // Exactly, with S = start value, C = contributions (both PLN) and the Years sheet's
+            // xxxPLN rates s (start), a (year average), e (end):
+            //   PLN profit = profit here × e  +  S/s × (e − s)  +  C/a × (e − a)
+            // Every line divided by e gives the same bridge in this currency, so the two columns
+            // tie out to each other and to the Total rows (the same Years-sheet numbers).
+            const bridge = (() => {
+              if (portfolioCurrency === 'PLN') return null;
+              const yr = yearsData.find(r => r.date.startsWith(`${selectedYear}`));
+              if (!yr) return null;
+              const prevYr = yearsData.find(r => r.date.startsWith(`${selectedYear - 1}`));
+              // Start = last year's closing value and rate (the first year uses its own opening ones)
+              const startPln = prevYr ? prevYr.endAmount : yr.startAmount;
+              const s = prevYr ? yearsRowRate(prevYr, portfolioCurrency, 'end') : yearsRowStartRate(yr, portfolioCurrency);
+              const e = yearsRowRate(yr, portfolioCurrency, 'end');
+              const a = yearsRowRate(yr, portfolioCurrency, 'avg');
+              if (!s || !e || !a) return null;
+              const profitHere = total * e;                          // this table's profit, in PLN
+              const revalStart = (startPln / s) * (e - s);           // 1 Jan holdings, new rate
+              const revalContr = (yr.contributions / a) * (e - a);   // this year's contributions, likewise
+              const profitPln = profitHere + revalStart + revalContr;
+              return { s, e, a, profitHere, revalStart, revalContr, profitPln, startHere: startPln / s };
+            })();
 
             // How each currency the portfolio held moved against the SELECTED currency this
             // year — the driver behind the FX total. A positive % means the selected currency
@@ -924,24 +939,76 @@ export default function PortfolioTab({
                         <td className={`py-2 px-2 text-right tabular-nums font-bold ${colorOf(total)}`}>{fmtC(total)}</td>
                         <td className="py-2 pl-2 text-right text-gray-500">100%</td>
                       </tr>
-                      {/* Whole-portfolio currency effect (incl. unpriced holdings), measured vs PLN.
-                          Only shown in non-PLN views (in PLN it's 0). It's a different lens than the
-                          per-asset FX-effect column, so it's a standalone note. */}
-                      {portfolioCurrency !== 'PLN' && Math.abs(currencyEffect) > 0.5 && (
-                        <tr>
-                          <td className="pt-1 pr-2 text-right align-top text-gray-400" colSpan={5} style={{ fontSize: '11px' }}>
-                            of which currency effect (whole portfolio vs PLN):
-                          </td>
-                          <td className="pt-1 px-2" colSpan={4} style={{ fontSize: '11px' }}>
-                            <span className={`tabular-nums ${colorOf(currencyEffect)}`}>{fmtC(currencyEffect)}</span>
-                            <span className="text-gray-400"> → ex-FX profit </span>
-                            <span className={`tabular-nums ${colorOf(total - currencyEffect)}`}>{fmtC(total - currencyEffect)}</span>
-                          </td>
-                        </tr>
-                      )}
                     </tfoot>
                   </table>
                 </div>
+
+                {/* From PLN profit to this currency's profit — under both the phone and the desktop
+                    table, only when not viewing in PLN (see `bridge` above for the maths) */}
+                {bridge && (() => {
+                  const r3 = (v: number) => v.toFixed(3);
+                  const move = (bridge.e / bridge.s - 1) * 100;
+                  const fxPln = bridge.revalStart + bridge.revalContr;
+                  // One amount in PLN and the same in this currency (PLN ÷ end rate)
+                  const pair = (pln: number, here: number, bold?: boolean) => (
+                    <>
+                      {/* nowrap: on a phone "627,982 zł" would otherwise break before the symbol */}
+                      <td className={`py-1 px-2 text-right tabular-nums align-top whitespace-nowrap ${bold ? 'font-semibold' : ''} ${colorOf(pln)}`}>{fmtN(pln, 'PLN')}</td>
+                      <td className={`py-1 pl-2 text-right tabular-nums align-top whitespace-nowrap ${bold ? 'font-semibold' : ''} ${colorOf(here)}`}>{fmtC(here)}</td>
+                    </>
+                  );
+                  return (
+                    <div className="mt-4 max-w-2xl">
+                      <div className="text-xs font-semibold text-gray-600 mb-1">
+                        Why the {portfolioCurrency} profit differs from the PLN profit
+                      </div>
+                      <table className="w-full text-xs border-collapse">
+                        <thead>
+                          <tr className="text-gray-500 border-b border-gray-200">
+                            <th />
+                            <th className="text-right font-medium py-1 px-2">PLN</th>
+                            <th className="text-right font-medium py-1 pl-2">{portfolioCurrency}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="py-1 pr-2 text-gray-600">Profit in {portfolioCurrency} (the Total above)</td>
+                            {pair(bridge.profitHere, total)}
+                          </tr>
+                          <tr>
+                            <td className="py-1 pr-2 align-top">
+                              <div className="text-gray-600">+ Holdings on 1 Jan, revalued at the new rate</div>
+                              <div className="text-gray-400" style={{ fontSize: '10px' }}>
+                                {fmtC(bridge.startHere)} held · {portfolioCurrency}/PLN {r3(bridge.s)} → {r3(bridge.e)} ({move >= 0 ? '+' : '−'}{Math.abs(move).toFixed(1)}%)
+                              </div>
+                            </td>
+                            {pair(bridge.revalStart, bridge.revalStart / bridge.e)}
+                          </tr>
+                          <tr>
+                            <td className="py-1 pr-2 align-top">
+                              <div className="text-gray-600">+ This year&apos;s contributions, revalued</div>
+                              <div className="text-gray-400" style={{ fontSize: '10px' }}>
+                                paid in over the year at {r3(bridge.a)} on average, worth {r3(bridge.e)} at the end
+                              </div>
+                            </td>
+                            {pair(bridge.revalContr, bridge.revalContr / bridge.e)}
+                          </tr>
+                          <tr className="border-t border-gray-300">
+                            <td className="py-1 pr-2 font-semibold text-gray-800">= Profit in PLN</td>
+                            {pair(bridge.profitPln, bridge.profitPln / bridge.e, true)}
+                          </tr>
+                        </tbody>
+                      </table>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Your holdings are measured in PLN. When the {portfolioCurrency} moves against the złoty, the
+                        whole portfolio is revalued, not just the year&apos;s gain
+                        {bridge.profitPln > 0.5 && fxPln > 0
+                          ? <>: {Math.round(fxPln / bridge.profitPln * 100)}% of this year&apos;s PLN profit is that revaluation.</>
+                          : <>: it {fxPln >= 0 ? 'added' : 'took'} {fmtN(Math.abs(fxPln), 'PLN')} {fxPln >= 0 ? 'to' : 'off'} the PLN profit this year.</>}
+                      </p>
+                    </div>
+                  );
+                })()}
                 </>)}
               </div>
             );
