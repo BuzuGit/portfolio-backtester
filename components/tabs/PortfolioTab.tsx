@@ -36,6 +36,7 @@ import {
 } from '@/components/charts';
 
 import type { YearlyProfitBreakdown } from '@/lib/profitBreakdown';   // one year's profit split by asset
+import { getProfitBridge } from '@/lib/portfolioYears';   // PLN profit → profit in another currency
 import AllocationHistory, { type AllocView } from '@/components/AllocationHistory';   // asset mix over time
 
 type NavCurrency = 'PLN' | 'USD' | 'SGD' | 'CHF';
@@ -450,6 +451,9 @@ export default function PortfolioTab({
             // otherParts: what "Other" is made of (cash, unpriced holdings, ...), adding up to it exactly
             const { assets, other, otherParts, total } = breakdownData;
             const otherFx = otherParts.reduce((s, p) => s + p.fx, 0);
+            // List the parts under "Other" only when at least one is a named piece — a lone
+            // "Unexplained" line would just repeat the Other row
+            const showOtherParts = otherParts.some(p => p.label !== 'Unexplained');
 
             // --- Formatting helpers ---
             const nativeSym = (ccy: string) => CURRENCY_SYMBOLS[ccy] || ccy;
@@ -468,35 +472,10 @@ export default function PortfolioTab({
             // Every FX figure in the column: the assets' and the currency gains inside "Other"
             const fxAll = assets.reduce((s, a) => s + a.totalFx, 0) + otherFx;
 
-            // FROM PLN PROFIT TO THIS CURRENCY'S PROFIT (shown only when not viewing in PLN).
-            // The portfolio's figures are kept in PLN, so a year's profit in USD can look tiny
-            // next to the PLN one. The gap is not a shrunken profit: the exchange rate moved the
-            // WHOLE portfolio's value, not just the year's gain. In 2026 USD/PLN rose 13.7%, so
-            // the 1.28M USD held on 1 Jan was worth 627k PLN more by the end without earning a
-            // dollar: 94% of the 663k PLN profit, against 2.4k of profit in USD.
-            //
-            // Exactly, with S = start value, C = contributions (both PLN) and the Years sheet's
-            // xxxPLN rates s (start), a (year average), e (end):
-            //   PLN profit = profit here × e  +  S/s × (e − s)  +  C/a × (e − a)
-            // Every line divided by e gives the same bridge in this currency, so the two columns
-            // tie out to each other and to the Total rows (the same Years-sheet numbers).
-            const bridge = (() => {
-              if (portfolioCurrency === 'PLN') return null;
-              const yr = yearsData.find(r => r.date.startsWith(`${selectedYear}`));
-              if (!yr) return null;
-              const prevYr = yearsData.find(r => r.date.startsWith(`${selectedYear - 1}`));
-              // Start = last year's closing value and rate (the first year uses its own opening ones)
-              const startPln = prevYr ? prevYr.endAmount : yr.startAmount;
-              const s = prevYr ? yearsRowRate(prevYr, portfolioCurrency, 'end') : yearsRowStartRate(yr, portfolioCurrency);
-              const e = yearsRowRate(yr, portfolioCurrency, 'end');
-              const a = yearsRowRate(yr, portfolioCurrency, 'avg');
-              if (!s || !e || !a) return null;
-              const profitHere = total * e;                          // this table's profit, in PLN
-              const revalStart = (startPln / s) * (e - s);           // 1 Jan holdings, new rate
-              const revalContr = (yr.contributions / a) * (e - a);   // this year's contributions, likewise
-              const profitPln = profitHere + revalStart + revalContr;
-              return { s, e, a, profitHere, revalStart, revalContr, profitPln, startHere: startPln / s };
-            })();
+            // FROM PLN PROFIT TO THIS CURRENCY'S PROFIT (shown only when not viewing in PLN):
+            // the year's PLN profit = this table's profit + the 1 Jan holdings and the year's
+            // contributions revalued at the new exchange rate. Maths and tests in lib/portfolioYears.ts.
+            const bridge = getProfitBridge(yearsData, selectedYear, portfolioCurrency);
 
             // How each currency the portfolio held moved against the SELECTED currency this
             // year — the driver behind the FX total. A positive % means the selected currency
@@ -685,7 +664,7 @@ export default function PortfolioTab({
                                   <div className={colorOf(d.profit)}>{fmtC(d.profit)}</div>
                                   <div className="text-gray-400">{share(d.profit)} of the year</div>
                                   {/* The Other bar: what it is made of, same lines as the table */}
-                                  {d.isOther && otherParts.length > 1 && (
+                                  {d.isOther && showOtherParts && (
                                     <div className="mt-1 pt-1 border-t border-gray-100">
                                       {otherParts.map(p => (
                                         <div key={p.label} className="flex justify-between gap-3">
@@ -790,7 +769,7 @@ export default function PortfolioTab({
                       <td className="py-1.5 pl-1 text-right tabular-nums text-gray-500">{share(other)}</td>
                     </tr>
                     {/* What "Other" is made of, indented under it (only when there is more than the residual) */}
-                    {otherParts.length > 1 && otherParts.map(p => (
+                    {showOtherParts && otherParts.map(p => (
                       <tr key={`other-${p.label}`}>
                         <td className="py-1 pr-2 pl-3 align-top">
                           <div className="text-gray-600">{p.label}</div>
@@ -891,14 +870,14 @@ export default function PortfolioTab({
                       <tr className="bg-gray-50 border-t border-gray-300">
                         <td className="py-2 pr-3 italic font-semibold text-gray-600">Other</td>
                         <td className="py-2 px-2 text-gray-400" colSpan={4}>
-                          {otherParts.length > 1 ? 'Total' : 'cash, fees, assets not in the price feed'}
+                          {showOtherParts ? 'Total' : 'cash, fees, assets not in the price feed'}
                         </td>
                         <td className="py-2 px-2 text-right text-gray-300">—</td>
                         {fxCell(otherFx, true)}
                         <td className={`py-2 px-2 text-right tabular-nums font-semibold ${colorOf(other)}`}>{fmtC(other)}</td>
                         <td className="py-2 pl-2 text-right tabular-nums text-gray-600 font-medium">{share(other)}</td>
                       </tr>
-                      {otherParts.length > 1 && otherParts.map(p => (
+                      {showOtherParts && otherParts.map(p => (
                         <tr key={`other-${p.label}`} className="hover:bg-gray-50">
                           <td className="py-1.5 pr-3" />
                           <td className="py-1.5 px-2 pl-4" colSpan={4}>
@@ -1002,9 +981,12 @@ export default function PortfolioTab({
                       <p className="text-xs text-gray-400 mt-1">
                         Your holdings are measured in PLN. When the {portfolioCurrency} moves against the złoty, the
                         whole portfolio is revalued, not just the year&apos;s gain
-                        {bridge.profitPln > 0.5 && fxPln > 0
+                        {/* A share only reads sensibly between 0 and 100%. When the revaluation is
+                            bigger than the whole PLN profit (the year lost money in this currency),
+                            or there is no profit to share, say what it added or took instead. */}
+                        {bridge.profitPln > 0.5 && fxPln > 0 && fxPln <= bridge.profitPln
                           ? <>: {Math.round(fxPln / bridge.profitPln * 100)}% of this year&apos;s PLN profit is that revaluation.</>
-                          : <>: it {fxPln >= 0 ? 'added' : 'took'} {fmtN(Math.abs(fxPln), 'PLN')} {fxPln >= 0 ? 'to' : 'off'} the PLN profit this year.</>}
+                          : <>: it {fxPln >= 0 ? 'added' : 'took'} {fmtN(Math.abs(fxPln), 'PLN')} {fxPln >= 0 ? 'to' : 'off'} the PLN profit this year{fxPln > bridge.profitPln && bridge.profitPln > 0.5 ? ', more than the whole PLN profit' : ''}.</>}
                       </p>
                     </div>
                   );
