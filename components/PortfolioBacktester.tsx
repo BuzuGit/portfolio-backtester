@@ -902,9 +902,12 @@ const PortfolioBacktester = () => {
       setAllCashAccounts(allCash);
       // For the Positions tab's Income chart: every dividend and interest payment, plus the
       // purchases and sales its yields need (shares held, average cost). ~700 rows; the rest of
-      // the ledger lives on in the models above.
+      // the ledger lives on in the models above. Also the "Inflow" rows that bought a holding
+      // (UBS share plan): the Profit Breakdown's "Other" needs them to value holdings with no
+      // price. Every reader here picks rows by their flow, so the extra rows change nothing else.
       setIncomeRows(fetchedLedgerData.filter(r =>
-        r.flow === 'Dividend' || r.flow === 'Interest' || r.flow === 'Purchase of Asset' || r.flow === 'Proceeds from Sale'));
+        r.flow === 'Dividend' || r.flow === 'Interest' || r.flow === 'Purchase of Asset' || r.flow === 'Proceeds from Sale'
+        || (r.flow === 'Inflow' && !!r.asset && r.asset !== 'Cash' && r.amount > 0)));
       setClosedData(effectiveClosed);
       setTransactionData(effectiveTransactions);
       setDailyData(fetchedDailyData);
@@ -2309,7 +2312,11 @@ const PortfolioBacktester = () => {
 
   // One year's profit split by asset (lib/profitBreakdown.ts), on this screen's data
   const getYearlyProfitBreakdown = (year: number, currency: string): YearlyProfitBreakdown =>
-    yearlyProfitBreakdown({ assetData, assetLookup, yearsData, closedData, transactionData, getOpenPurchases, getOpenDividends, getAssetCurrency }, year, currency);
+    yearlyProfitBreakdown({
+      assetData, assetLookup, yearsData, closedData, transactionData, getOpenPurchases, getOpenDividends, getAssetCurrency,
+      // These three only explain the "Other" line: cash, holdings with no price, the Daily sheet's net worth
+      cashAccounts: allCashAccounts, ledgerRows: incomeRows, dailyData,
+    }, year, currency);
 
   // The years the breakdown table can show (newest first), and the resolved selection
   // (the user's pick, else the latest year). Cheap, but memoised so the value below is stable.
@@ -2328,12 +2335,12 @@ const PortfolioBacktester = () => {
   // the data, the selected year, or the currency actually change — not on every re-render.
   const breakdownData = useMemo(
     () => (resolvedBreakdownYear == null
-      ? { assets: [] as ReturnType<typeof getYearlyProfitBreakdown>['assets'], other: 0, total: 0 }
+      ? { assets: [] as ReturnType<typeof getYearlyProfitBreakdown>['assets'], other: 0, otherParts: [], total: 0 }
       : getYearlyProfitBreakdown(resolvedBreakdownYear, portfolioCurrency)),
     // Everything the function reads (checked 2026-11-13). positionsModel was missing: it feeds
     // the open purchases and dividends, and only worked because it changes alongside transactionData.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [resolvedBreakdownYear, portfolioCurrency, yearsData, assetData, transactionData, closedData, assetLookup, positionsModel],
+    [resolvedBreakdownYear, portfolioCurrency, yearsData, assetData, transactionData, closedData, assetLookup, positionsModel, allCashAccounts, incomeRows, dailyData],
   );
 
   // formatPrice now lives at module scope (see the top of this file) so the shared

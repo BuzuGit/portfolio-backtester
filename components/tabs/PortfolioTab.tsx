@@ -437,8 +437,8 @@ export default function PortfolioTab({
           {/* A transparent worksheet: each asset is split into segments (held from */}
           {/* start, sold, bought this year, income) showing quantity, start price, */}
           {/* end price and profit. Prices are native; the last column converts to the */}
-          {/* selected currency (the gap = FX effect). "Other" = unpriced/guarded */}
-          {/* assets + cash/fees, so the Total always matches the chart's bar. */}
+          {/* selected currency (the gap = FX effect). "Other" = everything else, so the */}
+          {/* Total always matches the chart's bar, split into named parts (lib/profitBreakdown.ts). */}
           {(() => {
             // Selectable years + the resolved selection and the (memoised) breakdown are
             // computed at the top of the component; this block just renders them.
@@ -447,7 +447,9 @@ export default function PortfolioTab({
             if (allYears.length === 0 || selectedYear == null) return null;
 
             const sym = CURRENCY_SYMBOLS[portfolioCurrency];
-            const { assets, other, total } = breakdownData;
+            // otherParts: what "Other" is made of (cash, unpriced holdings, ...), adding up to it exactly
+            const { assets, other, otherParts, total } = breakdownData;
+            const otherFx = otherParts.reduce((s, p) => s + p.fx, 0);
 
             // --- Formatting helpers ---
             const nativeSym = (ccy: string) => CURRENCY_SYMBOLS[ccy] || ccy;
@@ -463,7 +465,8 @@ export default function PortfolioTab({
             const pctStr = (p: number | null) => (p == null ? '' : `${p >= 0 ? '+' : '−'}${Math.abs(p).toFixed(1)}%`);
             const share = (v: number) => (Math.abs(total) > 0.5 ? `${(v / total * 100).toFixed(1)}%` : '—');
             const colorOf = (v: number) => (v > 0.5 ? 'text-green-700' : v < -0.5 ? 'text-red-600' : 'text-gray-400');
-            const fxAll = assets.reduce((s, a) => s + a.totalFx, 0);
+            // Every FX figure in the column: the assets' and the currency gains inside "Other"
+            const fxAll = assets.reduce((s, a) => s + a.totalFx, 0) + otherFx;
 
             // Whole-portfolio currency effect for the year (accurate; includes the unpriced
             // holdings): total profit − what that profit would be with the exchange rate frozen
@@ -574,8 +577,10 @@ export default function PortfolioTab({
                   is the return on that capital. <b>FX effect</b> is the part of the {portfolioCurrency} profit
                   from the exchange rate moving; <b>Profit ({sym})</b> is the bottom line, and <b>Share</b> = % of
                   the year. Total profit is the change in portfolio value minus contributions (matching the
-                  chart above), and &quot;Other&quot; (unpriced assets, cash, fees) is whatever the itemised
-                  assets don&apos;t explain.
+                  chart above), and &quot;Other&quot; is whatever the asset rows don&apos;t cover, split into
+                  its parts: cash (exchange-rate gains, interest, fees), holdings with no price column,
+                  the SRS 73% valuation, and any gap between the Years and Daily sheets. &quot;Unexplained&quot;
+                  is what is left after those.
                 </p>
 
                 {/* === Profit by asset — the table below, drawn === */}
@@ -656,7 +661,7 @@ export default function PortfolioTab({
                             cursor={{ fill: 'rgba(0,0,0,0.04)' }}
                             content={({ active, payload }) => {
                               if (!active || !payload || !payload.length) return null;
-                              const d = payload[0].payload as { label: string; ticker: string; profit: number };
+                              const d = payload[0].payload as { label: string; ticker: string; profit: number; isOther: boolean };
                               return (
                                 <div className="bg-white border border-gray-200 rounded shadow px-3 py-2 text-xs">
                                   <div className="font-semibold mb-0.5">
@@ -664,6 +669,17 @@ export default function PortfolioTab({
                                   </div>
                                   <div className={colorOf(d.profit)}>{fmtC(d.profit)}</div>
                                   <div className="text-gray-400">{share(d.profit)} of the year</div>
+                                  {/* The Other bar: what it is made of, same lines as the table */}
+                                  {d.isOther && otherParts.length > 1 && (
+                                    <div className="mt-1 pt-1 border-t border-gray-100">
+                                      {otherParts.map(p => (
+                                        <div key={p.label} className="flex justify-between gap-3">
+                                          <span className="text-gray-500">{p.label}</span>
+                                          <span className={`tabular-nums ${colorOf(p.amount)}`}>{fmtC(p.amount)}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               );
                             }}
@@ -754,10 +770,22 @@ export default function PortfolioTab({
                     ))}
                     <tr className="border-t border-gray-200">
                       <td className="py-1.5 pr-2 italic text-gray-500">Other</td>
-                      <td className="py-1.5 px-2 text-right text-gray-300">—</td>
+                      {fxCell(otherFx)}
                       <td className={`py-1.5 px-2 text-right tabular-nums font-medium ${colorOf(other)}`}>{fmtC(other)}</td>
                       <td className="py-1.5 pl-1 text-right tabular-nums text-gray-500">{share(other)}</td>
                     </tr>
+                    {/* What "Other" is made of, indented under it (only when there is more than the residual) */}
+                    {otherParts.length > 1 && otherParts.map(p => (
+                      <tr key={`other-${p.label}`}>
+                        <td className="py-1 pr-2 pl-3 align-top">
+                          <div className="text-gray-600">{p.label}</div>
+                          {p.detail && <div className="text-gray-400" style={{ fontSize: '10px' }}>{p.detail}</div>}
+                        </td>
+                        {fxCell(p.fx)}
+                        <td className={`py-1 px-2 text-right tabular-nums align-top ${colorOf(p.amount)}`}>{fmtC(p.amount)}</td>
+                        <td className="py-1 pl-1 text-right tabular-nums text-gray-400 align-top">{share(p.amount)}</td>
+                      </tr>
+                    ))}
                   </tbody>
                   <tfoot>
                     <tr className="border-t-2 border-gray-300">
@@ -843,15 +871,31 @@ export default function PortfolioTab({
                         }
                         return trs;
                       })}
-                      {/* Other = residual so the table reconciles to the chart's bar */}
-                      <tr className="bg-gray-50/60 border-t border-gray-200">
-                        <td className="py-2 pr-3 italic text-gray-500">Other</td>
-                        <td className="py-2 px-2 text-gray-400" colSpan={4}>cash, fees, assets not in the price feed</td>
+                      {/* Other = residual so the table reconciles to the chart's bar. Shaded like an
+                          asset's total, with its parts in white rows underneath like segments. */}
+                      <tr className="bg-gray-50 border-t border-gray-300">
+                        <td className="py-2 pr-3 italic font-semibold text-gray-600">Other</td>
+                        <td className="py-2 px-2 text-gray-400" colSpan={4}>
+                          {otherParts.length > 1 ? 'Total' : 'cash, fees, assets not in the price feed'}
+                        </td>
                         <td className="py-2 px-2 text-right text-gray-300">—</td>
-                        <td className="py-2 px-2 text-right text-gray-300">—</td>
-                        <td className={`py-2 px-2 text-right tabular-nums font-medium ${colorOf(other)}`}>{fmtC(other)}</td>
-                        <td className="py-2 pl-2 text-right tabular-nums text-gray-500">{share(other)}</td>
+                        {fxCell(otherFx, true)}
+                        <td className={`py-2 px-2 text-right tabular-nums font-semibold ${colorOf(other)}`}>{fmtC(other)}</td>
+                        <td className="py-2 pl-2 text-right tabular-nums text-gray-600 font-medium">{share(other)}</td>
                       </tr>
+                      {otherParts.length > 1 && otherParts.map(p => (
+                        <tr key={`other-${p.label}`} className="hover:bg-gray-50">
+                          <td className="py-1.5 pr-3" />
+                          <td className="py-1.5 px-2 pl-4" colSpan={4}>
+                            <span className="text-gray-600">{p.label}</span>
+                            {p.detail && <span className="text-gray-400 ml-2" style={{ fontSize: '10px' }}>{p.detail}</span>}
+                          </td>
+                          <td className="py-1.5 px-2 text-right text-gray-300">—</td>
+                          {fxCell(p.fx)}
+                          <td className={`py-1.5 px-2 text-right tabular-nums ${colorOf(p.amount)}`}>{fmtC(p.amount)}</td>
+                          <td className="py-1.5 pl-2 text-right tabular-nums text-gray-400">{share(p.amount)}</td>
+                        </tr>
+                      ))}
                     </tbody>
                     <tfoot>
                       {/* Per-currency FX move this year — the driver behind the FX total below */}

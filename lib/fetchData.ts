@@ -287,6 +287,9 @@ export interface DailyNavRow {
   ddPln: number;    // "NW DD"     — daily drawdown in PLN (0 to -100)
   ddUsd: number;    // "DD USD"    — daily drawdown in USD (0 to -100)
   ddSgd: number;    // "DD SGD"    — daily drawdown in SGD (0 to -100)
+  // "Net Worth PLN" — the whole portfolio's value that day. Optional: a copy saved on a phone
+  // before this field existed has none. Used to check the Years sheet's year-end figures.
+  nwPln?: number;
   // CHF has no price/drawdown columns of its own in the sheet, so both are derived here
   // from the PLN NAV and the sheet's daily CHFPLN rate. 0 = no CHFPLN rate for that day.
   navChf: number;   // NW Price ÷ CHFPLN — NAV per share in CHF
@@ -1248,6 +1251,8 @@ function parseDailyData(csvText: string): DailyNavRow[] {
       ddPln:   readNum(values, 'NW DD'),
       ddUsd:   readNum(values, 'DD USD'),
       ddSgd:   readNum(values, 'DD SGD'),
+      // "4,605,091 zł": the reader strips the commas and parseFloat stops at the space
+      nwPln:   readNum(values, 'Net Worth PLN'),
       alloc: {
         date,
         buckets: Object.fromEntries(DAILY_BUCKETS.map(b => [b.col, readNum(values, b.col)])),
