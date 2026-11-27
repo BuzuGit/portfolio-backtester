@@ -35,7 +35,8 @@ export type YearlyProfitBreakdown = {
   }[];
   other: number;
   // "Other" explained: the named pieces it is made of, in the selected currency. They always
-  // add up to `other` exactly, because the last piece ("Unexplained") is whatever is left.
+  // add up to `other` (to within 0.5), because the last piece ("Unexplained") is whatever is
+  // left; it is omitted when that rounds to nothing.
   otherParts: OtherPart[];
   total: number;
 };
@@ -543,7 +544,10 @@ export const getYearlyProfitBreakdown = (
   // price growth unaccounted for. Their coupons and dividends count here. As soon as a
   // holding gets a Lookup row and a price column it becomes an asset row of its own above,
   // and drops out of this line automatically (it is skipped once itemised).
-  const itemised = new Set(assets.map(a => a.ticker));
+  // Skipped: holdings with an asset row above, and holdings already valued from their price
+  // column in part 3 (the flat, in a year with no rent row and so no asset row). Valuing
+  // those again here at cost counted the flat's currency move twice in USD/SGD views.
+  const itemised = new Set([...assets.map(a => a.ticker), ...guardedHeld.map(g => g.ticker)]);
   const byAsset = new Map<string, LedgerRow[]>();
   for (const r of inputs.ledgerRows ?? []) {
     if (!r.asset || r.asset === 'Cash') continue;
@@ -652,8 +656,11 @@ export const getYearlyProfitBreakdown = (
   // Whatever the pieces don't explain: contributions converted at slightly different rates,
   // valuation differences between the Daily sheet and the price feed, a fund's own growth
   // while it has no price column. Always last, so the pieces add up to "Other" exactly.
+  // Left out when it rounds to nothing, so a fully explained year shows no "Unexplained 0" line.
   const explained = otherParts.reduce((s, p) => s + p.amount, 0);
-  otherParts.push({ label: 'Unexplained', detail: 'timing, rounding, valuation differences', amount: other - explained, fx: 0 });
+  if (Math.abs(other - explained) >= 0.5) {
+    otherParts.push({ label: 'Unexplained', detail: 'timing, rounding, valuation differences', amount: other - explained, fx: 0 });
+  }
 
   return { assets, other, otherParts, total };
 };
